@@ -11,21 +11,22 @@
 #   4. cleanup_homes.sh  --mode trans  — same for transferred users
 #   5. cleanup_passwd_group.sh --mode terms — /etc/passwd + /etc/group cleanup
 #   6. cleanup_passwd_group.sh --mode trans — same for transferred users
-#   7. Archive linux.STAMP (unreachable hosts log)
+#   7. Archive unreachable hosts log
 #   8. Release lock
 #
 # Options:
-#   --dry-run    Passed to all cleanup scripts; no changes made on servers
+#   --dry-run    Passed to all subscripts; no changes made on servers.
+#                All logs written to logs/dryrun/ — tti_process.log untouched.
 #
 # Cron (daily 11:20):
 #   20 11 * * * /export/home/xamrgpti/scripts/main.sh >> /dev/null 2>&1
 #
 # Retention cron (daily 23:00):
-#   0 23 * * * find /export/home/xamrgpti/data/terms -type f -mtime +365 -delete
-#   0 23 * * * find /export/home/xamrgpti/data/trans -type f -mtime +365 -delete
-#   0 23 * * * find /export/home/xamrgpti/logs       -type f -mtime +365 -delete
-#   0 23 * * * find /export/home/xamrgpti/data/ids        -type f -mtime +730 -delete
-#   0 23 * * * find /export/home/xamrgpti/logs/dryrun    -type f -mtime +90  -delete
+#   0 23 * * * find /export/home/xamrgpti/data/terms  -type f -mtime +365 -delete
+#   0 23 * * * find /export/home/xamrgpti/data/trans  -type f -mtime +365 -delete
+#   0 23 * * * find /export/home/xamrgpti/logs        -maxdepth 1 -type f -mtime +365 -delete
+#   0 23 * * * find /export/home/xamrgpti/data/ids    -type f -mtime +730 -delete
+#   0 23 * * * find /export/home/xamrgpti/logs/dryrun -type f -mtime +90  -delete
 # =============================================================================
 
 set -euo pipefail
@@ -49,13 +50,19 @@ done
 
 RUN_STAMP=$(date +%y%m%d%H%M)
 
-# Dry-run runs must not touch tti_process.log — all output goes to dryrun/ only.
-# Compute a dryrun-specific log path now so main.sh's own log lines also land there.
+# --- Dry-run log redirection -------------------------------------------------
+# When running in dry-run mode ALL log variables are overridden to point at
+# logs/dryrun/ so that tti_process.log and all working logs are never touched.
+# These exports are inherited by every child script (getdata.sh, cleanup_*.sh).
+mkdir -p "${LOGS_DIR}" "${DRYRUN_LOGS_DIR}" "${DATA_DIR}" "${IDS_DIR}" \
+         "${TERMS_ARCHIVE_DIR}" "${TRANS_ARCHIVE_DIR}"
+
 if ${DRY_RUN}; then
-    mkdir -p "${DRYRUN_LOGS_DIR}"
-    existing=$(ls "${DRYRUN_LOGS_DIR}/dryrun-main-"*"-${RUN_STAMP}" 2>/dev/null | wc -l || true)
-    DRYRUN_NUM=$(( existing + 1 ))
-    DRYRUN_MAIN_LOG="${DRYRUN_LOGS_DIR}/dryrun-main-${DRYRUN_NUM}-${RUN_STAMP}"
+    export MAIN_LOG="${DRYRUN_LOGS_DIR}/dryrun_tti_process.log"
+    export LOG_GETDATA="${DRYRUN_LOGS_DIR}/dryrun_tti_getdata.log"
+    export LOG_CLEANUP="${DRYRUN_LOGS_DIR}/dryrun_tti_cleanup.log"
+    export LOG_PASSWD="${DRYRUN_LOGS_DIR}/dryrun_tti_passwd_group.log"
+    export LOG_HOSTS="${DRYRUN_LOGS_DIR}/dryrun_tti_unreachable.log"
 fi
 
 # --- Logging -----------------------------------------------------------------
@@ -63,13 +70,7 @@ _log() {
     local level="$1" msg="$2" ts line
     ts=$(date +"%Y-%m-%d %H:%M:%S")
     line=$(printf "[%s] [%-9s] [%s] %s\n" "${ts}" "${level}" "${SCRIPT_NAME}" "${msg}")
-    if ${DRY_RUN}; then
-        # Dry-run: write only to dryrun log, never touch tti_process.log
-        echo "${line}" >> "${DRYRUN_MAIN_LOG}"
-    else
-        # Live: write to tti_process.log and also print to stdout for cron capture
-        echo "${line}" | tee -a "${MAIN_LOG}"
-    fi
+    echo "${line}" | tee -a "${MAIN_LOG}"
 }
 log_info()    { _log "INFO"    "$1"; }
 log_success() { _log "SUCCESS" "$1"; }
@@ -101,14 +102,11 @@ trap 'release_lock; log_error "main.sh exited unexpectedly."' ERR EXIT
 # Main
 # =============================================================================
 
-mkdir -p "${LOGS_DIR}" "${DRYRUN_LOGS_DIR}" "${DATA_DIR}" "${IDS_DIR}" \
-         "${TERMS_ARCHIVE_DIR}" "${TRANS_ARCHIVE_DIR}"
-
 # Fresh unreachable-hosts log for this run
 : > "${LOG_HOSTS}"
 
 log_info "================================================================"
-log_info "main.sh start — $(hostname)$( [[ -n "${DRY_RUN_FLAG}" ]] && echo ' [DRY-RUN]' || true )"
+log_info "main.sh start — $(hostname)$( ${DRY_RUN} && echo ' [DRY-RUN]' || true )"
 log_info "================================================================"
 
 acquire_lock
@@ -174,8 +172,12 @@ fi
 # ------------------------------------------------------------------
 log_info "--- Step 6: Archive unreachable hosts log ---"
 if [[ -s "${LOG_HOSTS}" ]]; then
-    cp "${LOG_HOSTS}" "${LOGS_DIR}/linux.${RUN_STAMP}"
-    log_info "Unreachable hosts archived -> linux.${RUN_STAMP}"
+    if ${DRY_RUN}; then
+        log_info "Dry-run unreachable hosts logged -> ${LOG_HOSTS##*/}"
+    else
+        cp "${LOG_HOSTS}" "${LOGS_DIR}/linux.${RUN_STAMP}"
+        log_info "Unreachable hosts archived -> linux.${RUN_STAMP}"
+    fi
 else
     log_info "No unreachable hosts recorded this run."
 fi
@@ -184,7 +186,7 @@ fi
 # Done
 # ------------------------------------------------------------------
 log_info "================================================================"
-log_summary "main.sh complete$( [[ -n "${DRY_RUN_FLAG}" ]] && echo ' [DRY-RUN]' || true )"
+log_summary "main.sh complete$( ${DRY_RUN} && echo ' [DRY-RUN]' || true )"
 log_info "================================================================"
 
 trap - ERR EXIT
