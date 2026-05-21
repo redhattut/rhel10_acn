@@ -42,8 +42,9 @@ DRY_RUN_FLAG=""
 DEBUG_FLAG=""
 for arg in "$@"; do
     case "${arg}" in
-        --dry-run) DRY_RUN=true; DRY_RUN_FLAG="--dry-run" ;;
-        --debug)   DEBUG_FLAG="--debug" ;;
+        --dry-run)    DRY_RUN=true; DRY_RUN_FLAG="--dry-run" ;;
+        --debug)      DEBUG_FLAG="--debug" ;;
+        --debug-pssh) DEBUG_FLAG="--debug-pssh" ;;
     esac
 done
 
