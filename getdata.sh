@@ -18,9 +18,9 @@
 #   - Skips the run if the raw file is identical to the last archive (no new data)
 #
 # Exit codes:
-#   0  new terms data found and written — caller should proceed with cleanup
-#   1  terms unchanged since last run   — caller should skip this run
-#   2  fatal error                      — caller should abort
+#   0  terms.ids has content — caller should proceed with cleanup
+#   1  terms.ids is empty after all attempts — caller should skip
+#   2  fatal error
 # =============================================================================
 
 set -euo pipefail
@@ -52,21 +52,6 @@ log_fatal()   {
 }
 
 # --- Helpers -----------------------------------------------------------------
-
-# too_soon_check
-#   Guards against double-runs within the same minute stamp.
-too_soon_check() {
-    local stamp
-    stamp=$(date +%y%m%d%H%M)
-    for kind in terms trans; do
-        if ls "${DATA_DIR}/${kind}/${kind}."*"${stamp}" >/dev/null 2>&1; then
-            log_warn "Too soon — ${kind} archive already exists for stamp ${stamp}."
-            /usr/bin/mail -s "TTI getdata: too soon since last run on $(hostname)" \
-                "${NOTIFY}" < "${LOG_GETDATA}" || true
-            exit 1
-        fi
-    done
-}
 
 # latest_archive DIR KIND
 #   Returns the path of the most recently written archive file, or empty string.
@@ -134,11 +119,11 @@ normalize_ids() {
 # process_kind KIND
 #   Full pipeline for one kind (terms or trans):
 #     1. SCP raw file + .id. file from OIM
-#     2. Compare raw file to last archive — skip if unchanged
-#     3. Archive raw file
-#     4. Normalize .id. file -> data/KIND.ids
-#     5. Write timestamped snapshot to data/ids/
-#   Returns 0 if new data, 1 if unchanged or unavailable.
+#     2. Compare raw file to last archive:
+#        - Changed   -> archive raw file, normalize .id. -> KIND.ids, snapshot
+#        - Unchanged -> skip archiving, re-normalize from .id. file -> KIND.ids, snapshot
+#     Either way KIND.ids is written and cleanup proceeds.
+#   Returns 0 on success, 1 only if SCP fails (trans non-fatal, terms fatal).
 process_kind() {
     local kind="$1"
     local archive_dir="${DATA_DIR}/${kind}"
@@ -175,14 +160,20 @@ process_kind() {
         fi
     fi
 
-    # Compare raw file to last archive — if identical, no new data
+    # Compare raw file to last archive
     local last
     last=$(latest_archive "${archive_dir}" "${kind}")
 
     if [[ -n "${last}" ]] && diff -q "${last}" "${raw_staging}" > /dev/null 2>&1; then
-        log_info "No change in ${kind} since ${last##*/} — skipping."
-        rm -f "${raw_staging}" "${id_staging}"
-        return 1
+        # Raw file unchanged since last run — skip archiving but still normalize
+        # IDs so data/KIND.ids is current and cleanup proceeds normally.
+        log_info "No change in ${kind} since ${last##*/} — re-using existing archive."
+        rm -f "${raw_staging}"
+        normalize_ids "${id_staging}" "${ids_file}"
+        cp "${ids_file}" "${ids_snap}"
+        log_success "ID snapshot -> ids/${kind}.ids.${snap_stamp}"
+        rm -f "${id_staging}"
+        return 0
     fi
 
     [[ -z "${last}" ]] \
@@ -211,16 +202,15 @@ process_kind() {
 : > "${LOG_GETDATA}"
 log_info "===== getdata.sh start on $(hostname) ====="
 
-too_soon_check
 mkdir -p "${TERMS_ARCHIVE_DIR}" "${TRANS_ARCHIVE_DIR}" "${IDS_DIR}"
 
-terms_changed=0
-process_kind "terms" && terms_changed=1 || true
+process_kind "terms" || true
+process_kind "trans" || true
 
-trans_changed=0
-process_kind "trans" && trans_changed=1 || true
+log_info "===== getdata.sh done ====="
 
-log_info "===== getdata.sh done (terms_changed=${terms_changed} trans_changed=${trans_changed}) ====="
-
-[[ "${terms_changed}" -eq 0 ]] && exit 1
+# Exit 1 only if terms.ids ended up empty — that means no IDs to process
+# and cleanup should be skipped. A re-run with unchanged OIM data still
+# produces a populated terms.ids from the existing archive and exits 0.
+[[ -s "${DATA_DIR}/terms.ids" ]] || exit 1
 exit 0
