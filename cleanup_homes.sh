@@ -190,11 +190,14 @@ run_pssh_batch() {
 
     # Encode script as \xNN hex escapes — no base64 -w0 portability concern,
     # no single-quote wrapping, safe to embed directly in the pssh command.
-    local hex_cmd
-    hex_cmd=$(od -An -tx1 "${script_file}" | tr -d ' \n' | sed 's/../\\x&/g')
+    # base64-encode the script; strip newlines so it is a single line.
+    # Decode on the remote side with perl -MMIME::Base64 which is available
+    # on all RHEL/Rocky systems. q{...} quoting handles any special chars.
+    local encoded
+    encoded=$(base64 "${script_file}" | tr -d '\n')
 
     local remote_cmd
-    remote_cmd="printf '${hex_cmd}' | bash"
+    remote_cmd="perl -MMIME::Base64 -e 'print decode_base64(q{${encoded}})' | bash"
 
     if ${DEBUG_MODE}; then
         log_info "DEBUG: Script file contents:"
@@ -203,28 +206,49 @@ run_pssh_batch() {
         done < "${script_file}"
         log_info "DEBUG: Remote command length: ${#remote_cmd} chars"
         log_info "DEBUG: Host file: ${host_file} ($(wc -l < "${host_file}") hosts)"
-        log_info "DEBUG: PSSH_BIN: ${PSSH_BIN}"
-        log_info "DEBUG: PSSH_OPTS: ${PSSH_OPTS}"
+        log_info "DEBUG: PSSH_BIN=${PSSH_BIN}"
+        log_info "DEBUG: PSSH_OPTS=${PSSH_OPTS}"
+        log_info "DEBUG: pssh version: $(${PSSH_BIN} --version 2>&1 | head -1 || echo unknown)"
+        log_info "DEBUG: out_dir=${out_dir} err_dir=${err_dir}"
         log_info "DEBUG: Running pssh..."
     fi
 
-    # shellcheck disable=SC2086
-    "${PSSH_BIN}" ${PSSH_OPTS} -q \
-        -h "${host_file}" \
-        -o "${out_dir}" \
-        -e "${err_dir}" \
-        "${remote_cmd}" \
-        2>/dev/null || true
+    local pssh_rc=0
+    if ${DEBUG_MODE}; then
+        # Drop -q so pssh own output is captured; keep stderr visible
+        # shellcheck disable=SC2086
+        "${PSSH_BIN}" ${PSSH_OPTS} \
+            -h "${host_file}" \
+            -o "${out_dir}" \
+            -e "${err_dir}" \
+            "${remote_cmd}" \
+            > "${out_dir}/../pssh_stdout_debug.log" 2> "${out_dir}/../pssh_stderr_debug.log" || pssh_rc=$?
+        log_info "DEBUG: pssh exit code: ${pssh_rc}"
+        log_info "DEBUG: pssh stdout (first 3 lines): $(head -3 "${out_dir}/../pssh_stdout_debug.log" 2>/dev/null || echo none)"
+        log_info "DEBUG: pssh own stderr: $(cat "${out_dir}/../pssh_stderr_debug.log" 2>/dev/null | head -3 || echo none)"
+    else
+        # shellcheck disable=SC2086
+        "${PSSH_BIN}" ${PSSH_OPTS} -q \
+            -h "${host_file}" \
+            -o "${out_dir}" \
+            -e "${err_dir}" \
+            "${remote_cmd}" \
+            2>/dev/null || true
+    fi
 
     if ${DEBUG_MODE}; then
         local out_count err_count
         out_count=$(ls "${out_dir}" 2>/dev/null | wc -l)
         err_count=$(ls "${err_dir}" 2>/dev/null | wc -l)
         log_info "DEBUG: pssh done — stdout files: ${out_count}, stderr files: ${err_count}"
-        # Show first err file if any
         for ef in "${err_dir}"/*; do
             [[ -s "${ef}" ]] || continue
             log_info "DEBUG: Sample stderr from $(basename "${ef}"): $(head -1 "${ef}")"
+            break
+        done
+        for of in "${out_dir}"/*; do
+            [[ -s "${of}" ]] || continue
+            log_info "DEBUG: Sample stdout from $(basename "${of}"): $(head -2 "${of}")"
             break
         done
     fi
