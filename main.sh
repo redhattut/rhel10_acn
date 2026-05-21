@@ -24,7 +24,8 @@
 #   0 23 * * * find /export/home/xamrgpti/data/terms -type f -mtime +365 -delete
 #   0 23 * * * find /export/home/xamrgpti/data/trans -type f -mtime +365 -delete
 #   0 23 * * * find /export/home/xamrgpti/logs       -type f -mtime +365 -delete
-#   0 23 * * * find /export/home/xamrgpti/data/ids   -type f -mtime +730 -delete
+#   0 23 * * * find /export/home/xamrgpti/data/ids        -type f -mtime +730 -delete
+#   0 23 * * * find /export/home/xamrgpti/logs/dryrun    -type f -mtime +90  -delete
 # =============================================================================
 
 set -euo pipefail
@@ -81,7 +82,7 @@ trap 'release_lock; log_error "main.sh exited unexpectedly."' ERR EXIT
 # Main
 # =============================================================================
 
-mkdir -p "${LOGS_DIR}" "${DATA_DIR}" "${IDS_DIR}" \
+mkdir -p "${LOGS_DIR}" "${DRYRUN_LOGS_DIR}" "${DATA_DIR}" "${IDS_DIR}" \
          "${TERMS_ARCHIVE_DIR}" "${TRANS_ARCHIVE_DIR}"
 
 # Fresh unreachable-hosts log for this run
