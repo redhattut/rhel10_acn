@@ -128,63 +128,71 @@ build_host_file() {
     printf '%s\n' "$@" > "${outfile}"
 }
 
-# build_remote_cmd USER_IDS_ARRAY DRY_RUN
-#   Builds a single shell script string to run on each remote host.
-#   The remote script iterates all user IDs and checks/removes both home
-#   patterns in one pass — no repeated SSH connections per user.
+# build_remote_script USER_IDS_ARRAY DRY_RUN SCRIPT_FILE
+#   Writes the remote shell script to SCRIPT_FILE on the local host.
+#   The script iterates all user IDs and checks/removes both home patterns
+#   in a single pass — one SSH session handles all users on that server.
 #
 #   Output per line (only emitted when a path exists):
 #     REMOVED:/home/userid
 #     REMOVED:/home/useridOUD
 #     FAILED:/home/userid
 #     DRY_RUN:/home/userid
-build_remote_cmd() {
-    local -n _ids="$1"   # nameref to the USER_IDS array
+#
+#   Uses file + base64 encoding so pssh can pass it to ssh as a clean
+#   single-line string — no quoting or newline issues with any user list size.
+build_remote_script() {
+    local -n _ids="$1"
     local dry="$2"
+    local script_file="$3"
 
-    # Inline the user list as a shell array literal in the remote command
     local ids_literal=""
     for u in "${_ids[@]}"; do
         ids_literal+=" ${u}"
     done
 
     if [[ "${dry}" == "true" ]]; then
-        cat <<REMOTESCRIPT
-for u in${ids_literal}; do
-  for p in "/home/\${u}" "/home/\${u}OUD"; do
-    [ -e "\${p}" ] && echo "DRY_RUN:\${p}" || true
+        cat > "${script_file}" << 'ENDBODY'
+for u in __IDS__; do
+  for p in "/home/${u}" "/home/${u}OUD"; do
+    [ -e "${p}" ] && echo "DRY_RUN:${p}" || true
   done
 done
-REMOTESCRIPT
+ENDBODY
     else
-        cat <<REMOTESCRIPT
-for u in${ids_literal}; do
-  for p in "/home/\${u}" "/home/\${u}OUD"; do
-    if [ -e "\${p}" ]; then
-      rm -rf "\${p}" && echo "REMOVED:\${p}" || echo "FAILED:\${p}"
+        cat > "${script_file}" << 'ENDBODY'
+for u in __IDS__; do
+  for p in "/home/${u}" "/home/${u}OUD"; do
+    if [ -e "${p}" ]; then
+      rm -rf "${p}" && echo "REMOVED:${p}" || echo "FAILED:${p}"
     fi
   done
 done
-REMOTESCRIPT
+ENDBODY
     fi
+    sed -i "s/__IDS__/${ids_literal}/" "${script_file}"
 }
 
-# run_pssh_batch HOST_FILE REMOTE_CMD OUT_DIR ERR_DIR
-#   Runs REMOTE_CMD on all hosts in HOST_FILE via pssh.
-#   Captures per-host stdout to OUT_DIR/<hostname>.
-#   pssh's own status lines are suppressed (stderr -> /dev/null).
+# run_pssh_batch HOST_FILE SCRIPT_FILE OUT_DIR ERR_DIR
+#   Base64-encodes SCRIPT_FILE into a single-line string and runs it on
+#   all hosts via pssh as: echo <b64> | base64 -d | bash
+#   pssh -q suppresses its own [N] HH:MM:SS [SUCCESS/FAILURE] status lines.
 run_pssh_batch() {
-    local host_file="$1" remote_cmd="$2" out_dir="$3" err_dir="$4"
+    local host_file="$1" script_file="$2" out_dir="$3" err_dir="$4"
     mkdir -p "${out_dir}" "${err_dir}"
-    # -q suppresses pssh's own [N] HH:MM:SS [SUCCESS/FAILURE] lines
+
+    local encoded
+    encoded=$(base64 -w0 < "${script_file}")
+
     # shellcheck disable=SC2086
     "${PSSH_BIN}" ${PSSH_OPTS} -q \
         -h "${host_file}" \
         -o "${out_dir}" \
         -e "${err_dir}" \
-        "${remote_cmd}" \
+        "echo '${encoded}' | base64 -d | bash" \
         2>/dev/null || true
 }
+
 
 # parse_batch_output OUT_DIR ERR_DIR
 #   Reads per-host output files. Logs SUCCESS/FAILURE/DRY_RUN per path found.
@@ -260,9 +268,10 @@ CNT_SERVERS=${#ALL_SERVERS[@]}
 CNT_USERS=${#USER_IDS[@]}
 log_info "Loaded ${CNT_SERVERS} servers, ${CNT_USERS} user IDs"
 
-# Build the remote command once — it embeds all user IDs so each host
-# receives and processes the full list in a single SSH session.
-REMOTE_CMD=$(build_remote_cmd USER_IDS "${DRY_RUN}")
+# Write the remote script once to a temp file, encode it once.
+# Every batch reuses the same encoded script — no rebuilding per batch.
+REMOTE_SCRIPT_FILE="${PSSH_TMP}/remote_homes.sh"
+build_remote_script USER_IDS "${DRY_RUN}" "${REMOTE_SCRIPT_FILE}"
 
 # Fan out in batches of PSSH_BATCH
 batch_num=0
@@ -279,7 +288,7 @@ while [[ ${i} -lt ${total} ]]; do
     err_dir="${PSSH_TMP}/err_b${batch_num}"
 
     build_host_file "${batch_host_file}" "${batch[@]}"
-    run_pssh_batch  "${batch_host_file}" "${REMOTE_CMD}" "${out_dir}" "${err_dir}"
+    run_pssh_batch  "${batch_host_file}" "${REMOTE_SCRIPT_FILE}" "${out_dir}" "${err_dir}"
     parse_batch_output "${out_dir}" "${err_dir}"
 done
 

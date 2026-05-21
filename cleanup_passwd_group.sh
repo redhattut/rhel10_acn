@@ -119,63 +119,68 @@ build_host_file() {
     printf '%s\n' "$@" > "${outfile}"
 }
 
-# build_remote_cmd USER_IDS_ARRAY DRY_RUN
-#   Builds a single remote shell script that processes all users in one SSH session.
-#
-#   /etc/passwd section: for each user, grep field 1. If found:
-#     dry-run  -> echo PASSWD_DRY_RUN:userid
-#     live     -> userdel; echo PASSWD_REMOVED or PASSWD_FAILED
-#
-#   /etc/group section: for each user, grep field 4. If found:
-#     Collects affected group names (comma-joined).
-#     dry-run  -> echo GROUP_DRY_RUN:userid:groups
-#     live     -> cp backup, sed remove, echo GROUP_REMOVED:userid:groups or GROUP_FAILED:userid
-build_remote_cmd() {
+# build_remote_script USER_IDS_ARRAY DRY_RUN SCRIPT_FILE
+#   Writes the remote shell script to SCRIPT_FILE.
+#   Uses file + base64 encoding so pssh can pass it to ssh without
+#   quoting or newline issues.
+build_remote_script() {
     local -n _ids="$1"
     local dry="$2"
+    local script_file="$3"
 
     local ids_literal=""
     for u in "${_ids[@]}"; do
         ids_literal+=" ${u}"
     done
 
+    # Write the script body with a placeholder, then substitute IDs in
     if [[ "${dry}" == "true" ]]; then
-        cat <<REMOTESCRIPT
-for u in${ids_literal}; do
-  grep -q "^\${u}:" /etc/passwd 2>/dev/null && echo "PASSWD_DRY_RUN:\${u}" || true
-  groups=\$(grep -P "^[^:]+:[^:]+:[^:]+:.*\b\${u}\b" /etc/group 2>/dev/null | cut -d: -f1 | tr '\n' ',' | sed 's/,\$//')
-  [ -n "\${groups}" ] && echo "GROUP_DRY_RUN:\${u}:\${groups}" || true
+        cat > "${script_file}" << 'ENDBODY'
+for u in __IDS__; do
+  grep -q "^${u}:" /etc/passwd 2>/dev/null && echo "PASSWD_DRY_RUN:${u}" || true
+  groups=$(grep -P "^[^:]+:[^:]+:[^:]+:.*\b${u}\b" /etc/group 2>/dev/null | cut -d: -f1 | tr '\n' ',' | sed 's/,$//')
+  [ -n "${groups}" ] && echo "GROUP_DRY_RUN:${u}:${groups}" || true
 done
-REMOTESCRIPT
+ENDBODY
     else
-        cat <<REMOTESCRIPT
-for u in${ids_literal}; do
-  if grep -q "^\${u}:" /etc/passwd 2>/dev/null; then
-    userdel "\${u}" 2>/dev/null && echo "PASSWD_REMOVED:\${u}" || echo "PASSWD_FAILED:\${u}"
+        cat > "${script_file}" << 'ENDBODY'
+for u in __IDS__; do
+  if grep -q "^${u}:" /etc/passwd 2>/dev/null; then
+    userdel "${u}" 2>/dev/null && echo "PASSWD_REMOVED:${u}" || echo "PASSWD_FAILED:${u}"
   fi
-  groups=\$(grep -P "^[^:]+:[^:]+:[^:]+:.*\b\${u}\b" /etc/group 2>/dev/null | cut -d: -f1 | tr '\n' ',' | sed 's/,\$//')
-  if [ -n "\${groups}" ]; then
-    cp /etc/group /etc/group.preremove.\${u} && \
-    sed -i -e "s/,\${u}//g" -e "s/\${u},//g" -e "s/:\${u}\$//g" /etc/group && \
-    echo "GROUP_REMOVED:\${u}:\${groups}" || echo "GROUP_FAILED:\${u}"
+  groups=$(grep -P "^[^:]+:[^:]+:[^:]+:.*\b${u}\b" /etc/group 2>/dev/null | cut -d: -f1 | tr '\n' ',' | sed 's/,$//')
+  if [ -n "${groups}" ]; then
+    cp /etc/group "/etc/group.preremove.${u}" && \
+    sed -i -e "s/,${u}//g" -e "s/${u},//g" -e "s/:${u}\$//g" /etc/group && \
+    echo "GROUP_REMOVED:${u}:${groups}" || echo "GROUP_FAILED:${u}"
   fi
 done
-REMOTESCRIPT
+ENDBODY
     fi
+    # Substitute the actual IDs into the placeholder
+    sed -i "s/__IDS__/${ids_literal}/" "${script_file}"
 }
 
-# run_pssh_batch HOST_FILE REMOTE_CMD OUT_DIR ERR_DIR
+# run_pssh_batch HOST_FILE SCRIPT_FILE OUT_DIR ERR_DIR
+#   Base64-encodes SCRIPT_FILE and runs it on all hosts via pssh as:
+#   echo <b64> | base64 -d | bash
+#   Avoids all quoting and newline issues.
 run_pssh_batch() {
-    local host_file="$1" remote_cmd="$2" out_dir="$3" err_dir="$4"
+    local host_file="$1" script_file="$2" out_dir="$3" err_dir="$4"
     mkdir -p "${out_dir}" "${err_dir}"
+
+    local encoded
+    encoded=$(base64 -w0 < "${script_file}")
+
     # shellcheck disable=SC2086
     "${PSSH_BIN}" ${PSSH_OPTS} -q \
         -h "${host_file}" \
         -o "${out_dir}" \
         -e "${err_dir}" \
-        "${remote_cmd}" \
+        "echo '${encoded}' | base64 -d | bash" \
         2>/dev/null || true
 }
+
 
 # parse_batch_output OUT_DIR ERR_DIR
 parse_batch_output() {
@@ -258,7 +263,8 @@ CNT_SERVERS=${#ALL_SERVERS[@]}
 CNT_USERS=${#USER_IDS[@]}
 log_info "Loaded ${CNT_SERVERS} servers, ${CNT_USERS} user IDs"
 
-REMOTE_CMD=$(build_remote_cmd USER_IDS "${DRY_RUN}")
+REMOTE_SCRIPT_FILE="${PSSH_TMP}/remote_passwd_group.sh"
+build_remote_script USER_IDS "${DRY_RUN}" "${REMOTE_SCRIPT_FILE}"
 
 batch_num=0
 i=0
@@ -274,7 +280,7 @@ while [[ ${i} -lt ${total} ]]; do
     err_dir="${PSSH_TMP}/err_b${batch_num}"
 
     build_host_file "${batch_host_file}" "${batch[@]}"
-    run_pssh_batch  "${batch_host_file}" "${REMOTE_CMD}" "${out_dir}" "${err_dir}"
+    run_pssh_batch  "${batch_host_file}" "${REMOTE_SCRIPT_FILE}" "${out_dir}" "${err_dir}"
     parse_batch_output "${out_dir}" "${err_dir}"
 done
 
