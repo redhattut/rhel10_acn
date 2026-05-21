@@ -41,11 +41,12 @@ source "${CONFIG}"
 # --- Arguments ---------------------------------------------------------------
 DRY_RUN=false
 DRY_RUN_FLAG=""
+DEBUG_FLAG=""
 for arg in "$@"; do
-    if [[ "${arg}" == "--dry-run" ]]; then
-        DRY_RUN=true
-        DRY_RUN_FLAG="--dry-run"
-    fi
+    case "${arg}" in
+        --dry-run) DRY_RUN=true; DRY_RUN_FLAG="--dry-run" ;;
+        --debug)   DEBUG_FLAG="--debug" ;;
+    esac
 done
 
 RUN_STAMP=$(date +%y%m%d%H%M)
@@ -131,7 +132,7 @@ esac
 log_info "--- Step 2: cleanup_homes.sh terms ---"
 if [[ -s "${DATA_DIR}/terms.ids" ]]; then
     # shellcheck disable=SC2086
-    "${SCRIPT_DIR}/cleanup_homes.sh" --mode terms ${DRY_RUN_FLAG}
+    "${SCRIPT_DIR}/cleanup_homes.sh" --mode terms ${DRY_RUN_FLAG} ${DEBUG_FLAG}
     log_success "Home cleanup (terms) complete."
 else
     log_warn "terms.ids empty — skipping home cleanup for terms."
@@ -140,7 +141,7 @@ fi
 log_info "--- Step 3: cleanup_homes.sh trans ---"
 if [[ -s "${DATA_DIR}/trans.ids" ]]; then
     # shellcheck disable=SC2086
-    "${SCRIPT_DIR}/cleanup_homes.sh" --mode trans ${DRY_RUN_FLAG}
+    "${SCRIPT_DIR}/cleanup_homes.sh" --mode trans ${DRY_RUN_FLAG} ${DEBUG_FLAG}
     log_success "Home cleanup (trans) complete."
 else
     log_info "trans.ids empty — no home cleanup needed for trans."
@@ -152,7 +153,7 @@ fi
 log_info "--- Step 4: cleanup_passwd_group.sh terms ---"
 if [[ -s "${DATA_DIR}/terms.ids" ]]; then
     # shellcheck disable=SC2086
-    "${SCRIPT_DIR}/cleanup_passwd_group.sh" --mode terms ${DRY_RUN_FLAG}
+    "${SCRIPT_DIR}/cleanup_passwd_group.sh" --mode terms ${DRY_RUN_FLAG} ${DEBUG_FLAG}
     log_success "passwd/group cleanup (terms) complete."
 else
     log_warn "terms.ids empty — skipping passwd/group cleanup for terms."
@@ -161,7 +162,7 @@ fi
 log_info "--- Step 5: cleanup_passwd_group.sh trans ---"
 if [[ -s "${DATA_DIR}/trans.ids" ]]; then
     # shellcheck disable=SC2086
-    "${SCRIPT_DIR}/cleanup_passwd_group.sh" --mode trans ${DRY_RUN_FLAG}
+    "${SCRIPT_DIR}/cleanup_passwd_group.sh" --mode trans ${DRY_RUN_FLAG} ${DEBUG_FLAG}
     log_success "passwd/group cleanup (trans) complete."
 else
     log_info "trans.ids empty — no passwd/group cleanup needed for trans."

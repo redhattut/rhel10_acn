@@ -48,13 +48,15 @@ source "${CONFIG}"
 # --- Argument parsing --------------------------------------------------------
 MODE=""
 DRY_RUN=false
+DEBUG_MODE=false
 
-usage() { echo "Usage: ${SCRIPT_NAME} --mode terms|trans [--dry-run]" >&2; exit 1; }
+usage() { echo "Usage: ${SCRIPT_NAME} --mode terms|trans [--dry-run] [--debug]" >&2; exit 1; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --mode)    MODE="$2"; shift 2 ;;
         --dry-run) DRY_RUN=true; shift ;;
+        --debug)   DEBUG_MODE=true; shift ;;
         *)         usage ;;
     esac
 done
@@ -78,7 +80,7 @@ PSSH_TMP=$(mktemp -d /var/tmp/tti_pssh.XXXXXX)
 trap 'rm -rf "${PSSH_TMP}"' EXIT
 
 # --- Counters ----------------------------------------------------------------
-declare -i CNT_USERS=0 CNT_SERVERS=0 CNT_UNREACHABLE=0
+declare -i CNT_USERS=0 CNT_SERVERS=0 CNT_UNREACHABLE=0 CNT_REACHED=0
 declare -i CNT_PASSWD_REMOVED=0 CNT_PASSWD_FAILED=0 CNT_PASSWD_DRYRUN=0
 declare -i CNT_GROUP_REMOVED=0  CNT_GROUP_FAILED=0  CNT_GROUP_DRYRUN=0
 
@@ -162,23 +164,48 @@ ENDBODY
 }
 
 # run_pssh_batch HOST_FILE SCRIPT_FILE OUT_DIR ERR_DIR
-#   Base64-encodes SCRIPT_FILE and runs it on all hosts via pssh as:
-#   echo <b64> | base64 -d | bash
-#   Avoids all quoting and newline issues.
+#   Hex-encodes SCRIPT_FILE and runs it on all hosts via pssh as:
+#   printf '%b' '\xNN...' | bash
+#   No base64 -w0 portability issues, no single-quote wrapping problems.
 run_pssh_batch() {
     local host_file="$1" script_file="$2" out_dir="$3" err_dir="$4"
     mkdir -p "${out_dir}" "${err_dir}"
 
-    local encoded
-    encoded=$(base64 -w0 < "${script_file}")
+    local hex_cmd
+    hex_cmd=$(od -An -tx1 "${script_file}" | tr -d ' \\n' | sed 's/../\\x&/g')
+
+    local remote_cmd
+    remote_cmd="printf '${hex_cmd}' | bash"
+
+    if ${DEBUG_MODE}; then
+        log_info "DEBUG: Script file contents:"
+        while IFS= read -r dbg_line; do
+            log_info "DEBUG:   ${dbg_line}"
+        done < "${script_file}"
+        log_info "DEBUG: Remote command length: ${#remote_cmd} chars"
+        log_info "DEBUG: Host file: ${host_file} ($(wc -l < "${host_file}") hosts)"
+        log_info "DEBUG: Running pssh..."
+    fi
 
     # shellcheck disable=SC2086
     "${PSSH_BIN}" ${PSSH_OPTS} -q \
         -h "${host_file}" \
         -o "${out_dir}" \
         -e "${err_dir}" \
-        "echo '${encoded}' | base64 -d | bash" \
+        "${remote_cmd}" \
         2>/dev/null || true
+
+    if ${DEBUG_MODE}; then
+        local out_count err_count
+        out_count=$(ls "${out_dir}" 2>/dev/null | wc -l)
+        err_count=$(ls "${err_dir}" 2>/dev/null | wc -l)
+        log_info "DEBUG: pssh done — stdout files: ${out_count}, stderr files: ${err_count}"
+        for ef in "${err_dir}"/*; do
+            [[ -s "${ef}" ]] || continue
+            log_info "DEBUG: Sample stderr from $(basename "${ef}"): $(head -1 "${ef}")"
+            break
+        done
+    fi
 }
 
 
@@ -190,6 +217,7 @@ parse_batch_output() {
         [[ -f "${result_file}" ]] || continue
         local host
         host=$(basename "${result_file}")
+        (( CNT_REACHED++ )) || true
 
         while IFS= read -r result_line; do
             [[ -z "${result_line}" ]] && continue
@@ -290,6 +318,7 @@ log_summary "cleanup_passwd_group complete$( ${DRY_RUN} && echo ' [DRY-RUN]' || 
 log_summary "Mode                    : ${MODE} (${EVENT_TYPE})"
 log_summary "User IDs                : ${CNT_USERS}"
 log_summary "Servers in scope        : ${CNT_SERVERS}"
+log_summary "Hosts reached           : ${CNT_REACHED}"
 log_summary "Unreachable hosts       : ${CNT_UNREACHABLE}"
 if ${DRY_RUN}; then
     log_summary "/etc/passwd would remove : ${CNT_PASSWD_DRYRUN}"

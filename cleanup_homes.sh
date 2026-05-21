@@ -55,13 +55,15 @@ source "${CONFIG}"
 # --- Argument parsing --------------------------------------------------------
 MODE=""
 DRY_RUN=false
+DEBUG_MODE=false
 
-usage() { echo "Usage: ${SCRIPT_NAME} --mode terms|trans [--dry-run]" >&2; exit 1; }
+usage() { echo "Usage: ${SCRIPT_NAME} --mode terms|trans [--dry-run] [--debug]" >&2; exit 1; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --mode)    MODE="$2"; shift 2 ;;
         --dry-run) DRY_RUN=true; shift ;;
+        --debug)   DEBUG_MODE=true; shift ;;
         *)         usage ;;
     esac
 done
@@ -88,7 +90,7 @@ trap 'rm -rf "${PSSH_TMP}"' EXIT
 
 # --- Counters ----------------------------------------------------------------
 declare -i CNT_USERS=0 CNT_SERVERS=0
-declare -i CNT_REMOVED=0 CNT_FAILED=0 CNT_DRYRUN=0 CNT_UNREACHABLE=0
+declare -i CNT_REMOVED=0 CNT_FAILED=0 CNT_DRYRUN=0 CNT_UNREACHABLE=0 CNT_REACHED=0
 
 # --- Logging -----------------------------------------------------------------
 _log() {
@@ -174,23 +176,58 @@ ENDBODY
 }
 
 # run_pssh_batch HOST_FILE SCRIPT_FILE OUT_DIR ERR_DIR
-#   Base64-encodes SCRIPT_FILE into a single-line string and runs it on
-#   all hosts via pssh as: echo <b64> | base64 -d | bash
-#   pssh -q suppresses its own [N] HH:MM:SS [SUCCESS/FAILURE] status lines.
+#   Encodes SCRIPT_FILE to a single-line hex string and runs it on all hosts.
+#   Uses xxd/od hex encoding instead of base64 to avoid -w0 portability issues
+#   and single-quote wrapping problems. The remote command is:
+#     printf '%b' '\x..\x..' | bash
+#   This is a pure printable ASCII string with no quoting issues.
+#
+#   PSSH_TIMEOUT controls per-host timeout. -q suppresses pssh status lines.
+#   Per-host stdout captured to OUT_DIR/<hostname> for parsing.
 run_pssh_batch() {
     local host_file="$1" script_file="$2" out_dir="$3" err_dir="$4"
     mkdir -p "${out_dir}" "${err_dir}"
 
-    local encoded
-    encoded=$(base64 -w0 < "${script_file}")
+    # Encode script as \xNN hex escapes — no base64 -w0 portability concern,
+    # no single-quote wrapping, safe to embed directly in the pssh command.
+    local hex_cmd
+    hex_cmd=$(od -An -tx1 "${script_file}" | tr -d ' \n' | sed 's/../\\x&/g')
+
+    local remote_cmd
+    remote_cmd="printf '${hex_cmd}' | bash"
+
+    if ${DEBUG_MODE}; then
+        log_info "DEBUG: Script file contents:"
+        while IFS= read -r dbg_line; do
+            log_info "DEBUG:   ${dbg_line}"
+        done < "${script_file}"
+        log_info "DEBUG: Remote command length: ${#remote_cmd} chars"
+        log_info "DEBUG: Host file: ${host_file} ($(wc -l < "${host_file}") hosts)"
+        log_info "DEBUG: PSSH_BIN: ${PSSH_BIN}"
+        log_info "DEBUG: PSSH_OPTS: ${PSSH_OPTS}"
+        log_info "DEBUG: Running pssh..."
+    fi
 
     # shellcheck disable=SC2086
     "${PSSH_BIN}" ${PSSH_OPTS} -q \
         -h "${host_file}" \
         -o "${out_dir}" \
         -e "${err_dir}" \
-        "echo '${encoded}' | base64 -d | bash" \
+        "${remote_cmd}" \
         2>/dev/null || true
+
+    if ${DEBUG_MODE}; then
+        local out_count err_count
+        out_count=$(ls "${out_dir}" 2>/dev/null | wc -l)
+        err_count=$(ls "${err_dir}" 2>/dev/null | wc -l)
+        log_info "DEBUG: pssh done — stdout files: ${out_count}, stderr files: ${err_count}"
+        # Show first err file if any
+        for ef in "${err_dir}"/*; do
+            [[ -s "${ef}" ]] || continue
+            log_info "DEBUG: Sample stderr from $(basename "${ef}"): $(head -1 "${ef}")"
+            break
+        done
+    fi
 }
 
 
@@ -205,6 +242,7 @@ parse_batch_output() {
         [[ -f "${result_file}" ]] || continue
         local host
         host=$(basename "${result_file}")
+        (( CNT_REACHED++ )) || true
 
         while IFS= read -r result_line; do
             [[ -z "${result_line}" ]] && continue
@@ -298,6 +336,7 @@ log_summary "cleanup_homes complete$( ${DRY_RUN} && echo ' [DRY-RUN]' || true )"
 log_summary "Mode              : ${MODE} (${EVENT_TYPE})"
 log_summary "User IDs          : ${CNT_USERS}"
 log_summary "Servers in scope  : ${CNT_SERVERS}"
+log_summary "Hosts reached     : ${CNT_REACHED}"
 log_summary "Unreachable hosts : ${CNT_UNREACHABLE}"
 if ${DRY_RUN}; then
     log_summary "Home dirs found   : ${CNT_DRYRUN}  (would be removed)"
