@@ -6,17 +6,15 @@
 #
 # Flow per run:
 #   1. Acquire lock
-#   2. getdata.sh        — fetch OIM files, build terms.ids / trans.ids
-#   3. cleanup_homes.sh  --mode terms  — remove /home/userid + /home/useridOUD
-#   4. cleanup_homes.sh  --mode trans  — same for transferred users
-#   5. cleanup_passwd_group.sh --mode terms — /etc/passwd + /etc/group cleanup
-#   6. cleanup_passwd_group.sh --mode trans — same for transferred users
-#   7. Archive unreachable hosts log
-#   8. Release lock
+#   2. getdata.sh     — fetch OIM files, build terms.ids / trans.ids
+#   3. cleanup.sh --mode terms — home dirs + /etc/passwd + /etc/group (one SSH)
+#   4. cleanup.sh --mode trans — same for transferred users
+#   5. Archive unreachable hosts log
+#   6. Release lock
 #
 # Options:
-#   --dry-run    Passed to all subscripts; no changes made on servers.
-#                All logs written to logs/dryrun/ — tti_process.log untouched.
+#   --dry-run    No changes on servers; logs go to logs/dryrun/
+#   --debug      Verbose pssh diagnostics on first batch
 #
 # Cron (daily 11:20):
 #   20 11 * * * /export/home/xamrgpti/scripts/main.sh >> /dev/null 2>&1
@@ -51,20 +49,22 @@ done
 
 RUN_STAMP=$(date +%y%m%d%H%M)
 
-# --- Dry-run log redirection -------------------------------------------------
-# When running in dry-run mode ALL log variables are overridden to point at
-# logs/dryrun/ so that tti_process.log and all working logs are never touched.
-# These exports are inherited by every child script (getdata.sh, cleanup_*.sh).
+# --- Log path setup ----------------------------------------------------------
+# For dry-run: redirect ALL log files to logs/dryrun/ so live logs are never
+# touched. We set shell variables here; cleanup.sh preserves them by saving
+# and restoring around its own source of tti.conf.
 mkdir -p "${LOGS_DIR}" "${DRYRUN_LOGS_DIR}" "${DATA_DIR}" "${IDS_DIR}" \
          "${TERMS_ARCHIVE_DIR}" "${TRANS_ARCHIVE_DIR}"
 
 if ${DRY_RUN}; then
-    export MAIN_LOG="${DRYRUN_LOGS_DIR}/dryrun_tti_process.log"
-    export LOG_GETDATA="${DRYRUN_LOGS_DIR}/dryrun_tti_getdata.log"
-    export LOG_CLEANUP="${DRYRUN_LOGS_DIR}/dryrun_tti_cleanup.log"
-    export LOG_PASSWD="${DRYRUN_LOGS_DIR}/dryrun_tti_passwd_group.log"
-    export LOG_HOSTS="${DRYRUN_LOGS_DIR}/dryrun_tti_unreachable.log"
+    MAIN_LOG="${DRYRUN_LOGS_DIR}/dryrun_tti_process.log"
+    LOG_GETDATA="${DRYRUN_LOGS_DIR}/dryrun_tti_getdata.log"
+    LOG_CLEANUP="${DRYRUN_LOGS_DIR}/dryrun_tti_cleanup.log"
+    LOG_HOSTS="${DRYRUN_LOGS_DIR}/dryrun_tti_unreachable.log"
 fi
+
+# Export so child scripts inherit the overrides even after sourcing tti.conf
+export MAIN_LOG LOG_GETDATA LOG_CLEANUP LOG_HOSTS
 
 # --- Logging -----------------------------------------------------------------
 _log() {
@@ -127,51 +127,30 @@ case "${getdata_rc}" in
 esac
 
 # ------------------------------------------------------------------
-# Step 2 — Home directory cleanup
+# Step 2 — Combined cleanup: home dirs + /etc/passwd + /etc/group
 # ------------------------------------------------------------------
-log_info "--- Step 2: cleanup_homes.sh terms ---"
+log_info "--- Step 2: cleanup.sh terms ---"
 if [[ -s "${DATA_DIR}/terms.ids" ]]; then
     # shellcheck disable=SC2086
-    "${SCRIPT_DIR}/cleanup_homes.sh" --mode terms ${DRY_RUN_FLAG} ${DEBUG_FLAG}
-    log_success "Home cleanup (terms) complete."
+    "${SCRIPT_DIR}/cleanup.sh" --mode terms ${DRY_RUN_FLAG} ${DEBUG_FLAG}
+    log_success "Cleanup (terms) complete."
 else
-    log_warn "terms.ids empty — skipping home cleanup for terms."
+    log_warn "terms.ids empty — skipping cleanup for terms."
 fi
 
-log_info "--- Step 3: cleanup_homes.sh trans ---"
+log_info "--- Step 3: cleanup.sh trans ---"
 if [[ -s "${DATA_DIR}/trans.ids" ]]; then
     # shellcheck disable=SC2086
-    "${SCRIPT_DIR}/cleanup_homes.sh" --mode trans ${DRY_RUN_FLAG} ${DEBUG_FLAG}
-    log_success "Home cleanup (trans) complete."
+    "${SCRIPT_DIR}/cleanup.sh" --mode trans ${DRY_RUN_FLAG} ${DEBUG_FLAG}
+    log_success "Cleanup (trans) complete."
 else
-    log_info "trans.ids empty — no home cleanup needed for trans."
+    log_info "trans.ids empty — no cleanup needed for trans."
 fi
 
 # ------------------------------------------------------------------
-# Step 3 — /etc/passwd and /etc/group cleanup
+# Step 3 — Archive unreachable hosts log
 # ------------------------------------------------------------------
-log_info "--- Step 4: cleanup_passwd_group.sh terms ---"
-if [[ -s "${DATA_DIR}/terms.ids" ]]; then
-    # shellcheck disable=SC2086
-    "${SCRIPT_DIR}/cleanup_passwd_group.sh" --mode terms ${DRY_RUN_FLAG} ${DEBUG_FLAG}
-    log_success "passwd/group cleanup (terms) complete."
-else
-    log_warn "terms.ids empty — skipping passwd/group cleanup for terms."
-fi
-
-log_info "--- Step 5: cleanup_passwd_group.sh trans ---"
-if [[ -s "${DATA_DIR}/trans.ids" ]]; then
-    # shellcheck disable=SC2086
-    "${SCRIPT_DIR}/cleanup_passwd_group.sh" --mode trans ${DRY_RUN_FLAG} ${DEBUG_FLAG}
-    log_success "passwd/group cleanup (trans) complete."
-else
-    log_info "trans.ids empty — no passwd/group cleanup needed for trans."
-fi
-
-# ------------------------------------------------------------------
-# Step 4 — Archive unreachable hosts log
-# ------------------------------------------------------------------
-log_info "--- Step 6: Archive unreachable hosts log ---"
+log_info "--- Step 4: Archive unreachable hosts log ---"
 if [[ -s "${LOG_HOSTS}" ]]; then
     if ${DRY_RUN}; then
         log_info "Dry-run unreachable hosts logged -> ${LOG_HOSTS##*/}"

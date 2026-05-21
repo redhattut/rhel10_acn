@@ -30,7 +30,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 CONFIG="${SCRIPT_DIR}/tti.conf"
 [[ -f "${CONFIG}" ]] || { echo "[FATAL] Config not found: ${CONFIG}" >&2; exit 2; }
+
+# Preserve log path overrides exported by main.sh before source resets them
+_PRE_MAIN_LOG="${MAIN_LOG:-}"
+_PRE_LOG_GETDATA="${LOG_GETDATA:-}"
+
 source "${CONFIG}"
+
+[[ -n "${_PRE_MAIN_LOG}"     ]] && MAIN_LOG="${_PRE_MAIN_LOG}"
+[[ -n "${_PRE_LOG_GETDATA}"  ]] && LOG_GETDATA="${_PRE_LOG_GETDATA}"
 
 # --- Logging -----------------------------------------------------------------
 
