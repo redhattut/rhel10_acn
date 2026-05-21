@@ -58,25 +58,64 @@ MODE=""
 DRY_RUN=false
 DEBUG_MODE=false
 DEBUG_PSSH=false
+CUSTOM_IDS_FILE=""
+CUSTOM_HOSTS_FILE=""
 
-usage() { echo "Usage: ${SCRIPT_NAME} --mode terms|trans [--dry-run] [--debug] [--debug-pssh]" >&2; exit 1; }
+usage() {
+    cat >&2 << 'USAGE'
+Usage: cleanup.sh --mode terms|trans [OPTIONS]
+
+Required:
+  --mode terms|trans        Which ID list to use (terms.ids or trans.ids)
+
+Run options:
+  --dry-run                 Check only, no changes made on servers
+  --ids-file  /path/file    Override ID file (one lowercase userid per line)
+                            Useful for testing against a specific set of users
+  --hosts-file /path/file   Override server list (one hostname per line)
+                            Useful for testing against specific servers
+
+Debug options:
+  --debug                   Verbose pssh diagnostics per batch
+  --debug-pssh              Single plain-ssh test against first server, then exit
+USAGE
+    exit 1
+}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --mode)        MODE="$2"; shift 2 ;;
         --dry-run)     DRY_RUN=true; shift ;;
+        --ids-file)    CUSTOM_IDS_FILE="$2"; shift 2 ;;
+        --hosts-file)  CUSTOM_HOSTS_FILE="$2"; shift 2 ;;
         --debug)       DEBUG_MODE=true; shift ;;
         --debug-pssh)  DEBUG_MODE=true; DEBUG_PSSH=true; shift ;;
+        --help|-h)     usage ;;
         *)             usage ;;
     esac
 done
 [[ "${MODE}" == "terms" || "${MODE}" == "trans" ]] || usage
 
 # --- Derived settings --------------------------------------------------------
-IDS_FILE="${DATA_DIR}/${MODE}.ids"
+# IDS_FILE: use custom override if provided, otherwise default to data/MODE.ids
+if [[ -n "${CUSTOM_IDS_FILE}" ]]; then
+    IDS_FILE="${CUSTOM_IDS_FILE}"
+    [[ -f "${IDS_FILE}" ]] || { echo "[FATAL] --ids-file not found: ${IDS_FILE}" >&2; exit 2; }
+else
+    IDS_FILE="${DATA_DIR}/${MODE}.ids"
+fi
+
+# SERVER_LIST: use custom override if provided, otherwise default from conf
+if [[ -n "${CUSTOM_HOSTS_FILE}" ]]; then
+    SERVER_LIST="${CUSTOM_HOSTS_FILE}"
+    [[ -f "${SERVER_LIST}" ]] || { echo "[FATAL] --hosts-file not found: ${SERVER_LIST}" >&2; exit 2; }
+fi
+
 EVENT_TYPE="$( [[ "${MODE}" == "terms" ]] && echo "Terminated" || echo "Transferred" )"
 RUN_STAMP=$(date +%y%m%d%H%M)
 
+# Archive log destination — dry-run always goes to dryrun/ regardless of
+# whether custom files were used, so live logs are never contaminated.
 if ${DRY_RUN}; then
     mkdir -p "${DRYRUN_LOGS_DIR}"
     existing=$(ls "${DRYRUN_LOGS_DIR}/dryrun-${MODE}-"*"-${RUN_STAMP}" 2>/dev/null | wc -l || true)
@@ -345,8 +384,8 @@ parse_batch_output() {
 
 log_info "================================================================"
 log_info "cleanup.sh start — mode=${MODE}$( ${DRY_RUN} && echo ' [DRY-RUN]' || true )"
-log_info "IDs file : ${IDS_FILE}"
-log_info "Servers  : ${SERVER_LIST}"
+log_info "IDs file : ${IDS_FILE}$( [[ -n "${CUSTOM_IDS_FILE}" ]] && echo ' [CUSTOM]' || true )"
+log_info "Servers  : ${SERVER_LIST}$( [[ -n "${CUSTOM_HOSTS_FILE}" ]] && echo ' [CUSTOM]' || true )"
 log_info "PSSH     : batch=${PSSH_BATCH}, timeout=${PSSH_TIMEOUT}s, login=${PSSH_LOGIN}"
 log_info "================================================================"
 
@@ -389,6 +428,35 @@ if ${DEBUG_PSSH}; then
         done <<< "${ssh_out}"
     fi
     log_info "DEBUG-PSSH: Done. Exiting — remove --debug-pssh to run full job."
+
+    # Extra verification: directly list /home/ on the server and check which
+    # of our user IDs appear there, regardless of the remote script output.
+    log_info "DEBUG-PSSH: Checking /home/ listing on ${first_server}:"
+    home_list=$( ssh ${SSH_OPTS} -l "${PSSH_LOGIN}" "${first_server}"         'ls /home/ 2>/dev/null' 2>&1 ) || true
+    if [[ -z "${home_list}" ]]; then
+        log_info "DEBUG-PSSH:   /home/ is empty or not readable"
+    else
+        log_info "DEBUG-PSSH:   /home/ contents: ${home_list}"
+        # Cross-check against our user ID list
+        local matches=0
+        for uid in "${USER_IDS[@]}"; do
+            if echo "${home_list}" | grep -qE "^${uid}$|^${uid}OUD$"; then
+                log_info "DEBUG-PSSH:   MATCH FOUND: ${uid} has a home dir on ${first_server}"
+                (( matches++ )) || true
+            fi
+        done
+        [[ ${matches} -eq 0 ]] && log_info "DEBUG-PSSH:   No matches — none of the 52 users have homes on ${first_server}"
+    fi
+
+    # Also verify /etc/passwd for any of our users
+    log_info "DEBUG-PSSH: Checking /etc/passwd on ${first_server} for any of our users:"
+    passwd_matches=$( ssh ${SSH_OPTS} -l "${PSSH_LOGIN}" "${first_server}"         "grep -E '^($(IFS='|'; echo "${USER_IDS[*]}"|sed 's/ /|/g')):' /etc/passwd 2>/dev/null || true"         2>&1 ) || true
+    if [[ -z "${passwd_matches}" ]]; then
+        log_info "DEBUG-PSSH:   No local /etc/passwd entries found for any of our users"
+    else
+        log_info "DEBUG-PSSH:   /etc/passwd matches: ${passwd_matches}"
+    fi
+
     exit 0
 fi
 

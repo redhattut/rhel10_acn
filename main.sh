@@ -40,11 +40,18 @@ source "${CONFIG}"
 DRY_RUN=false
 DRY_RUN_FLAG=""
 DEBUG_FLAG=""
-for arg in "$@"; do
-    case "${arg}" in
-        --dry-run)    DRY_RUN=true; DRY_RUN_FLAG="--dry-run" ;;
-        --debug)      DEBUG_FLAG="--debug" ;;
-        --debug-pssh) DEBUG_FLAG="--debug-pssh" ;;
+IDS_FILE_FLAG=""
+HOSTS_FILE_FLAG=""
+
+# Parse arguments — positional flags and value flags
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run)    DRY_RUN=true; DRY_RUN_FLAG="--dry-run"; shift ;;
+        --debug)      DEBUG_FLAG="--debug"; shift ;;
+        --debug-pssh) DEBUG_FLAG="--debug-pssh"; shift ;;
+        --ids-file)   IDS_FILE_FLAG="--ids-file $2"; shift 2 ;;
+        --hosts-file) HOSTS_FILE_FLAG="--hosts-file $2"; shift 2 ;;
+        *) shift ;;
     esac
 done
 
@@ -133,7 +140,7 @@ esac
 log_info "--- Step 2: cleanup.sh terms ---"
 if [[ -s "${DATA_DIR}/terms.ids" ]]; then
     # shellcheck disable=SC2086
-    "${SCRIPT_DIR}/cleanup.sh" --mode terms ${DRY_RUN_FLAG} ${DEBUG_FLAG}
+    "${SCRIPT_DIR}/cleanup.sh" --mode terms ${DRY_RUN_FLAG} ${DEBUG_FLAG} ${IDS_FILE_FLAG} ${HOSTS_FILE_FLAG}
     log_success "Cleanup (terms) complete."
 else
     log_warn "terms.ids empty — skipping cleanup for terms."
@@ -142,7 +149,7 @@ fi
 log_info "--- Step 3: cleanup.sh trans ---"
 if [[ -s "${DATA_DIR}/trans.ids" ]]; then
     # shellcheck disable=SC2086
-    "${SCRIPT_DIR}/cleanup.sh" --mode trans ${DRY_RUN_FLAG} ${DEBUG_FLAG}
+    "${SCRIPT_DIR}/cleanup.sh" --mode trans ${DRY_RUN_FLAG} ${DEBUG_FLAG} ${IDS_FILE_FLAG} ${HOSTS_FILE_FLAG}
     log_success "Cleanup (trans) complete."
 else
     log_info "trans.ids empty — no cleanup needed for trans."
