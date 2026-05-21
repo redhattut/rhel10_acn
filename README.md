@@ -1,69 +1,32 @@
 # TTI EAR — Termination, Transfer, and Inactivity (EAR) Cleanup Process
 
-Modern rewrite of the TTI EAR automation suite. Replaces the legacy KSH scripts from 2007 with clean, maintainable bash. Handles home directory removal, legacy `/etc/passwd` account cleanup, and `/etc/group` membership scrubbing for terminated and transferred users across the Linux server estate.
+Modern rewrite of the TTI EAR automation suite. Replaces the legacy KSH scripts from 2007 with clean, maintainable bash. Handles home directory removal, legacy `/etc/passwd` account cleanup, and `/etc/group` membership scrubbing for terminated and transferred users across the Linux server estate using parallel SSH (pssh).
 
 ---
 
 ## Table of Contents
 
 1. [Background](#background)
-2. [What Changed vs Legacy](#what-changed-vs-legacy)
-3. [Folder Layout](#folder-layout)
-4. [Script Overview](#script-overview)
-5. [Run Examples](#run-examples)
-6. [Dry-Run Mode](#dry-run-mode)
-7. [Log Files](#log-files)
-8. [Script Comparison: Legacy vs Modern](#script-comparison-legacy-vs-modern)
+2. [Folder Layout](#folder-layout)
+3. [Script Overview](#script-overview)
+4. [Log Files](#log-files)
+5. [Email Notification](#email-notification)
+6. [Run Examples](#run-examples)
+7. [Dry-Run Mode](#dry-run-mode)
+8. [Targeted Testing (custom IDs and hosts)](#targeted-testing)
+9. [What Changed vs Legacy](#what-changed-vs-legacy)
 
 ---
 
 ## Background
 
-The EAR process is driven by Oracle Identity Manager (OIM), which is the authoritative source for terminated and transferred user accounts. OIM server produces daily data files for terminated or transferrred users. This process collects those files, extracts affected user IDs, and fans out across the Linux estate to remove any traces of those accounts.
+The EAR process is driven by Oracle Identity Manager (OIM), which is the authoritative source for terminated and transferred user accounts. OIM server produces daily data files for terminated or transferrred users. This process collects those files, extracts affected user IDs, and fans out across the Linux estate via pssh to remove any traces of those accounts.
 
-Accounts themselves (authentication, group membership in LDAP/OUD and Active Directory) are managed elsewhere. This process handles:
+Account authentication and group membership in LDAP/OUD and Active Directory are managed elsewhere. This process handles:
 
 - Home directory removal: `/home/<userid>` (AD-style) and `/home/<useridOUD>` (OUD-style)
 - Legacy local account removal: `/etc/passwd` entries left over from pre-LDAP era
 - Legacy group membership removal: user IDs embedded in `/etc/group` lines (e.g. sudoers groups)
-
----
-
-## What Changed vs Legacy
-
-### What was kept and why
-
-| Kept | Reason |
-|------|--------|
-| OIM as the authoritative data source | Still the first system to report terminations/transfers |
-| SCP from OIM server to collect files | Same server, same directory, same file format |
-| `terms`/`trans` distinction | Terminations and transfers have different downstream implications |
-| Per-run timestamped archives | Audit trail requirement unchanged |
-| `/etc/group` backup before edit | Safety requirement — `group.preremove.<userid>` preserved |
-| Email notification on completion | Operational requirement unchanged |
-| Lock file to prevent concurrent runs | Unchanged — prevents race conditions |
-
-### What was removed and why
-
-| Legacy script/behaviour | Reason removed |
-|------------------------|----------------|
-| `userdel -r` (delete home with account) | Home cleanup now handled separately by `cleanup_homes.sh`; `-r` flag dropped to prevent double-delete race |
-| `/etc/group` full line removal | Only the user ID is removed; other members preserved |
-| `login-access.conf` cleanup (`groupandaccess.sh`) | No longer written for human IDs; fully managed in LDAP/AD |
-| FTP-based TTIMR event reporting (`sendttimr.ksh`) | FTP delivery was already disabled in legacy scripts; TTIMR schema is retired |
-| `Time.pl` (Perl date helper) | Used only by inactivity scripts; Python `datetime` will replace it when inactivity is rebuilt |
-| Triple-nested loops (server × termuser × localuser) | Replaced by flat user array + pssh parallelism |
-| Wildcard home removal `/home/$user*` | Replaced by exact pattern check for `/home/userid` and `/home/useridOUD` |
-| Hardcoded paths scattered across 15 scripts | All paths and settings centralised in `tti.conf` |
-| Stale lock file on crash | `trap` on ERR and EXIT guarantees lock release |
-| Log truncated each run (no history) | Master log is append-only; working logs archived with timestamp |
-| Sequential SSH to each server | Replaced by `pssh` with 75-host parallelism |
-
-### What is deferred (not in this POC)
-
-| Deferred | Reason |
-|----------|--------|
-| Inactivity workflow (`ldapinwarn`, `ldapinactive`, `ldapindelete`, `linuxinwarn`, `linuxinactive`, `linuxindelete`) | Requires confirming the correct inactivity signal (LDAP `modifytimestamp` vs AD `lastLogonTimestamp`). Will be a separate track. |
 
 ---
 
@@ -73,36 +36,46 @@ Accounts themselves (authentication, group membership in LDAP/OUD and Active Dir
 /export/home/xamrgpti/
 │
 ├── scripts/
-│   ├── tti.conf                  Central configuration — edit here only
-│   ├── main.sh                   Orchestrator — called by cron
-│   ├── getdata.sh                Fetches OIM files, builds ID lists
-│   ├── cleanup_homes.sh          Removes home directories
-│   └── cleanup_passwd_group.sh   Cleans /etc/passwd and /etc/group
+│   ├── tti.conf          Central configuration — edit here only
+│   ├── main.sh           Orchestrator — called by cron
+│   ├── getdata.sh        Fetches OIM files, builds ID lists
+│   └── cleanup.sh        Combined: home dirs + /etc/passwd + /etc/group (one SSH per server)
 │
 ├── data/
-│   ├── terms.ids                 Current run termination IDs (one per line, lowercase)
-│   ├── trans.ids                 Current run transfer IDs (one per line, lowercase)
-│   │
-│   ├── terms/                    Raw OIM termination files archived
-│   │   └── terms.YYYYMMDDHHMM    e.g. terms.202605201130
-│   │
-│   ├── trans/                    Raw OIM transfer files archived
+│   ├── terms.ids         Current run termination IDs (one per line, lowercase)
+│   ├── trans.ids         Current run transfer IDs (one per line, lowercase)
+│   ├── terms/            Raw OIM termination files archived
+│   │   └── terms.YYYYMMDDHHMM
+│   ├── trans/            Raw OIM transfer files archived
 │   │   └── trans.YYYYMMDDHHMM
-│   │
-│   └── ids/                      Timestamped ID snapshots — one file per run
-│       ├── terms.ids.YYMMDDHHMM  e.g. terms.ids.2605201130
+│   └── ids/              Timestamped ID snapshots — one file per run
+│       ├── terms.ids.YYMMDDHHMM
 │       └── trans.ids.YYMMDDHHMM
 │
 └── logs/
-    ├── tti_process.log            Master append-only log — full run history
     │
-    ├── linuxterms.YYMMDDHHMM     Home cleanup log for terminations (per run)
-    ├── linuxtrans.YYMMDDHHMM     Home cleanup log for transfers (per run)
-    ├── linuxfiles.YYMMDDHHMM     passwd/group cleanup log (per run)
-    ├── linux.YYMMDDHHMM          Unreachable hosts log (per run)
+    │   Working logs — overwritten at the start of every run
+    ├── tti_process.log           Full run log (main.sh + all subscripts)
+    ├── tti_cleanup.log           cleanup.sh output only (body of completion email)
+    ├── tti_getdata.log           getdata.sh output only
+    ├── tti_unreachable.log       Hosts that did not respond this run
     │
-    └── dryrun/                   Dry-run logs — never mixed with live logs
-        └── dryrun-N-YYMMDDHHMM   N increments per dry-run on the same timestamp
+    │   Timestamped archives — one per run, never overwritten
+    ├── linuxterms.YYMMDDHHMM    Cleanup log for terminations
+    ├── linuxtrans.YYMMDDHHMM    Cleanup log for transfers
+    └── linux.YYMMDDHHMM         Unreachable hosts for that run
+    │
+    └── dryrun/                   All dry-run logs — never mixed with live
+        │   Working logs — overwritten at start of every dry-run
+        ├── dryrun_tti_process.log
+        ├── dryrun_tti_cleanup.log
+        ├── dryrun_tti_getdata.log
+        ├── dryrun_tti_unreachable.log
+        │
+        │   Timestamped archives — one per dry-run, never overwritten
+        ├── dryrun_linuxterms.YYMMDDHHMM
+        ├── dryrun_linuxtrans.YYMMDDHHMM
+        └── dryrun_linux.YYMMDDHHMM
 ```
 
 ---
@@ -110,157 +83,51 @@ Accounts themselves (authentication, group membership in LDAP/OUD and Active Dir
 ## Script Overview
 
 ### `tti.conf`
-Central configuration sourced by every script. Contains all paths, OIM server details, pssh settings, notification target, and retention periods. **This is the only file you should need to edit** to adapt the process to a new environment.
+Central configuration sourced by every script. All paths, OIM server details, pssh settings, notification target, and retention periods. **This is the only file you should need to edit** to adapt the process to a new environment.
 
 ### `main.sh`
-The orchestrator. Called by cron. Acquires a lock, calls `getdata.sh`, then calls `cleanup_homes.sh` and `cleanup_passwd_group.sh` for both terms and trans modes. Archives the unreachable hosts log. Releases the lock. The `--dry-run` flag is passed through to all cleanup scripts.
+The orchestrator. Called by cron daily. Acquires a lock, truncates working logs (fresh start), calls `getdata.sh`, then calls `cleanup.sh` for both terms and trans modes. Archives the unreachable hosts log. Sends a completion email. Releases the lock.
 
 ### `getdata.sh`
 Fetches two file types per kind (terms/trans) from the specific OIM server:
 - Raw tilde-delimited file → archived to `data/terms/` or `data/trans/`
 - `.id.` pre-extracted ID file → lowercased → written as `data/terms.ids` or `data/trans.ids`
 
-Compares the raw file to the last archive. If identical, exits with code 1 (no new data) and `main.sh` skips the run entirely.
+Compares the raw file to the last archive. If identical, still writes `terms.ids` from the existing `.id.` file so cleanup always runs — it only skips archiving the raw file, not the cleanup job.
 
-### `cleanup_homes.sh`
-For each user ID, fans out across all servers in batches of 75 via `pssh`. Checks for `/home/<userid>` and `/home/<useridOUD>`. Removes any that exist. Only logs when a home directory is actually found — zero log output for users with no homes anywhere across 22k+ hosts. Supports `--dry-run`.
+### `cleanup.sh`
+The core cleanup engine. For each server in the host list (in parallel batches of 75 via pssh), runs a single SSH session that checks and acts on all user IDs for all three cleanup tasks at once:
 
-### `cleanup_passwd_group.sh`
-For each user ID, fans out via `pssh` to:
-1. Check `/etc/passwd` for a legacy local account (exact field-1 match). If found, runs `userdel` (without `-r`).
-2. Check `/etc/group` for the user ID in any group's member list. If found, backs up `/etc/group` then removes just the user ID using `sed`, leaving all other members untouched.
+1. **Home directories** — checks `/home/<userid>` and `/home/<useridOUD>`, removes any that exist
+2. **`/etc/passwd`** — checks for a legacy local account (exact field-1 match), runs `userdel` if found
+3. **`/etc/group`** — checks member lists for the user ID, backs up and patches the file with `sed` if found
 
-Supports `--dry-run`. All check commands are read-only; write commands (`userdel`, `sed`, `cp`) are skipped in dry-run mode.
-
----
-
-## Run Examples
-
-**Normal live run (called by cron):**
-```bash
-/export/home/xamrgpti/scripts/main.sh
-```
-
-**Manual live run:**
-```bash
-cd /export/home/xamrgpti/scripts
-./main.sh
-```
-
-**Dry-run — see what would be cleaned without touching anything:**
-```bash
-./main.sh --dry-run
-```
-
-**Run a single cleanup script manually (terms, live):**
-```bash
-./cleanup_homes.sh --mode terms
-./cleanup_passwd_group.sh --mode terms
-```
-
-**Run a single cleanup script in dry-run:**
-```bash
-./cleanup_homes.sh --mode terms --dry-run
-./cleanup_passwd_group.sh --mode trans --dry-run
-```
-
-**Check the master log:**
-```bash
-tail -100 /export/home/xamrgpti/logs/tti_process.log
-```
-
-**Find all FAILURE lines in today's logs:**
-```bash
-grep FAILURE /export/home/xamrgpti/logs/tti_process.log
-```
-
-**Find all FOUND lines for a specific user:**
-```bash
-grep 'pn15145' /export/home/xamrgpti/logs/tti_process.log
-```
-
-**See what a dry-run found:**
-```bash
-ls /export/home/xamrgpti/logs/dryrun/
-cat /export/home/xamrgpti/logs/dryrun/dryrun-1-2605201130
-```
-
----
-
-## Dry-Run Mode
-
-Pass `--dry-run` to `main.sh` or directly to either cleanup script.
-
-**What dry-run does:**
-- Calls `getdata.sh` normally — OIM files are fetched and ID lists are built. This is read-only on the OIM server (SCP pull only).
-- Calls `pssh` in **check-only** mode to discover which servers have home directories or legacy `/etc/passwd`/`/etc/group` entries — these remote commands are all read-only (`test -e`, `grep`).
-- Logs every `FOUND` entry exactly as a live run would.
-- Logs `DRY_RUN` lines describing what would have been removed.
-- Does **not** call `pssh` for any write operation (`rm -rf`, `userdel`, `sed`, `cp`).
-
-**What dry-run does NOT do:**
-- Does not remove any home directories.
-- Does not run `userdel` on any server.
-- Does not modify or back up `/etc/group` on any server.
-- Does not write to `tti_process.log` — the master log is never touched during a dry-run.
-- Does not write to `linuxterms.*`, `linuxtrans.*`, or `linuxfiles.*` log files.
-
-**Where dry-run logs go:**
-
-All dry-run output — including `main.sh`'s own orchestration lines — is isolated in `logs/dryrun/`. The master `tti_process.log` is completely untouched so the last live run record is always preserved.
-
-```
-logs/dryrun/dryrun-N-YYMMDDHHMM
-```
-
-`N` auto-increments for each dry-run on the same minute stamp, so running multiple dry-runs back to back is safe:
-
-```
-dryrun-1-2605201130   first dry-run of the 11:30 run
-dryrun-2-2605201130   second dry-run same minute
-dryrun-3-2605201130   third
-```
-
-The master `tti_process.log` **is** written during dry-runs (clearly tagged `[DRY-RUN]`). This gives you a complete history of both live and dry-run activity in one place.
-
-The naming convention for dry-run archived logs is:
-
-```
-logs/dryrun/dryrun-N-YYMMDDHHMM          cleanup script logs
-logs/dryrun/dryrun-main-N-YYMMDDHHMM     main.sh orchestration log
-```
-
-`N` auto-increments for each dry-run on the same minute stamp, so running multiple dry-runs back to back is safe:
-
-```
-dryrun-1-2605201130        first cleanup dry-run of the 11:30 run
-dryrun-2-2605201130        second cleanup dry-run same minute
-dryrun-main-1-2605201130   main.sh log for the first dry-run
-```
-
-Dry-run logs are retained for 90 days (configurable via `DRYRUN_RETAIN_DAYS` in `tti.conf`).
+One pssh invocation per batch = one SSH connection per server per batch, regardless of how many users are in the list.
 
 ---
 
 ## Log Files
 
-### `logs/tti_process.log` — Master log
-Append-only. Every run (live or dry-run) adds to this file. Never truncated. Use this for audit trails, investigating past incidents, or grepping for a specific user across all runs.
+### Working logs — overwritten every run
 
-### `logs/linuxterms.YYMMDDHHMM` — Termination home cleanup
-Written per live run. Contains only FOUND/SUCCESS/FAILURE entries for home directories. Silent for users with no homes found — at 22k hosts a user on only one server produces two log lines (FOUND + SUCCESS) for that path.
+| File | Contents |
+|------|----------|
+| `logs/tti_process.log` | Full run — all scripts, all steps. Most useful for debugging and run history. |
+| `logs/tti_cleanup.log` | cleanup.sh output only — all SUCCESS/FAILURE/DRY_RUN lines plus the SUMMARY block. This is the body of the completion email. |
+| `logs/tti_getdata.log` | getdata.sh output only — OIM fetch, archive, and ID normalization. |
+| `logs/tti_unreachable.log` | One line per host that did not respond during this run. |
 
-### `logs/linuxtrans.YYMMDDHHMM` — Transfer home cleanup
-Same format as linuxterms, but for transferred users.
+### Timestamped archives — one per run, never overwritten
 
-### `logs/linuxfiles.YYMMDDHHMM` — passwd/group cleanup
-Written per live run. Contains FOUND/SUCCESS/FAILURE for `/etc/passwd` account removal and `/etc/group` membership removal. Includes the group names affected and the backup file path.
+| File | Contents |
+|------|----------|
+| `logs/linuxterms.YYMMDDHHMM` | Copy of tti_cleanup.log from the terms run |
+| `logs/linuxtrans.YYMMDDHHMM` | Copy of tti_cleanup.log from the trans run |
+| `logs/linux.YYMMDDHHMM` | Copy of tti_unreachable.log for that run |
 
-### `logs/linux.YYMMDDHHMM` — Unreachable hosts
-Written per live run. One line per host that did not respond during any pssh check. Useful for identifying servers that need attention independently of the cleanup process.
+### Dry-run logs in `logs/dryrun/`
 
-### `logs/dryrun/dryrun-N-YYMMDDHHMM` — Dry-run archive
-Written per dry-run. Contains FOUND and DRY_RUN entries. Never contains SUCCESS or FAILURE (since no changes are made).
+Same files with `dryrun_` prefix. Working logs are overwritten each dry-run. Timestamped archives use `dryrun_linuxterms.STAMP` and `dryrun_linuxtrans.STAMP`. Live logs are never touched.
 
 ### Log level reference
 
@@ -268,47 +135,177 @@ Written per dry-run. Contains FOUND and DRY_RUN entries. Never contains SUCCESS 
 |-------|---------|
 | `INFO` | Normal progress and structural milestones |
 | `SUCCESS` | A write operation completed successfully |
-| `FOUND` | A home dir, passwd entry, or group membership was detected |
-| `CLEANUP` | _(reserved — not currently used in output)_ |
 | `DRY_RUN` | What would have been done in live mode |
-| `WARN` | Unexpected but non-fatal (e.g. unreachable host, empty ID file) |
-| `ERROR` | Something failed; run continues |
+| `WARN` | Unexpected but non-fatal (unreachable host, empty ID file) |
 | `FAILURE` | A specific removal attempt failed on a specific server |
-| `FATAL` | Unrecoverable error; script exits immediately |
+| `ERROR` | Something failed; run may continue |
+| `FATAL` | Unrecoverable — script exits immediately |
 | `SUMMARY` | End-of-run statistics block |
 
 ---
 
-## Script Comparison: Legacy vs Modern
+## Email Notification
 
-### File count
+Email is sent at **run completion** (after all cleanup steps finish). The body is `logs/tti_cleanup.log` — the full cleanup output including all SUCCESS/FAILURE lines and the SUMMARY block.
+
+**How it works:** `/usr/bin/mail -s "subject" ttinotify` uses the system's local MTA (sendmail or postfix). `ttinotify` is a local mail alias defined in `/etc/aliases` on the TTI server. It maps to one or more real email addresses. Mail is sent as the Unix user running the script (typically root).
+
+**To change recipients:** edit `/etc/aliases`, add or modify the `ttinotify` entry, then run `newaliases` to apply.
+
+```
+# /etc/aliases example
+ttinotify: user1@company.com, user2@company.com, team-dl@company.com
+```
+
+**To disable email for a single run:** pass `--no-email` flag. Email is enabled by default.
+
+---
+
+## Run Examples
+
+**Normal cron run:**
+```bash
+/export/home/xamrgpti/scripts/main.sh
+```
+
+**Dry-run — see what would be cleaned without touching anything:**
+```bash
+./main.sh --dry-run
+```
+
+**Dry-run, suppress email:**
+```bash
+./main.sh --dry-run --no-email
+```
+
+**Check today's results:**
+```bash
+cat /export/home/xamrgpti/logs/tti_process.log
+```
+
+**Find all failures:**
+```bash
+grep FAILURE /export/home/xamrgpti/logs/tti_cleanup.log
+```
+
+**Find everything touched for a specific user:**
+```bash
+grep 'sa12345' /export/home/xamrgpti/logs/tti_cleanup.log
+```
+
+**See which hosts were unreachable:**
+```bash
+cat /export/home/xamrgpti/logs/tti_unreachable.log
+```
+
+**Compare today's cleanup to yesterday's:**
+```bash
+diff logs/linuxterms.2605201120 logs/linuxterms.2605191120
+```
+
+---
+
+## Dry-Run Mode
+
+Pass `--dry-run` to `main.sh` or directly to `cleanup.sh`.
+
+**What dry-run does:**
+- Fetches OIM files and builds ID lists (read-only SCP from OIM server)
+- Runs pssh to check every server — `test -e`, `grep` — all read-only
+- Logs `DRY_RUN` lines describing what would have been removed/deleted
+- Does **not** call `rm -rf`, `userdel`, or `sed` on any server
+
+**What dry-run does NOT touch:**
+- `logs/tti_process.log` — never written
+- `logs/tti_cleanup.log` — never written
+- `logs/tti_unreachable.log` — never written
+- `logs/linuxterms.*` or `logs/linuxtrans.*` — never written
+- Any file on any remote server
+
+**All dry-run output goes to `logs/dryrun/`:**
+
+```
+logs/dryrun/dryrun_tti_process.log       — overwritten each dry-run
+logs/dryrun/dryrun_tti_cleanup.log       — overwritten each dry-run
+logs/dryrun/dryrun_tti_getdata.log       — overwritten each dry-run
+logs/dryrun/dryrun_tti_unreachable.log   — overwritten each dry-run
+logs/dryrun/dryrun_linuxterms.STAMP      — timestamped archive
+logs/dryrun/dryrun_linuxtrans.STAMP      — timestamped archive
+logs/dryrun/dryrun_linux.STAMP           — timestamped unreachable archive
+```
+
+---
+
+## Targeted Testing
+
+Use `--ids-file` and `--hosts-file` to test against a known set of users and servers before running against the full estate.
+
+**Create test files:**
+```bash
+# Users you know have homes to clean up
+cat > /tmp/test.ids << 'EOF'
+sa12345
+pl12345
+EOF
+
+# Servers you know those homes exist on
+cat > /tmp/test.hosts << 'EOF'
+lmrg10ia
+lmrg10yw
+lmrg12da
+EOF
+```
+
+**Dry-run against just those:**
+```bash
+./cleanup.sh --mode terms --dry-run \
+    --ids-file /tmp/test.ids \
+    --hosts-file /tmp/test.hosts
+```
+
+**Live run once dry-run confirms:**
+```bash
+./cleanup.sh --mode terms \
+    --ids-file /tmp/test.ids \
+    --hosts-file /tmp/test.hosts
+```
+
+**Notes:**
+- IDs in the file can be uppercase or lowercase — they are normalized to lowercase automatically
+- `--ids-file` and `--hosts-file` can be used independently (override one or both)
+- Dry-run still applies — `--ids-file` without `--dry-run` will make live changes
+- The log shows `[CUSTOM]` next to overridden paths so targeted runs are clearly identifiable
+
+---
+
+## What Changed vs Legacy
+
+### Script count
 
 | | Legacy | Modern |
 |-|--------|--------|
-| Total scripts | 15 | 4 scripts + 1 config |
+| Total scripts | 15 | 3 scripts + 1 config |
+| SSH sessions per cleanup run | 22,000 × users × 2 patterns | 22,000 (one per server, all users + all tasks) |
 | Config file | None (hardcoded per script) | `tti.conf` — single source of truth |
 
-### Side-by-side comparison
+### What was removed and why
 
-| Behaviour | Legacy | Modern |
-|-----------|--------|--------|
-| **OIM data source** | SCP raw tilde file only; re-parses field 2 | SCP both raw file and `.id.` file; uses OIM's pre-extracted ID list |
-| **OIM path config** | Two variables: `OIM_TERMS_PATH`, `OIM_TRANS_PATH` | One variable: `OIM_EAR_DIR` (same directory for both) |
-| **Server fan-out** | Sequential SSH, one host at a time | `pssh` with 75 hosts in parallel |
-| **Home dir removal** | `userdel -r` (account + home in one call) | `cleanup_homes.sh` (home only) then `cleanup_passwd_group.sh` (account only via `userdel` without `-r`) |
-| **Home dir pattern** | Wildcard `/home/$user*` — could match unintended dirs | Exact patterns: `/home/userid` and `/home/useridOUD` only |
-| **`/etc/passwd` cleanup** | `userdel` called as part of home loop | Separate pssh sweep; `userdel` without `-r` |
-| **`/etc/group` cleanup** | Full line replaced via `grep -v` (risky if group name contains username) | Surgical `sed` removes only the ID from member list; group line preserved |
-| **`/etc/group` backup** | `group.preremove.<user>` created inline | Same backup naming, created atomically via `cp` before `sed` |
-| **`login-access.conf`** | Cleaned by `groupandaccess.sh` | Removed — no longer written for human IDs |
-| **Inactivity workflow** | 6 scripts (ldapinwarn, ldapinactive, ldapindelete, linuxinwarn, linuxinactive, linuxindelete) | Not in this POC — separate track pending signal confirmation |
-| **TTIMR FTP reporting** | `sendttimr.ksh` (already disabled) | Removed entirely |
-| **Perl date helper** | `Time.pl` | Removed — bash `date` and future Python `datetime` |
-| **Lock file on crash** | Left behind — manual cleanup required | `trap ERR EXIT` guarantees release on all exit paths |
-| **Log format** | Free-form text, inconsistent across scripts | Structured `[timestamp] [LEVEL] [script] message` — grep-friendly |
-| **Log history** | Truncated each run; no history | `tti_process.log` is append-only; per-run logs archived with timestamp |
-| **Dry-run mode** | None | `--dry-run` flag — check-only pssh, no writes, isolated log directory |
-| **Dry-run logs** | N/A | `logs/dryrun/` — fully isolated; `tti_process.log` never touched during dry-run |
-| **Unreachable hosts** | Logged inline with cleanup output | Isolated in `linux.YYMMDDHHMM` — separate concern |
-| **No-change detection** | Runs full cleanup every day regardless | `getdata.sh` diffs against last archive; skips run if OIM data unchanged |
-| **Config management** | Paths hardcoded in each script | All settings in `tti.conf`; scripts source it on startup |
+| Legacy | Reason removed |
+|--------|---------------|
+| `userdel -r` (deletes home with account) | Home cleanup handled separately in same SSH call |
+| `/etc/group` full-line removal via `grep -v` | Replaced with surgical `sed` — other members preserved |
+| `login-access.conf` cleanup | No longer written for human IDs; fully in LDAP/AD |
+| `sendttimr.ksh` FTP event reporting | FTP already disabled in legacy; TTIMR schema retired |
+| `Time.pl` Perl date helper | Not needed; bash `date` used throughout |
+| Triple-nested loops per server | Replaced with pssh: one connection per server for all users |
+| Wildcard `/home/$user*` removal | Exact patterns only: `/home/userid` and `/home/useridOUD` |
+| Hardcoded paths in every script | All in `tti.conf` |
+| Stale lock file on crash | `trap ERR EXIT` guarantees release |
+| Append-only logs (history mixed with current run) | Working logs truncated each run; history in timestamped archives |
+| No dry-run mode | Full `--dry-run` with isolated `logs/dryrun/` directory |
+
+### What is deferred (not in this release)
+
+| Deferred | Reason |
+|----------|--------|
+| Inactivity workflow (ldapinwarn, ldapinactive, etc.) | Requires confirming inactivity signal — separate track |

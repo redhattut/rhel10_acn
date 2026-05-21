@@ -5,16 +5,45 @@
 # Replaces: main.ksh
 #
 # Flow per run:
-#   1. Acquire lock
-#   2. getdata.sh     — fetch OIM files, build terms.ids / trans.ids
-#   3. cleanup.sh --mode terms — home dirs + /etc/passwd + /etc/group (one SSH)
-#   4. cleanup.sh --mode trans — same for transferred users
-#   5. Archive unreachable hosts log
-#   6. Release lock
+#   1. Truncate all working logs (fresh start every run)
+#   2. Acquire lock
+#   3. getdata.sh     — fetch OIM files, build terms.ids / trans.ids
+#   4. cleanup.sh --mode terms — home dirs + /etc/passwd + /etc/group (one SSH)
+#   5. cleanup.sh --mode trans — same for transferred users
+#   6. Archive unreachable hosts log with timestamp
+#   7. Send completion email (tti_cleanup.log body)
+#   8. Release lock
+#
+# Log file behaviour:
+#   logs/tti_process.log      — overwritten at start of every run
+#   logs/tti_cleanup.log      — overwritten at start of every run
+#   logs/tti_getdata.log      — overwritten at start of every run
+#   logs/tti_unreachable.log  — overwritten at start of every run
+#   logs/linuxterms.STAMP     — timestamped archive, never overwritten
+#   logs/linuxtrans.STAMP     — timestamped archive, never overwritten
+#   logs/linux.STAMP          — timestamped unreachable archive
+#
+# Dry-run equivalents in logs/dryrun/:
+#   dryrun_tti_process.log      — overwritten each dry-run
+#   dryrun_tti_cleanup.log      — overwritten each dry-run
+#   dryrun_tti_getdata.log      — overwritten each dry-run
+#   dryrun_tti_unreachable.log  — overwritten each dry-run
+#   dryrun_linuxterms.STAMP     — timestamped archive
+#   dryrun_linuxtrans.STAMP     — timestamped archive
+#
+# Email notification:
+#   Sent at completion via /usr/bin/mail to the NOTIFY alias (ttinotify).
+#   ttinotify is a local mail alias in /etc/aliases — run 'newaliases' after
+#   editing. Mail is sent as the user running the script (typically root).
+#   Use --no-email to suppress notification (useful for manual/test runs).
 #
 # Options:
-#   --dry-run    No changes on servers; logs go to logs/dryrun/
-#   --debug      Verbose pssh diagnostics on first batch
+#   --dry-run      No changes on servers; logs go to logs/dryrun/
+#   --no-email     Skip completion email
+#   --debug        Verbose pssh diagnostics per batch
+#   --debug-pssh   Single plain-ssh test against first server, then exit
+#   --ids-file     Override ID file passed through to cleanup.sh
+#   --hosts-file   Override server list passed through to cleanup.sh
 #
 # Cron (daily 11:20):
 #   20 11 * * * /export/home/xamrgpti/scripts/main.sh >> /dev/null 2>&1
@@ -42,11 +71,13 @@ DRY_RUN_FLAG=""
 DEBUG_FLAG=""
 IDS_FILE_FLAG=""
 HOSTS_FILE_FLAG=""
+NO_EMAIL_FLAG=""
+SEND_EMAIL=true
 
-# Parse arguments — positional flags and value flags
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run)    DRY_RUN=true; DRY_RUN_FLAG="--dry-run"; shift ;;
+        --no-email)   SEND_EMAIL=false; NO_EMAIL_FLAG="--no-email"; shift ;;
         --debug)      DEBUG_FLAG="--debug"; shift ;;
         --debug-pssh) DEBUG_FLAG="--debug-pssh"; shift ;;
         --ids-file)   IDS_FILE_FLAG="--ids-file $2"; shift 2 ;;
@@ -58,9 +89,9 @@ done
 RUN_STAMP=$(date +%y%m%d%H%M)
 
 # --- Log path setup ----------------------------------------------------------
-# For dry-run: redirect ALL log files to logs/dryrun/ so live logs are never
-# touched. We set shell variables here; cleanup.sh preserves them by saving
-# and restoring around its own source of tti.conf.
+# All working logs are truncated (overwritten) at the start of each run.
+# Dry-run: all logs redirect to logs/dryrun/ with dryrun_ prefix.
+# Live:    logs stay in logs/.
 mkdir -p "${LOGS_DIR}" "${DRYRUN_LOGS_DIR}" "${DATA_DIR}" "${IDS_DIR}" \
          "${TERMS_ARCHIVE_DIR}" "${TRANS_ARCHIVE_DIR}"
 
@@ -71,7 +102,13 @@ if ${DRY_RUN}; then
     LOG_HOSTS="${DRYRUN_LOGS_DIR}/dryrun_tti_unreachable.log"
 fi
 
-# Export so child scripts inherit the overrides even after sourcing tti.conf
+# Truncate all working logs — fresh start for this run
+: > "${MAIN_LOG}"
+: > "${LOG_GETDATA}"
+: > "${LOG_CLEANUP}"
+: > "${LOG_HOSTS}"
+
+# Export so child scripts inherit the correct paths after sourcing tti.conf
 export MAIN_LOG LOG_GETDATA LOG_CLEANUP LOG_HOSTS
 
 # --- Logging -----------------------------------------------------------------
@@ -107,15 +144,28 @@ release_lock() {
 
 trap 'release_lock; log_error "main.sh exited unexpectedly."' ERR EXIT
 
+# --- Email -------------------------------------------------------------------
+# ttinotify is a local mail alias defined in /etc/aliases.
+# It maps to one or more real email addresses. Run 'newaliases' after editing.
+# Mail is sent as the Unix user running this script (typically root).
+# The body is tti_cleanup.log (or its dryrun equivalent), sent at completion.
+send_completion_email() {
+    if ! ${SEND_EMAIL}; then
+        log_info "Email notification skipped (--no-email)."
+        return
+    fi
+    local subject="TTI EAR cleanup complete$( ${DRY_RUN} && echo ' [DRY-RUN]' || true ) — $(hostname) $(date '+%Y-%m-%d %H:%M')"
+    /usr/bin/mail -s "${subject}" "${NOTIFY}" < "${LOG_CLEANUP}" || true
+    log_info "Completion email sent to ${NOTIFY}."
+}
+
 # =============================================================================
 # Main
 # =============================================================================
 
-# Fresh unreachable-hosts log for this run
-: > "${LOG_HOSTS}"
-
 log_info "================================================================"
 log_info "main.sh start — $(hostname)$( ${DRY_RUN} && echo ' [DRY-RUN]' || true )"
+log_info "Send email  : $( ${SEND_EMAIL} && echo "yes (${NOTIFY})" || echo "no (--no-email)" )"
 log_info "================================================================"
 
 acquire_lock
@@ -130,6 +180,7 @@ getdata_rc=0
 case "${getdata_rc}" in
     0) log_success "New terms data available — proceeding." ;;
     1) log_info "Terms unchanged — nothing to do."
+       send_completion_email
        trap - ERR EXIT; release_lock; exit 0 ;;
     *) log_fatal "getdata.sh returned exit code ${getdata_rc}." ;;
 esac
@@ -140,7 +191,7 @@ esac
 log_info "--- Step 2: cleanup.sh terms ---"
 if [[ -s "${DATA_DIR}/terms.ids" ]]; then
     # shellcheck disable=SC2086
-    "${SCRIPT_DIR}/cleanup.sh" --mode terms ${DRY_RUN_FLAG} ${DEBUG_FLAG} ${IDS_FILE_FLAG} ${HOSTS_FILE_FLAG}
+    "${SCRIPT_DIR}/cleanup.sh" --mode terms ${DRY_RUN_FLAG} ${NO_EMAIL_FLAG} ${DEBUG_FLAG} ${IDS_FILE_FLAG} ${HOSTS_FILE_FLAG}
     log_success "Cleanup (terms) complete."
 else
     log_warn "terms.ids empty — skipping cleanup for terms."
@@ -149,7 +200,7 @@ fi
 log_info "--- Step 3: cleanup.sh trans ---"
 if [[ -s "${DATA_DIR}/trans.ids" ]]; then
     # shellcheck disable=SC2086
-    "${SCRIPT_DIR}/cleanup.sh" --mode trans ${DRY_RUN_FLAG} ${DEBUG_FLAG} ${IDS_FILE_FLAG} ${HOSTS_FILE_FLAG}
+    "${SCRIPT_DIR}/cleanup.sh" --mode trans ${DRY_RUN_FLAG} ${NO_EMAIL_FLAG} ${DEBUG_FLAG} ${IDS_FILE_FLAG} ${HOSTS_FILE_FLAG}
     log_success "Cleanup (trans) complete."
 else
     log_info "trans.ids empty — no cleanup needed for trans."
@@ -161,7 +212,8 @@ fi
 log_info "--- Step 4: Archive unreachable hosts log ---"
 if [[ -s "${LOG_HOSTS}" ]]; then
     if ${DRY_RUN}; then
-        log_info "Dry-run unreachable hosts logged -> ${LOG_HOSTS##*/}"
+        cp "${LOG_HOSTS}" "${DRYRUN_LOGS_DIR}/dryrun_linux.${RUN_STAMP}"
+        log_info "Dry-run unreachable hosts archived -> dryrun_linux.${RUN_STAMP}"
     else
         cp "${LOG_HOSTS}" "${LOGS_DIR}/linux.${RUN_STAMP}"
         log_info "Unreachable hosts archived -> linux.${RUN_STAMP}"
@@ -179,4 +231,7 @@ log_info "================================================================"
 
 trap - ERR EXIT
 release_lock
+
+send_completion_email
+
 exit 0

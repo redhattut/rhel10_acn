@@ -60,6 +60,7 @@ DEBUG_MODE=false
 DEBUG_PSSH=false
 CUSTOM_IDS_FILE=""
 CUSTOM_HOSTS_FILE=""
+SEND_EMAIL=true
 
 usage() {
     cat >&2 << 'USAGE'
@@ -78,6 +79,9 @@ Run options:
 Debug options:
   --debug                   Verbose pssh diagnostics per batch
   --debug-pssh              Single plain-ssh test against first server, then exit
+
+Email options:
+  --no-email                Skip completion email (default: email is sent)
 USAGE
     exit 1
 }
@@ -86,6 +90,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --mode)        MODE="$2"; shift 2 ;;
         --dry-run)     DRY_RUN=true; shift ;;
+        --no-email)    SEND_EMAIL=false; shift ;;
         --ids-file)    CUSTOM_IDS_FILE="$2"; shift 2 ;;
         --hosts-file)  CUSTOM_HOSTS_FILE="$2"; shift 2 ;;
         --debug)       DEBUG_MODE=true; shift ;;
@@ -122,9 +127,11 @@ RUN_STAMP=$(date +%y%m%d%H%M)
 # whether custom files were used, so live logs are never contaminated.
 if ${DRY_RUN}; then
     mkdir -p "${DRYRUN_LOGS_DIR}"
-    existing=$(ls "${DRYRUN_LOGS_DIR}/dryrun-${MODE}-"*"-${RUN_STAMP}" 2>/dev/null | wc -l || true)
-    DRYRUN_NUM=$(( existing + 1 ))
-    ARCHIVE_LOG="${DRYRUN_LOGS_DIR}/dryrun-${MODE}-${DRYRUN_NUM}-${RUN_STAMP}"
+    if [[ "${MODE}" == "terms" ]]; then
+        ARCHIVE_LOG="${DRYRUN_LOGS_DIR}/dryrun_linuxterms.${RUN_STAMP}"
+    else
+        ARCHIVE_LOG="${DRYRUN_LOGS_DIR}/dryrun_linuxtrans.${RUN_STAMP}"
+    fi
 elif [[ "${MODE}" == "terms" ]]; then
     ARCHIVE_LOG="${LOGS_DIR}/linuxterms.${RUN_STAMP}"
 else
@@ -508,16 +515,5 @@ log_info "================================================================"
 
 cp "${LOG_CLEANUP}" "${ARCHIVE_LOG}"
 log_info "Log archived -> ${ARCHIVE_LOG##*/}"
-
-total_issues=$(( CNT_HOME_REMOVED + CNT_HOME_FAILED + CNT_HOME_DRYRUN +
-                 CNT_PASSWD_REMOVED + CNT_PASSWD_FAILED + CNT_PASSWD_DRYRUN +
-                 CNT_GROUP_REMOVED + CNT_GROUP_FAILED + CNT_GROUP_DRYRUN ))
-if [[ ${total_issues} -gt 0 ]]; then
-    local_subject="TTI cleanup (${MODE})"
-    ${DRY_RUN} \
-        && local_subject+=" [DRY-RUN] — homes=${CNT_HOME_DRYRUN} passwd=${CNT_PASSWD_DRYRUN} group=${CNT_GROUP_DRYRUN}" \
-        || local_subject+=" — homes_removed=${CNT_HOME_REMOVED} passwd_removed=${CNT_PASSWD_REMOVED} group_removed=${CNT_GROUP_REMOVED} failed=$(( CNT_HOME_FAILED + CNT_PASSWD_FAILED + CNT_GROUP_FAILED ))"
-    /usr/bin/mail -s "${local_subject}" "${NOTIFY}" < "${LOG_CLEANUP}" || true
-fi
 
 exit 0
