@@ -19,7 +19,7 @@ Modern rewrite of the TTI EAR automation suite. Replaces the legacy KSH scripts 
 
 ## Background
 
-The EAR process is driven by Oracle Identity Manager (OIM), which is the authoritative source for terminated and transferred user accounts. OIM produces daily data files on `loim375a` under `/app/OIM/AppSupport/EAR/`. This process collects those files, extracts affected user IDs, and fans out across the Linux estate to remove any traces of those accounts.
+The EAR process is driven by Oracle Identity Manager (OIM), which is the authoritative source for terminated and transferred user accounts. OIM server produces daily data files for terminated or transferrred users. This process collects those files, extracts affected user IDs, and fans out across the Linux estate to remove any traces of those accounts.
 
 Accounts themselves (authentication, group membership in LDAP/OUD and Active Directory) are managed elsewhere. This process handles:
 
@@ -116,7 +116,7 @@ Central configuration sourced by every script. Contains all paths, OIM server de
 The orchestrator. Called by cron. Acquires a lock, calls `getdata.sh`, then calls `cleanup_homes.sh` and `cleanup_passwd_group.sh` for both terms and trans modes. Archives the unreachable hosts log. Releases the lock. The `--dry-run` flag is passed through to all cleanup scripts.
 
 ### `getdata.sh`
-Fetches two file types per kind (terms/trans) from `loim375a:/app/OIM/AppSupport/EAR/`:
+Fetches two file types per kind (terms/trans) from the specific OIM server:
 - Raw tilde-delimited file → archived to `data/terms/` or `data/trans/`
 - `.id.` pre-extracted ID file → lowercased → written as `data/terms.ids` or `data/trans.ids`
 
@@ -202,11 +202,12 @@ Pass `--dry-run` to `main.sh` or directly to either cleanup script.
 - Does not remove any home directories.
 - Does not run `userdel` on any server.
 - Does not modify or back up `/etc/group` on any server.
+- Does not write to `tti_process.log` — the master log is never touched during a dry-run.
 - Does not write to `linuxterms.*`, `linuxtrans.*`, or `linuxfiles.*` log files.
 
 **Where dry-run logs go:**
 
-Dry-run logs are isolated in `logs/dryrun/` so they can never be confused with live run archives. The naming convention is:
+All dry-run output — including `main.sh`'s own orchestration lines — is isolated in `logs/dryrun/`. The master `tti_process.log` is completely untouched so the last live run record is always preserved.
 
 ```
 logs/dryrun/dryrun-N-YYMMDDHHMM
@@ -221,6 +222,21 @@ dryrun-3-2605201130   third
 ```
 
 The master `tti_process.log` **is** written during dry-runs (clearly tagged `[DRY-RUN]`). This gives you a complete history of both live and dry-run activity in one place.
+
+The naming convention for dry-run archived logs is:
+
+```
+logs/dryrun/dryrun-N-YYMMDDHHMM          cleanup script logs
+logs/dryrun/dryrun-main-N-YYMMDDHHMM     main.sh orchestration log
+```
+
+`N` auto-increments for each dry-run on the same minute stamp, so running multiple dry-runs back to back is safe:
+
+```
+dryrun-1-2605201130        first cleanup dry-run of the 11:30 run
+dryrun-2-2605201130        second cleanup dry-run same minute
+dryrun-main-1-2605201130   main.sh log for the first dry-run
+```
 
 Dry-run logs are retained for 90 days (configurable via `DRYRUN_RETAIN_DAYS` in `tti.conf`).
 
@@ -292,7 +308,7 @@ Written per dry-run. Contains FOUND and DRY_RUN entries. Never contains SUCCESS 
 | **Log format** | Free-form text, inconsistent across scripts | Structured `[timestamp] [LEVEL] [script] message` — grep-friendly |
 | **Log history** | Truncated each run; no history | `tti_process.log` is append-only; per-run logs archived with timestamp |
 | **Dry-run mode** | None | `--dry-run` flag — check-only pssh, no writes, isolated log directory |
-| **Dry-run logs** | N/A | `logs/dryrun/dryrun-N-YYMMDDHHMM` — separate from live logs |
+| **Dry-run logs** | N/A | `logs/dryrun/` — fully isolated; `tti_process.log` never touched during dry-run |
 | **Unreachable hosts** | Logged inline with cleanup output | Isolated in `linux.YYMMDDHHMM` — separate concern |
 | **No-change detection** | Runs full cleanup every day regardless | `getdata.sh` diffs against last archive; skips run if OIM data unchanged |
 | **Config management** | Paths hardcoded in each script | All settings in `tti.conf`; scripts source it on startup |

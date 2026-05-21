@@ -86,10 +86,11 @@ declare -i CNT_GROUP_FOUND=0  CNT_GROUP_REMOVED=0  CNT_GROUP_FAILED=0
 # --- Logging -----------------------------------------------------------------
 
 _log() {
-    local level="$1" msg="$2" ts
+    local level="$1" msg="$2" ts line
     ts=$(date +"%Y-%m-%d %H:%M:%S")
-    printf "[%s] [%-9s] [%s] %s\n" "${ts}" "${level}" "${SCRIPT_NAME}" "${msg}" \
-        | tee -a "${LOG_PASSWD}" >> "${MAIN_LOG}"
+    line=$(printf "[%s] [%-9s] [%s] %s\n" "${ts}" "${level}" "${SCRIPT_NAME}" "${msg}")
+    echo "${line}" >> "${LOG_PASSWD}"             # always write to working log
+    ${DRY_RUN} || echo "${line}" >> "${MAIN_LOG}" # live only — never touch master log during dry-run
 }
 log_info()    { _log "INFO"    "$1"; }
 log_found()   { _log "FOUND"   "$1"; }
@@ -106,11 +107,12 @@ log_fatal()   {
     exit 2
 }
 log_unreachable() {
-    local host="$1" ts
+    local host="$1" ts line
     ts=$(date +"%Y-%m-%d %H:%M:%S")
-    printf "[%s] [%-9s] [%s] Host not responding: %s\n" \
-        "${ts}" "WARN" "${SCRIPT_NAME}" "${host}" \
-        | tee -a "${LOG_HOSTS}" >> "${MAIN_LOG}"
+    line=$(printf "[%s] [%-9s] [%s] Host not responding: %s\n" \
+        "${ts}" "WARN" "${SCRIPT_NAME}" "${host}")
+    echo "${line}" >> "${LOG_HOSTS}"
+    ${DRY_RUN} || echo "${line}" >> "${MAIN_LOG}"
     (( CNT_UNREACHABLE++ )) || true
 }
 

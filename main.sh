@@ -38,19 +38,38 @@ CONFIG="${SCRIPT_DIR}/tti.conf"
 source "${CONFIG}"
 
 # --- Arguments ---------------------------------------------------------------
+DRY_RUN=false
 DRY_RUN_FLAG=""
 for arg in "$@"; do
-    [[ "${arg}" == "--dry-run" ]] && DRY_RUN_FLAG="--dry-run"
+    if [[ "${arg}" == "--dry-run" ]]; then
+        DRY_RUN=true
+        DRY_RUN_FLAG="--dry-run"
+    fi
 done
 
 RUN_STAMP=$(date +%y%m%d%H%M)
 
+# Dry-run runs must not touch tti_process.log — all output goes to dryrun/ only.
+# Compute a dryrun-specific log path now so main.sh's own log lines also land there.
+if ${DRY_RUN}; then
+    mkdir -p "${DRYRUN_LOGS_DIR}"
+    existing=$(ls "${DRYRUN_LOGS_DIR}/dryrun-main-"*"-${RUN_STAMP}" 2>/dev/null | wc -l || true)
+    DRYRUN_NUM=$(( existing + 1 ))
+    DRYRUN_MAIN_LOG="${DRYRUN_LOGS_DIR}/dryrun-main-${DRYRUN_NUM}-${RUN_STAMP}"
+fi
+
 # --- Logging -----------------------------------------------------------------
 _log() {
-    local level="$1" msg="$2" ts
+    local level="$1" msg="$2" ts line
     ts=$(date +"%Y-%m-%d %H:%M:%S")
-    printf "[%s] [%-9s] [%s] %s\n" "${ts}" "${level}" "${SCRIPT_NAME}" "${msg}" \
-        | tee -a "${MAIN_LOG}"
+    line=$(printf "[%s] [%-9s] [%s] %s\n" "${ts}" "${level}" "${SCRIPT_NAME}" "${msg}")
+    if ${DRY_RUN}; then
+        # Dry-run: write only to dryrun log, never touch tti_process.log
+        echo "${line}" >> "${DRYRUN_MAIN_LOG}"
+    else
+        # Live: write to tti_process.log and also print to stdout for cron capture
+        echo "${line}" | tee -a "${MAIN_LOG}"
+    fi
 }
 log_info()    { _log "INFO"    "$1"; }
 log_success() { _log "SUCCESS" "$1"; }

@@ -92,10 +92,11 @@ declare -i CNT_FOUND=0 CNT_REMOVED=0 CNT_FAILED=0 CNT_UNREACHABLE=0
 # The working log is later archived to the appropriate location above.
 
 _log() {
-    local level="$1" msg="$2" ts
+    local level="$1" msg="$2" ts line
     ts=$(date +"%Y-%m-%d %H:%M:%S")
-    printf "[%s] [%-9s] [%s] %s\n" "${ts}" "${level}" "${SCRIPT_NAME}" "${msg}" \
-        | tee -a "${LOG_CLEANUP}" >> "${MAIN_LOG}"
+    line=$(printf "[%s] [%-9s] [%s] %s\n" "${ts}" "${level}" "${SCRIPT_NAME}" "${msg}")
+    echo "${line}" >> "${LOG_CLEANUP}"           # always write to working log
+    ${DRY_RUN} || echo "${line}" >> "${MAIN_LOG}" # live only — never touch master log during dry-run
 }
 log_info()    { _log "INFO"    "$1"; }
 log_found()   { _log "FOUND"   "$1"; }
@@ -115,11 +116,12 @@ log_fatal()   {
 # Unreachable hosts go to LOG_HOSTS (linux.STAMP) and MAIN_LOG.
 # Not written during dry-runs since no removal is attempted.
 log_unreachable() {
-    local host="$1" ts
+    local host="$1" ts line
     ts=$(date +"%Y-%m-%d %H:%M:%S")
-    printf "[%s] [%-9s] [%s] Host not responding: %s\n" \
-        "${ts}" "WARN" "${SCRIPT_NAME}" "${host}" \
-        | tee -a "${LOG_HOSTS}" >> "${MAIN_LOG}"
+    line=$(printf "[%s] [%-9s] [%s] Host not responding: %s\n" \
+        "${ts}" "WARN" "${SCRIPT_NAME}" "${host}")
+    echo "${line}" >> "${LOG_HOSTS}"
+    ${DRY_RUN} || echo "${line}" >> "${MAIN_LOG}"
     (( CNT_UNREACHABLE++ )) || true
 }
 
