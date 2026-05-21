@@ -57,15 +57,17 @@ source "${CONFIG}"
 MODE=""
 DRY_RUN=false
 DEBUG_MODE=false
+DEBUG_PSSH=false
 
-usage() { echo "Usage: ${SCRIPT_NAME} --mode terms|trans [--dry-run] [--debug]" >&2; exit 1; }
+usage() { echo "Usage: ${SCRIPT_NAME} --mode terms|trans [--dry-run] [--debug] [--debug-pssh]" >&2; exit 1; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --mode)    MODE="$2"; shift 2 ;;
-        --dry-run) DRY_RUN=true; shift ;;
-        --debug)   DEBUG_MODE=true; shift ;;
-        *)         usage ;;
+        --mode)        MODE="$2"; shift 2 ;;
+        --dry-run)     DRY_RUN=true; shift ;;
+        --debug)       DEBUG_MODE=true; shift ;;
+        --debug-pssh)  DEBUG_MODE=true; DEBUG_PSSH=true; shift ;;
+        *)             usage ;;
     esac
 done
 [[ "${MODE}" == "terms" || "${MODE}" == "trans" ]] || usage
@@ -362,6 +364,33 @@ log_info "Loaded ${CNT_SERVERS} servers, ${CNT_USERS} user IDs"
 # Build the remote script once — reused across all batches
 REMOTE_SCRIPT_FILE="${PSSH_TMP}/remote_cleanup.sh"
 build_remote_script USER_IDS "${DRY_RUN}" "${REMOTE_SCRIPT_FILE}"
+
+# --- debug-pssh: single plain SSH against first server only -----------------
+# Run with --debug-pssh to verify remote script execution without pssh.
+# Tests one server via plain ssh and logs the raw output byte-for-byte.
+if ${DEBUG_PSSH}; then
+    first_server="${ALL_SERVERS[0]}"
+    log_info "DEBUG-PSSH: Testing remote script via plain ssh against: ${first_server}"
+    log_info "DEBUG-PSSH: Script file contents:"
+    while IFS= read -r dline; do
+        log_info "DEBUG-PSSH:   ${dline}"
+    done < "${REMOTE_SCRIPT_FILE}"
+
+    log_info "DEBUG-PSSH: Running: ssh ${SSH_OPTS} -l ${PSSH_LOGIN} ${first_server} bash -s < script"
+    ssh_out=$( ssh ${SSH_OPTS} -l "${PSSH_LOGIN}" "${first_server}" 'bash -s'                < "${REMOTE_SCRIPT_FILE}" 2>&1 ) || true
+    ssh_rc=$?
+    log_info "DEBUG-PSSH: ssh exit code: ${ssh_rc}"
+    log_info "DEBUG-PSSH: Raw output (every line):"
+    if [[ -z "${ssh_out}" ]]; then
+        log_info "DEBUG-PSSH:   (empty — no output returned)"
+    else
+        while IFS= read -r oline; do
+            log_info "DEBUG-PSSH:   |${oline}|"
+        done <<< "${ssh_out}"
+    fi
+    log_info "DEBUG-PSSH: Done. Exiting — remove --debug-pssh to run full job."
+    exit 0
+fi
 
 # Fan out in batches of PSSH_BATCH — one SSH per server covers all tasks
 batch_num=0
