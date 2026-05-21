@@ -132,14 +132,22 @@ build_host_file() {
 }
 
 # build_remote_script USER_IDS_ARRAY DRY_RUN SCRIPT_FILE
-#   Writes a single remote script that does ALL three cleanup tasks per user:
-#     1. Home directory check + remove (both AD and OUD paths)
-#     2. /etc/passwd local account check + userdel
-#     3. /etc/group membership check + sed removal with backup
+#   Writes a remote script that:
+#     - Prints its own hostname as a marker line: "HOST:hostname"
+#       This is the only reliable way to know which host produced which output,
+#       since pssh --inline-stdout output lines have no hostname prefix.
+#     - For each user: checks home dirs, /etc/passwd, /etc/group
+#     - Prints one result line per action found, format: STATUS:data
 #
-#   Uses 'ENDBODY' heredoc (single-quoted) so variable names like ${u} are
-#   written literally into the script file — they expand on the REMOTE host.
-#   IDs are substituted via sed after the file is written.
+#   Full output from one host looks like:
+#     HOST:lnxapp0044.pncbank.com
+#     HOME_DRY_RUN:/home/pn15145
+#     PASSWD_DRY_RUN:pn15145
+#     GROUP_DRY_RUN:pn15145:efg_sudoers
+#
+#   If nothing is found for any user, only the HOST: line is printed.
+#   The parser reads HOST: lines to know the current host context, then
+#   maps subsequent result lines to that host until the next HOST: line.
 build_remote_script() {
     local -n _ids="$1"
     local dry="$2"
@@ -152,6 +160,7 @@ build_remote_script() {
 
     if [[ "${dry}" == "true" ]]; then
         cat > "${script_file}" << 'ENDBODY'
+echo "HOST:$(hostname)"
 for u in __IDS__; do
   for p in "/home/${u}" "/home/${u}OUD"; do
     [ -e "${p}" ] && echo "HOME_DRY_RUN:${p}" || true
@@ -164,6 +173,7 @@ done
 ENDBODY
     else
         cat > "${script_file}" << 'ENDBODY'
+echo "HOST:$(hostname)"
 for u in __IDS__; do
   for p in "/home/${u}" "/home/${u}OUD"; do
     if [ -e "${p}" ]; then
@@ -184,7 +194,6 @@ done
 ENDBODY
     fi
 
-    # Substitute the IDs placeholder
     sed -i "s/__IDS__/${ids_literal}/" "${script_file}"
 }
 
@@ -223,107 +232,108 @@ run_pssh_batch() {
 }
 
 # parse_batch_output OUT_FILE
-#   Parses --inline-stdout output. Two-pass approach:
-#   Pass 1: read pssh status lines to determine which hosts connected (SUCCESS)
-#           vs failed to connect (FAILURE). Only FAILURE = unreachable.
-#           MOTD/banner on stderr never appears in --inline-stdout output.
-#   Pass 2: read command output lines "hostname: STATUS:data" and log results.
-#           Lines from FAILURE hosts are skipped.
+#   Parses combined pssh --inline-stdout output.
 #
-#   NOTE on hostname parsing: pssh --inline-stdout prefixes each stdout line
-#   with "hostname: ". The hostname used is exactly what appears in the host
-#   file. We split on ": " (colon-space) not just ":" to avoid colliding with
-#   the colon in STATUS:data.
+#   pssh status lines (used only for FAILURE detection):
+#     [N] HH:MM:SS [SUCCESS] hostname
+#     [N] HH:MM:SS [FAILURE] hostname  <- SSH connect failed, log as unreachable
+#
+#   Remote script output lines (no hostname prefix from pssh):
+#     HOST:hostname          <- the remote host identifying itself via $(hostname)
+#     HOME_DRY_RUN:/home/u   <- result lines follow until next HOST: line
+#     PASSWD_REMOVED:userid
+#     GROUP_DRY_RUN:userid:groups
+#
+#   We track current_host from HOST: lines, and log FAILURE hosts as unreachable.
+#   All result lines are attributed to current_host.
 parse_batch_output() {
     local out_file="$1"
     [[ -f "${out_file}" ]] || return
 
-    # Pass 1: build host status map
-    declare -A host_status
-    while IFS= read -r line; do
-        if [[ "${line}" =~ ^\[[0-9]+\][[:space:]][0-9:]+[[:space:]]\[SUCCESS\][[:space:]](.+)$ ]]; then
-            host_status["${BASH_REMATCH[1]}"]="SUCCESS"
-            (( CNT_REACHED++ )) || true
-        elif [[ "${line}" =~ ^\[[0-9]+\][[:space:]][0-9:]+[[:space:]]\[FAILURE\][[:space:]](.+)$ ]]; then
-            host_status["${BASH_REMATCH[1]}"]="FAILURE"
-            log_unreachable "${BASH_REMATCH[1]}"
-        fi
-    done < "${out_file}"
+    local current_host=""
+    declare -A seen_failure
 
-    # Pass 2: parse command output lines
     while IFS= read -r line; do
-        # Skip pssh status lines
-        [[ "${line}" =~ ^\[[0-9]+ ]] && continue
-
-        # Split on first ": " to get hostname and the rest
-        # Format: "hostname: STATUS:data"
-        local host remainder
-        if [[ "${line}" =~ ^([^:]+):[[:space:]](.+)$ ]]; then
-            host="${BASH_REMATCH[1]}"
-            remainder="${BASH_REMATCH[2]}"
-        else
+        # pssh FAILURE status line — SSH never connected
+        if [[ "${line}" =~ ^\[[0-9]+\][[:space:]][0-9:]+[[:space:]]\[FAILURE\][[:space:]](.+)$ ]]; then
+            local fhost="${BASH_REMATCH[1]}"
+            if [[ -z "${seen_failure[${fhost}]:-}" ]]; then
+                seen_failure["${fhost}"]="1"
+                log_unreachable "${fhost}"
+            fi
             continue
         fi
 
-        # Only process output from hosts that connected
-        [[ "${host_status[${host}]:-}" == "SUCCESS" ]] || continue
+        # pssh SUCCESS status line — SSH connected, count it
+        if [[ "${line}" =~ ^\[[0-9]+\][[:space:]][0-9:]+[[:space:]]\[SUCCESS\][[:space:]](.+)$ ]]; then
+            (( CNT_REACHED++ )) || true
+            continue
+        fi
 
-        # Parse STATUS:data from remainder
-        local status data
-        status="${remainder%%:*}"
-        data="${remainder#*:}"
-        # If no colon in remainder, data == status — skip
-        [[ "${data}" == "${status}" ]] && continue
+        # Remote script HOST: marker — sets context for following result lines
+        if [[ "${line}" =~ ^HOST:(.+)$ ]]; then
+            current_host="${BASH_REMATCH[1]}"
+            continue
+        fi
 
-        local userid groups
+        # Skip any other non-result lines (blank, pssh noise)
+        [[ -z "${current_host}" ]] && continue
+        [[ "${line}" =~ ^(HOME_|PASSWD_|GROUP_) ]] || continue
+
+        # Parse STATUS:data
+        local status data userid groups
+        status="${line%%:*}"
+        data="${line#*:}"
+
         case "${status}" in
             HOME_REMOVED)
                 userid=$(basename "${data}" | sed 's/OUD$//')
-                log_success "${userid}: Removed ${data} on ${host}"
+                log_success "${userid}: Removed ${data} on ${current_host}"
                 (( CNT_HOME_REMOVED++ )) || true
                 ;;
             HOME_FAILED)
                 userid=$(basename "${data}" | sed 's/OUD$//')
-                log_failure "${userid}: Failed to remove ${data} on ${host}"
+                log_failure "${userid}: Failed to remove ${data} on ${current_host}"
                 (( CNT_HOME_FAILED++ )) || true
                 ;;
             HOME_DRY_RUN)
                 userid=$(basename "${data}" | sed 's/OUD$//')
-                log_dry_run "${userid}: Would remove ${data} on ${host}"
+                log_dry_run "${userid}: Would remove ${data} on ${current_host}"
                 (( CNT_HOME_DRYRUN++ )) || true
                 ;;
             PASSWD_REMOVED)
-                log_success "${data}: Removed local account from /etc/passwd on ${host}"
+                log_success "${data}: Removed local account from /etc/passwd on ${current_host}"
                 (( CNT_PASSWD_REMOVED++ )) || true
                 ;;
             PASSWD_FAILED)
-                log_failure "${data}: Failed to remove local account from /etc/passwd on ${host}"
+                log_failure "${data}: Failed to remove local account from /etc/passwd on ${current_host}"
                 (( CNT_PASSWD_FAILED++ )) || true
                 ;;
             PASSWD_DRY_RUN)
-                log_dry_run "${data}: Would run userdel ${data} on ${host}"
+                log_dry_run "${data}: Would run userdel ${data} on ${current_host}"
                 (( CNT_PASSWD_DRYRUN++ )) || true
                 ;;
             GROUP_REMOVED)
                 userid="${data%%:*}"
                 groups="${data#*:}"
-                log_success "${userid}: Removed from [${groups}] in /etc/group on ${host} (backup: /etc/group.preremove.${userid})"
+                log_success "${userid}: Removed from [${groups}] in /etc/group on ${current_host} (backup: /etc/group.preremove.${userid})"
                 (( CNT_GROUP_REMOVED++ )) || true
                 ;;
             GROUP_FAILED)
-                log_failure "${data}: Failed to remove from /etc/group on ${host}"
+                log_failure "${data}: Failed to remove from /etc/group on ${current_host}"
                 (( CNT_GROUP_FAILED++ )) || true
                 ;;
             GROUP_DRY_RUN)
                 userid="${data%%:*}"
                 groups="${data#*:}"
-                log_dry_run "${userid}: Would remove from [${groups}] in /etc/group on ${host}"
-                log_dry_run "${userid}: Would create /etc/group.preremove.${userid} on ${host}"
+                log_dry_run "${userid}: Would remove from [${groups}] in /etc/group on ${current_host}"
+                log_dry_run "${userid}: Would create /etc/group.preremove.${userid} on ${current_host}"
                 (( CNT_GROUP_DRYRUN++ )) || true
                 ;;
         esac
     done < "${out_file}"
 }
+
 
 # =============================================================================
 # Main
