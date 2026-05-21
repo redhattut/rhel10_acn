@@ -175,135 +175,112 @@ ENDBODY
     sed -i "s/__IDS__/${ids_literal}/" "${script_file}"
 }
 
-# run_pssh_batch HOST_FILE SCRIPT_FILE OUT_DIR ERR_DIR
-#   Encodes SCRIPT_FILE to a single-line hex string and runs it on all hosts.
-#   Uses xxd/od hex encoding instead of base64 to avoid -w0 portability issues
-#   and single-quote wrapping problems. The remote command is:
-#     printf '%b' '\x..\x..' | bash
-#   This is a pure printable ASCII string with no quoting issues.
+# run_pssh_batch HOST_FILE SCRIPT_FILE OUT_FILE
+#   Pipes SCRIPT_FILE to pssh via stdin (-I flag) so the script reaches each
+#   remote host without any command-line quoting or encoding involved.
+#   --inline-stdout writes all host output to a single file with lines prefixed:
+#     [N] HH:MM:SS [SUCCESS] hostname
+#     [N] HH:MM:SS [FAILURE] hostname        <- SSH failed / timeout
+#     hostname: <stdout line from remote>
 #
-#   PSSH_TIMEOUT controls per-host timeout. -q suppresses pssh status lines.
-#   Per-host stdout captured to OUT_DIR/<hostname> for parsing.
+#   We capture the combined output to OUT_FILE and parse it ourselves.
+#   MOTD/banner lines that appear in stderr do NOT affect SUCCESS/FAILURE
+#   detection — pssh reports SUCCESS if the SSH connection was made and the
+#   remote command exited 0, regardless of stderr on the remote.
 run_pssh_batch() {
-    local host_file="$1" script_file="$2" out_dir="$3" err_dir="$4"
-    mkdir -p "${out_dir}" "${err_dir}"
-
-    # Encode script as \xNN hex escapes — no base64 -w0 portability concern,
-    # no single-quote wrapping, safe to embed directly in the pssh command.
-    # base64-encode the script; strip newlines so it is a single line.
-    # Decode on the remote side with perl -MMIME::Base64 which is available
-    # on all RHEL/Rocky systems. q{...} quoting handles any special chars.
-    local encoded
-    encoded=$(base64 "${script_file}" | tr -d '\n')
-
-    local remote_cmd
-    remote_cmd="perl -MMIME::Base64 -e 'print decode_base64(q{${encoded}})' | bash"
+    local host_file="$1" script_file="$2" out_file="$3"
 
     if ${DEBUG_MODE}; then
         log_info "DEBUG: Script file contents:"
         while IFS= read -r dbg_line; do
             log_info "DEBUG:   ${dbg_line}"
         done < "${script_file}"
-        log_info "DEBUG: Remote command length: ${#remote_cmd} chars"
         log_info "DEBUG: Host file: ${host_file} ($(wc -l < "${host_file}") hosts)"
         log_info "DEBUG: PSSH_BIN=${PSSH_BIN}"
         log_info "DEBUG: PSSH_OPTS=${PSSH_OPTS}"
         log_info "DEBUG: pssh version: $(${PSSH_BIN} --version 2>&1 | head -1 || echo unknown)"
-        log_info "DEBUG: out_dir=${out_dir} err_dir=${err_dir}"
         log_info "DEBUG: Running pssh..."
     fi
 
     local pssh_rc=0
-    if ${DEBUG_MODE}; then
-        # Drop -q so pssh own output is captured; keep stderr visible
-        # shellcheck disable=SC2086
-        "${PSSH_BIN}" ${PSSH_OPTS} \
-            -h "${host_file}" \
-            -o "${out_dir}" \
-            -e "${err_dir}" \
-            "${remote_cmd}" \
-            > "${out_dir}/../pssh_stdout_debug.log" 2> "${out_dir}/../pssh_stderr_debug.log" || pssh_rc=$?
-        log_info "DEBUG: pssh exit code: ${pssh_rc}"
-        log_info "DEBUG: pssh stdout (first 3 lines): $(head -3 "${out_dir}/../pssh_stdout_debug.log" 2>/dev/null || echo none)"
-        log_info "DEBUG: pssh own stderr: $(cat "${out_dir}/../pssh_stderr_debug.log" 2>/dev/null | head -3 || echo none)"
-    else
-        # shellcheck disable=SC2086
-        "${PSSH_BIN}" ${PSSH_OPTS} -q \
-            -h "${host_file}" \
-            -o "${out_dir}" \
-            -e "${err_dir}" \
-            "${remote_cmd}" \
-            2>/dev/null || true
-    fi
+    # shellcheck disable=SC2086
+    cat "${script_file}" | "${PSSH_BIN}" ${PSSH_OPTS} \
+        -h "${host_file}" \
+        bash \
+        > "${out_file}" 2>/dev/null || pssh_rc=$?
 
     if ${DEBUG_MODE}; then
-        local out_count err_count
-        out_count=$(ls "${out_dir}" 2>/dev/null | wc -l)
-        err_count=$(ls "${err_dir}" 2>/dev/null | wc -l)
-        log_info "DEBUG: pssh done — stdout files: ${out_count}, stderr files: ${err_count}"
-        for ef in "${err_dir}"/*; do
-            [[ -s "${ef}" ]] || continue
-            log_info "DEBUG: Sample stderr from $(basename "${ef}"): $(head -1 "${ef}")"
-            break
-        done
-        for of in "${out_dir}"/*; do
-            [[ -s "${of}" ]] || continue
-            log_info "DEBUG: Sample stdout from $(basename "${of}"): $(head -2 "${of}")"
-            break
+        log_info "DEBUG: pssh exit code: ${pssh_rc}"
+        log_info "DEBUG: output lines: $(wc -l < "${out_file}" 2>/dev/null || echo 0)"
+        log_info "DEBUG: first 5 output lines:"
+        head -5 "${out_file}" 2>/dev/null | while IFS= read -r l; do
+            log_info "DEBUG:   ${l}"
         done
     fi
 }
 
 
-# parse_batch_output OUT_DIR ERR_DIR
-#   Reads per-host output files. Logs SUCCESS/FAILURE/DRY_RUN per path found.
-#   Identifies unreachable hosts (stderr present, no stdout file).
+
+# parse_batch_output OUT_FILE
+#   Parses --inline-stdout output. Line format from pssh:
+#     [N] HH:MM:SS [SUCCESS] hostname   <- host connected, command ran
+#     [N] HH:MM:SS [FAILURE] hostname   <- SSH failed or timed out
+#     hostname: <remote stdout line>    <- actual command output
+#
+#   We track which hosts reported SUCCESS/FAILURE from the pssh status lines,
+#   then map command output lines back to their host using "hostname: " prefix.
+#   MOTD/banner noise arrives on remote stderr, which pssh does not include in
+#   --inline-stdout output, so it never contaminates our parsing.
 parse_batch_output() {
-    local out_dir="$1" err_dir="$2"
+    local out_file="$1"
+    [[ -f "${out_file}" ]] || return
 
-    # Parse stdout results from hosts that responded
-    for result_file in "${out_dir}"/*; do
-        [[ -f "${result_file}" ]] || continue
-        local host
-        host=$(basename "${result_file}")
-        (( CNT_REACHED++ )) || true
-
-        while IFS= read -r result_line; do
-            [[ -z "${result_line}" ]] && continue
-            local status path
-            status="${result_line%%:*}"
-            path="${result_line#*:}"
-
-            # Extract userid from path for the log message
-            local userid
-            userid=$(basename "${path}" | sed 's/OUD$//')
-
-            case "${status}" in
-                REMOVED)
-                    log_success "${userid}: Removed ${path} on ${host}"
-                    (( CNT_REMOVED++ )) || true
-                    ;;
-                FAILED)
-                    log_failure "${userid}: Failed to remove ${path} on ${host}"
-                    (( CNT_FAILED++ )) || true
-                    ;;
-                DRY_RUN)
-                    log_dry_run "${userid}: Would remove ${path} on ${host}"
-                    (( CNT_DRYRUN++ )) || true
-                    ;;
-            esac
-        done < "${result_file}"
-    done
-
-    # Identify unreachable hosts: stderr file exists but no stdout file
-    for err_file in "${err_dir}"/*; do
-        [[ -s "${err_file}" ]] || continue
-        local host
-        host=$(basename "${err_file}")
-        if [[ ! -f "${out_dir}/${host}" ]]; then
-            log_unreachable "${host}"
+    # First pass: collect SUCCESS and FAILURE host sets from pssh status lines
+    declare -A host_status
+    while IFS= read -r line; do
+        # pssh status line: [N] HH:MM:SS [SUCCESS] hostname
+        if [[ "${line}" =~ ^\[[0-9]+\][[:space:]][0-9:]+[[:space:]]\[(SUCCESS)\][[:space:]](.+)$ ]]; then
+            host_status["${BASH_REMATCH[2]}"]="SUCCESS"
+            (( CNT_REACHED++ )) || true
+        elif [[ "${line}" =~ ^\[[0-9]+\][[:space:]][0-9:]+[[:space:]]\[(FAILURE)\][[:space:]](.+)$ ]]; then
+            host_status["${BASH_REMATCH[2]}"]="FAILURE"
+            log_unreachable "${BASH_REMATCH[2]}"
         fi
-    done
+    done < "${out_file}"
+
+    # Second pass: parse command output lines "hostname: RESULT:/path"
+    while IFS= read -r line; do
+        # Skip pssh status lines
+        [[ "${line}" =~ ^\[[0-9]+ ]] && continue
+
+        # Output line format: "hostname: STATUS:/path"
+        local host result_part status path userid
+        host="${line%%:*}"
+        result_part="${line#*: }"
+        status="${result_part%%:*}"
+        path="${result_part#*:}"
+
+        # Only process lines from hosts that connected successfully
+        [[ "${host_status[${host}]:-}" == "SUCCESS" ]] || continue
+        [[ -z "${path}" || "${path}" == "${status}" ]] && continue
+
+        userid=$(basename "${path}" | sed 's/OUD$//')
+
+        case "${status}" in
+            REMOVED)
+                log_success "${userid}: Removed ${path} on ${host}"
+                (( CNT_REMOVED++ )) || true
+                ;;
+            FAILED)
+                log_failure "${userid}: Failed to remove ${path} on ${host}"
+                (( CNT_FAILED++ )) || true
+                ;;
+            DRY_RUN)
+                log_dry_run "${userid}: Would remove ${path} on ${host}"
+                (( CNT_DRYRUN++ )) || true
+                ;;
+        esac
+    done < "${out_file}"
 }
 
 # =============================================================================
@@ -346,12 +323,11 @@ while [[ ${i} -lt ${total} ]]; do
     (( i += PSSH_BATCH )) || true
 
     batch_host_file="${PSSH_TMP}/hosts_b${batch_num}.txt"
-    out_dir="${PSSH_TMP}/out_b${batch_num}"
-    err_dir="${PSSH_TMP}/err_b${batch_num}"
+    out_file="${PSSH_TMP}/out_b${batch_num}.log"
 
     build_host_file "${batch_host_file}" "${batch[@]}"
-    run_pssh_batch  "${batch_host_file}" "${REMOTE_SCRIPT_FILE}" "${out_dir}" "${err_dir}"
-    parse_batch_output "${out_dir}" "${err_dir}"
+    run_pssh_batch  "${batch_host_file}" "${REMOTE_SCRIPT_FILE}" "${out_file}"
+    parse_batch_output "${out_file}"
 done
 
 # --- Summary -----------------------------------------------------------------

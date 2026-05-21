@@ -163,108 +163,115 @@ ENDBODY
     sed -i "s/__IDS__/${ids_literal}/" "${script_file}"
 }
 
-# run_pssh_batch HOST_FILE SCRIPT_FILE OUT_DIR ERR_DIR
-#   Hex-encodes SCRIPT_FILE and runs it on all hosts via pssh as:
-#   printf '%b' '\xNN...' | bash
-#   No base64 -w0 portability issues, no single-quote wrapping problems.
+# run_pssh_batch HOST_FILE SCRIPT_FILE OUT_FILE
+#   Pipes SCRIPT_FILE to pssh via stdin (-I flag) so the script reaches each
+#   remote host without any command-line quoting or encoding involved.
+#   --inline-stdout writes all host output to a single file with lines prefixed:
+#     [N] HH:MM:SS [SUCCESS] hostname
+#     [N] HH:MM:SS [FAILURE] hostname        <- SSH failed / timeout
+#     hostname: <stdout line from remote>
+#
+#   We capture the combined output to OUT_FILE and parse it ourselves.
+#   MOTD/banner lines that appear in stderr do NOT affect SUCCESS/FAILURE
+#   detection — pssh reports SUCCESS if the SSH connection was made and the
+#   remote command exited 0, regardless of stderr on the remote.
 run_pssh_batch() {
-    local host_file="$1" script_file="$2" out_dir="$3" err_dir="$4"
-    mkdir -p "${out_dir}" "${err_dir}"
-
-    local hex_cmd
-    hex_cmd=$(od -An -tx1 "${script_file}" | tr -d ' \\n' | sed 's/../\\x&/g')
-
-    local remote_cmd
-    remote_cmd="printf '${hex_cmd}' | bash"
+    local host_file="$1" script_file="$2" out_file="$3"
 
     if ${DEBUG_MODE}; then
         log_info "DEBUG: Script file contents:"
         while IFS= read -r dbg_line; do
             log_info "DEBUG:   ${dbg_line}"
         done < "${script_file}"
-        log_info "DEBUG: Remote command length: ${#remote_cmd} chars"
         log_info "DEBUG: Host file: ${host_file} ($(wc -l < "${host_file}") hosts)"
+        log_info "DEBUG: PSSH_BIN=${PSSH_BIN}"
+        log_info "DEBUG: PSSH_OPTS=${PSSH_OPTS}"
+        log_info "DEBUG: pssh version: $(${PSSH_BIN} --version 2>&1 | head -1 || echo unknown)"
         log_info "DEBUG: Running pssh..."
     fi
 
+    local pssh_rc=0
     # shellcheck disable=SC2086
-    "${PSSH_BIN}" ${PSSH_OPTS} -q \
+    cat "${script_file}" | "${PSSH_BIN}" ${PSSH_OPTS} \
         -h "${host_file}" \
-        -o "${out_dir}" \
-        -e "${err_dir}" \
-        "${remote_cmd}" \
-        2>/dev/null || true
+        bash \
+        > "${out_file}" 2>/dev/null || pssh_rc=$?
 
     if ${DEBUG_MODE}; then
-        local out_count err_count
-        out_count=$(ls "${out_dir}" 2>/dev/null | wc -l)
-        err_count=$(ls "${err_dir}" 2>/dev/null | wc -l)
-        log_info "DEBUG: pssh done — stdout files: ${out_count}, stderr files: ${err_count}"
-        for ef in "${err_dir}"/*; do
-            [[ -s "${ef}" ]] || continue
-            log_info "DEBUG: Sample stderr from $(basename "${ef}"): $(head -1 "${ef}")"
-            break
+        log_info "DEBUG: pssh exit code: ${pssh_rc}"
+        log_info "DEBUG: output lines: $(wc -l < "${out_file}" 2>/dev/null || echo 0)"
+        log_info "DEBUG: first 5 output lines:"
+        head -5 "${out_file}" 2>/dev/null | while IFS= read -r l; do
+            log_info "DEBUG:   ${l}"
         done
     fi
 }
 
 
-# parse_batch_output OUT_DIR ERR_DIR
+
+# parse_batch_output OUT_FILE
+#   Parses --inline-stdout output from pssh.
+#   pssh status lines: [N] HH:MM:SS [SUCCESS|FAILURE] hostname
+#   Command output lines: hostname: STATUS:data
 parse_batch_output() {
-    local out_dir="$1" err_dir="$2"
+    local out_file="$1"
+    [[ -f "${out_file}" ]] || return
 
-    for result_file in "${out_dir}"/*; do
-        [[ -f "${result_file}" ]] || continue
-        local host
-        host=$(basename "${result_file}")
-        (( CNT_REACHED++ )) || true
+    declare -A host_status
+    while IFS= read -r line; do
+        if [[ "${line}" =~ ^\[[0-9]+\][[:space:]][0-9:]+[[:space:]]\[(SUCCESS)\][[:space:]](.+)$ ]]; then
+            host_status["${BASH_REMATCH[2]}"]="SUCCESS"
+            (( CNT_REACHED++ )) || true
+        elif [[ "${line}" =~ ^\[[0-9]+\][[:space:]][0-9:]+[[:space:]]\[(FAILURE)\][[:space:]](.+)$ ]]; then
+            host_status["${BASH_REMATCH[2]}"]="FAILURE"
+            log_unreachable "${BASH_REMATCH[2]}"
+        fi
+    done < "${out_file}"
 
-        while IFS= read -r result_line; do
-            [[ -z "${result_line}" ]] && continue
-            local status rest userid groups
-            status="${result_line%%:*}"
-            rest="${result_line#*:}"       # userid  or  userid:groups
-            userid="${rest%%:*}"
-            groups="${rest#*:}"
-            [[ "${groups}" == "${userid}" ]] && groups=""  # no groups field present
+    while IFS= read -r line; do
+        [[ "${line}" =~ ^\[[0-9]+ ]] && continue
 
-            case "${status}" in
-                PASSWD_REMOVED)
-                    log_success "${userid}: Removed local account from /etc/passwd on ${host}"
-                    (( CNT_PASSWD_REMOVED++ )) || true
-                    ;;
-                PASSWD_FAILED)
-                    log_failure "${userid}: Failed to remove local account from /etc/passwd on ${host}"
-                    (( CNT_PASSWD_FAILED++ )) || true
-                    ;;
-                PASSWD_DRY_RUN)
-                    log_dry_run "${userid}: Would run userdel ${userid} on ${host}"
-                    (( CNT_PASSWD_DRYRUN++ )) || true
-                    ;;
-                GROUP_REMOVED)
-                    log_success "${userid}: Removed from [${groups}] in /etc/group on ${host} (backup: /etc/group.preremove.${userid})"
-                    (( CNT_GROUP_REMOVED++ )) || true
-                    ;;
-                GROUP_FAILED)
-                    log_failure "${userid}: Failed to remove from /etc/group on ${host}"
-                    (( CNT_GROUP_FAILED++ )) || true
-                    ;;
-                GROUP_DRY_RUN)
-                    log_dry_run "${userid}: Would remove from [${groups}] in /etc/group on ${host}"
-                    log_dry_run "${userid}: Would create /etc/group.preremove.${userid} on ${host}"
-                    (( CNT_GROUP_DRYRUN++ )) || true
-                    ;;
-            esac
-        done < "${result_file}"
-    done
+        local host result_part status rest userid groups
+        host="${line%%:*}"
+        result_part="${line#*: }"
+        status="${result_part%%:*}"
+        rest="${result_part#*:}"      # userid  or  userid:groups
 
-    # Unreachable: stderr exists, no stdout file
-    for err_file in "${err_dir}"/*; do
-        [[ -s "${err_file}" ]] || continue
-        local host
-        host=$(basename "${err_file}")
-        [[ ! -f "${out_dir}/${host}" ]] && log_unreachable "${host}"
-    done
+        [[ "${host_status[${host}]:-}" == "SUCCESS" ]] || continue
+        [[ -z "${rest}" || "${rest}" == "${status}" ]] && continue
+
+        userid="${rest%%:*}"
+        groups="${rest#*:}"
+        [[ "${groups}" == "${userid}" ]] && groups=""
+
+        case "${status}" in
+            PASSWD_REMOVED)
+                log_success "${userid}: Removed local account from /etc/passwd on ${host}"
+                (( CNT_PASSWD_REMOVED++ )) || true
+                ;;
+            PASSWD_FAILED)
+                log_failure "${userid}: Failed to remove local account from /etc/passwd on ${host}"
+                (( CNT_PASSWD_FAILED++ )) || true
+                ;;
+            PASSWD_DRY_RUN)
+                log_dry_run "${userid}: Would run userdel ${userid} on ${host}"
+                (( CNT_PASSWD_DRYRUN++ )) || true
+                ;;
+            GROUP_REMOVED)
+                log_success "${userid}: Removed from [${groups}] in /etc/group on ${host} (backup: /etc/group.preremove.${userid})"
+                (( CNT_GROUP_REMOVED++ )) || true
+                ;;
+            GROUP_FAILED)
+                log_failure "${userid}: Failed to remove from /etc/group on ${host}"
+                (( CNT_GROUP_FAILED++ )) || true
+                ;;
+            GROUP_DRY_RUN)
+                log_dry_run "${userid}: Would remove from [${groups}] in /etc/group on ${host}"
+                log_dry_run "${userid}: Would create /etc/group.preremove.${userid} on ${host}"
+                (( CNT_GROUP_DRYRUN++ )) || true
+                ;;
+        esac
+    done < "${out_file}"
 }
 
 # =============================================================================
@@ -304,12 +311,11 @@ while [[ ${i} -lt ${total} ]]; do
     (( i += PSSH_BATCH )) || true
 
     batch_host_file="${PSSH_TMP}/hosts_b${batch_num}.txt"
-    out_dir="${PSSH_TMP}/out_b${batch_num}"
-    err_dir="${PSSH_TMP}/err_b${batch_num}"
+    out_file="${PSSH_TMP}/out_b${batch_num}.log"
 
     build_host_file "${batch_host_file}" "${batch[@]}"
-    run_pssh_batch  "${batch_host_file}" "${REMOTE_SCRIPT_FILE}" "${out_dir}" "${err_dir}"
-    parse_batch_output "${out_dir}" "${err_dir}"
+    run_pssh_batch  "${batch_host_file}" "${REMOTE_SCRIPT_FILE}" "${out_file}"
+    parse_batch_output "${out_file}"
 done
 
 # --- Summary -----------------------------------------------------------------
