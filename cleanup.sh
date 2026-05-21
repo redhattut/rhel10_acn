@@ -99,8 +99,12 @@ done
 # --- Derived settings --------------------------------------------------------
 # IDS_FILE: use custom override if provided, otherwise default to data/MODE.ids
 if [[ -n "${CUSTOM_IDS_FILE}" ]]; then
-    IDS_FILE="${CUSTOM_IDS_FILE}"
-    [[ -f "${IDS_FILE}" ]] || { echo "[FATAL] --ids-file not found: ${IDS_FILE}" >&2; exit 2; }
+    [[ -f "${CUSTOM_IDS_FILE}" ]] || { echo "[FATAL] --ids-file not found: ${CUSTOM_IDS_FILE}" >&2; exit 2; }
+    # Normalize to lowercase — OIM and manual files often use uppercase IDs.
+    # Home dirs and passwd entries on Linux servers are always lowercase.
+    IDS_FILE=$(mktemp /var/tmp/tti_ids.XXXXXX)
+    trap 'rm -f "${IDS_FILE}"' EXIT
+    tr '[:upper:]' '[:lower:]' < "${CUSTOM_IDS_FILE}" | grep -v '^\s*$' | sort -u > "${IDS_FILE}"
 else
     IDS_FILE="${DATA_DIR}/${MODE}.ids"
 fi
@@ -196,7 +200,9 @@ build_remote_script() {
 
     local ids_literal=""
     for u in "${_ids[@]}"; do
-        ids_literal+=" ${u}"
+        # Always lowercase — OIM files use uppercase, custom --ids-file may too.
+        # Home dirs and passwd entries are lowercase on Linux servers.
+        ids_literal+=" ${u,,}"
     done
 
     if [[ "${dry}" == "true" ]]; then
