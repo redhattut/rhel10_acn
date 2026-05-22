@@ -7,15 +7,10 @@
 
 set -u
 
-# ---------- Remote mode: when invoked over SSH with --run, just do the check ----------
+# ---------- Remote mode ----------
 if [[ "${1:-}" == "--run" ]]; then
   acc="${2:-}"
   [[ -z "$acc" ]] && { echo "  (no userID provided)"; exit 1; }
-
-  if ! id "$acc" &>/dev/null; then
-    echo "  User '$acc' not found on this host"
-    exit 0
-  fi
 
   conf=/etc/security/login-access.conf
   [[ ! -r "$conf" ]] && { echo "  login-access.conf missing or unreadable"; exit 0; }
@@ -23,65 +18,50 @@ if [[ "${1:-}" == "--run" ]]; then
   echo "Group membership for: $acc"
   echo
 
-  mapfile -t user_groups < <(id -Gn "$acc" | tr ' ' '\n')
-
-  mapfile -t conf_groups < <(
+  # Extract (group) tokens from login-access.conf, in file order, deduped
+  mapfile -t groups < <(
     grep -vE '^\s*(#|$)' "$conf" \
       | grep -oE '\([^)]+\)' \
       | tr -d '()' \
       | awk '!seen[$0]++'
   )
 
+  # Pad to longest group name for clean column alignment
   max=0
-  for cg in "${conf_groups[@]}"; do
-    for ug in "${user_groups[@]}"; do
-      [[ "$ug" == "$cg" ]] && (( ${#cg} > max )) && max=${#cg}
-    done
-  done
+  for g in "${groups[@]}"; do (( ${#g} > max )) && max=${#g}; done
 
-  found=0
-  for cg in "${conf_groups[@]}"; do
-    in_group=0
-    for ug in "${user_groups[@]}"; do
-      [[ "$ug" == "$cg" ]] && { in_group=1; break; }
-    done
-    (( in_group == 0 )) && continue
-    found=1
+  for g in "${groups[@]}"; do
+    # Classify by name shape: AD groups have @domain, OUD groups don't
+    if [[ "$g" == *"@"* ]]; then src="AD "; else src="OUD"; fi
 
-    if [[ "$cg" == *"@"* ]]; then src="AD "; else src="OUD"; fi
-
+    # Membership check via getent. The 4th field of group entry is comma-separated members.
+    members=$(getent group "$g" 2>/dev/null | awk -F: '{print $4}')
     access="No"
-    while IFS=':' read -r perm users origins; do
-      [[ -z "$perm" || "${perm:0:1}" == "#" ]] && continue
-      perm=$(echo "$perm" | tr -d '[:space:]')
-      [[ "$perm" != "+" && "$perm" != "-" ]] && continue
 
-      hit=""
-      for tok in $users; do
-        case "$tok" in
-          ALL)    hit=1; break ;;
-          "$acc") hit=1; break ;;
-          \(*\))
-            gn="${tok#(}"; gn="${gn%)}"
-            [[ "$gn" == "$cg" ]] && { hit=1; break; }
-            ;;
-        esac
-      done
+    # Direct match: user appears verbatim in members
+    if [[ -n "$members" ]] && echo "$members" | tr ',' '\n' | grep -qx "$acc"; then
+      access="Yes"
+    fi
 
-      if [[ -n "$hit" ]]; then
-        [[ "$perm" == "+" ]] && access="Yes" || access="No"
-        break
+    # AD domain-qualified match: members may list user as "user@domain"
+    if [[ "$access" == "No" && "$g" == *"@"* ]]; then
+      dom="${g#*@}"
+      if [[ -n "$members" ]] && echo "$members" | tr ',' '\n' | grep -qx "${acc}@${dom}"; then
+        access="Yes"
       fi
-    done < "$conf"
+    fi
 
-    printf "  Member of: %-*s  [ %-3s ]  [ %s ]\n" "$max" "$cg" "$access" "$src"
+    # Netgroup fallback (rare in login-access.conf but the original honored it)
+    if [[ "$access" == "No" ]] && getent netgroup "$g" 2>/dev/null | grep -q "[(,]${acc}[,)]"; then
+      access="Yes"
+    fi
+
+    printf "  Member of: %-*s  [ %-3s ]  [ %s ]\n" "$max" "$g" "$access" "$src"
   done
-
-  (( found == 0 )) && echo "  (user is not in any group referenced by login-access.conf)"
   exit 0
 fi
 
-# ---------- Driver mode: parse args, dispatch to local / ssh / pssh ----------
+# ---------- Driver mode ----------
 ACC=""; HOST=""; HOSTFILE=""
 ACC="${1:-}"; shift || true
 while [[ $# -gt 0 ]]; do
@@ -97,12 +77,10 @@ done
 SSH_OPTS="-o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
 SELF="$(readlink -f "$0")"
 
-# No host flags: run locally on the jumphost itself
 if [[ -z "$HOST" && -z "$HOSTFILE" ]]; then
   exec "$SELF" --run "$ACC"
 fi
 
-# Single remote host
 if [[ -n "$HOST" ]]; then
   echo "${HOST} >>"
   ssh $SSH_OPTS "$HOST" "bash -s -- --run '$ACC'" < "$SELF" 2>/dev/null \
@@ -111,7 +89,6 @@ if [[ -n "$HOST" ]]; then
   exit 0
 fi
 
-# Multi-host via pssh
 command -v pssh &>/dev/null || { echo "pssh not found (dnf install pssh)" >&2; exit 1; }
 
 pssh -h "$HOSTFILE" -p 50 -t 15 --inline-stdout \
