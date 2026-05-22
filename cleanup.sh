@@ -108,7 +108,6 @@ if [[ -n "${CUSTOM_IDS_FILE}" ]]; then
     # Normalize to lowercase — OIM and manual files often use uppercase IDs.
     # Home dirs and passwd entries on Linux servers are always lowercase.
     IDS_FILE=$(mktemp /var/tmp/tti_ids.XXXXXX)
-    trap 'rm -f "${IDS_FILE}"' EXIT
     tr '[:upper:]' '[:lower:]' < "${CUSTOM_IDS_FILE}" | grep -v '^\s*$' | sort -u > "${IDS_FILE}"
 else
     IDS_FILE="${DATA_DIR}/${MODE}.ids"
@@ -139,7 +138,15 @@ else
 fi
 
 PSSH_TMP=$(mktemp -d /var/tmp/tti_pssh.XXXXXX)
-trap 'rm -rf "${PSSH_TMP}"' EXIT
+
+# Single EXIT trap cleans up ALL temp files.
+# Using a function avoids the trap-overwrite problem where each new
+# trap 'cmd' EXIT replaces the previous one.
+_cleanup_tmpfiles() {
+    rm -rf "${PSSH_TMP}"
+    [[ -n "${CUSTOM_IDS_FILE}" && -f "${IDS_FILE:-}" ]] && rm -f "${IDS_FILE}"
+}
+trap '_cleanup_tmpfiles' EXIT
 
 # --- Counters ----------------------------------------------------------------
 declare -i CNT_USERS=0 CNT_SERVERS=0 CNT_REACHED=0 CNT_UNREACHABLE=0
