@@ -18,40 +18,70 @@ if [[ "${1:-}" == "--run" ]]; then
   echo "Group membership for: $acc"
   echo
 
-  # Extract (group) tokens from login-access.conf, in file order, deduped
-  mapfile -t groups < <(
-    grep -vE '^\s*(#|$)' "$conf" \
-      | grep -oE '\([^)]+\)' \
-      | tr -d '()' \
-      | awk '!seen[$0]++'
+  # Parse conf: collect "type:name" tokens (oud:foo or ad:bar) in file order, deduped.
+  # Skip comments, blank lines, and the final catch-all "- : ALL : ALL" deny.
+  mapfile -t entries < <(
+    awk '
+      /^[[:space:]]*#/ { next }
+      /^[[:space:]]*$/ { next }
+      {
+        # Strip "perm :" prefix, then look at the users field (field 2 after splitting on :)
+        n = split($0, f, ":")
+        if (n < 2) next
+        users = f[2]
+        # Skip the ALL catch-all
+        gsub(/[[:space:]]/, "", users)
+        if (users == "ALL") next
+
+        # Re-scan original line for tokens
+        line = $0
+        while (match(line, /@[A-Za-z0-9._-]+/)) {
+          tok = substr(line, RSTART, RLENGTH)
+          sub(/^@/, "", tok)
+          print "oud:" tok
+          line = substr(line, RSTART + RLENGTH)
+        }
+        line = $0
+        while (match(line, /\([^)]+\)/)) {
+          tok = substr(line, RSTART+1, RLENGTH-2)
+          print "ad:" tok
+          line = substr(line, RSTART + RLENGTH)
+        }
+      }
+    ' "$conf" | awk '!seen[$0]++'
   )
 
+  # Pad to longest group name for clean alignment
   max=0
-  for g in "${groups[@]}"; do (( ${#g} > max )) && max=${#g}; done
+  for e in "${entries[@]}"; do
+    name="${e#*:}"
+    (( ${#name} > max )) && max=${#name}
+  done
 
-  for g in "${groups[@]}"; do
+  for e in "${entries[@]}"; do
+    type="${e%%:*}"
+    name="${e#*:}"
     access="No"
 
-    if [[ "$g" == *"@"* ]]; then
-      # AD group: query regular group database, members in 4th field
+    if [[ "$type" == "oud" ]]; then
+      src="OUD"
+      # OUD netgroup: entries are (host,user,domain) triples
+      if getent netgroup "$name" 2>/dev/null | grep -q "[(,]${acc}[,)]"; then
+        access="Yes"
+      fi
+    else
       src="AD "
-      members=$(getent group "$g" 2>/dev/null | awk -F: '{print $4}')
+      # AD group: members in 4th field of group entry, comma-separated
+      members=$(getent group "$name" 2>/dev/null | awk -F: '{print $4}')
       if [[ -n "$members" ]]; then
-        # Match user verbatim, or as user@domain (some AD setups list either form)
-        dom="${g#*@}"
+        dom="${name#*@}"
         if echo "$members" | tr ',' '\n' | grep -qxE "${acc}|${acc}@${dom}"; then
           access="Yes"
         fi
       fi
-    else
-      # OUD group: query netgroup database, entries look like (host,user,domain)
-      src="OUD"
-      if getent netgroup "$g" 2>/dev/null | grep -q "[(,]${acc}[,)]"; then
-        access="Yes"
-      fi
     fi
 
-    printf "  Member of: %-*s  [ %-3s ]  [ %s ]\n" "$max" "$g" "$access" "$src"
+    printf "  Member of: %-*s  [ %-3s ]  [ %s ]\n" "$max" "$name" "$access" "$src"
   done
   exit 0
 fi
