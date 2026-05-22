@@ -26,34 +26,29 @@ if [[ "${1:-}" == "--run" ]]; then
       | awk '!seen[$0]++'
   )
 
-  # Pad to longest group name for clean column alignment
   max=0
   for g in "${groups[@]}"; do (( ${#g} > max )) && max=${#g}; done
 
   for g in "${groups[@]}"; do
-    # Classify by name shape: AD groups have @domain, OUD groups don't
-    if [[ "$g" == *"@"* ]]; then src="AD "; else src="OUD"; fi
-
-    # Membership check via getent. The 4th field of group entry is comma-separated members.
-    members=$(getent group "$g" 2>/dev/null | awk -F: '{print $4}')
     access="No"
 
-    # Direct match: user appears verbatim in members
-    if [[ -n "$members" ]] && echo "$members" | tr ',' '\n' | grep -qx "$acc"; then
-      access="Yes"
-    fi
-
-    # AD domain-qualified match: members may list user as "user@domain"
-    if [[ "$access" == "No" && "$g" == *"@"* ]]; then
-      dom="${g#*@}"
-      if [[ -n "$members" ]] && echo "$members" | tr ',' '\n' | grep -qx "${acc}@${dom}"; then
+    if [[ "$g" == *"@"* ]]; then
+      # AD group: query regular group database, members in 4th field
+      src="AD "
+      members=$(getent group "$g" 2>/dev/null | awk -F: '{print $4}')
+      if [[ -n "$members" ]]; then
+        # Match user verbatim, or as user@domain (some AD setups list either form)
+        dom="${g#*@}"
+        if echo "$members" | tr ',' '\n' | grep -qxE "${acc}|${acc}@${dom}"; then
+          access="Yes"
+        fi
+      fi
+    else
+      # OUD group: query netgroup database, entries look like (host,user,domain)
+      src="OUD"
+      if getent netgroup "$g" 2>/dev/null | grep -q "[(,]${acc}[,)]"; then
         access="Yes"
       fi
-    fi
-
-    # Netgroup fallback (rare in login-access.conf but the original honored it)
-    if [[ "$access" == "No" ]] && getent netgroup "$g" 2>/dev/null | grep -q "[(,]${acc}[,)]"; then
-      access="Yes"
     fi
 
     printf "  Member of: %-*s  [ %-3s ]  [ %s ]\n" "$max" "$g" "$access" "$src"
