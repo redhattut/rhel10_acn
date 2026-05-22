@@ -3,18 +3,18 @@ allpssh() {
 
     [[ $# -eq 0 ]] && { echo "Usage: allpssh <command>  or  allpssh -- <command>"; return 1; }
 
-    # Strip optional leading "--" separator
     [[ "$1" == "--" ]] && shift
     [[ $# -eq 0 ]] && { echo "Usage: allpssh <command>"; return 1; }
 
     [[ ! -r "$hostfile" ]] && { echo "hosts file not found: $hostfile" >&2; return 1; }
 
-    # Encode the command so quotes/special chars survive intact through pssh + remote shell
+    # Encode args so quotes/special chars survive intact through pssh + remote shell
     local encoded
     encoded=$(printf '%s\0' "$@" | base64 -w0)
 
-    # Remote wrapper: decode the args back into an array, then exec them with proper quoting.
-    local remote='set -- ; readarray -d "" -t a < <(base64 -d <<<"'"$encoded"'"); bash -c "$(printf "%q " "${a[@]}")"'
+    # Remote wrapper: decode args into array, then exec via bash -c with proper quoting.
+    # The leading ':' is a no-op that swallows any stray positional weirdness.
+    local remote=': ; readarray -d "" -t a < <(base64 -d <<<"'"$encoded"'"); bash -c "$(printf "%q " "${a[@]}")"'
 
     sudo /usr/local/pssh/bin/pssh \
         -h "$hostfile" \
