@@ -21,35 +21,36 @@ if [[ "${1:-}" == "--run" ]]; then
   # Parse conf: collect "type:name" tokens (oud:foo or ad:bar) in file order, deduped.
   # Skip comments, blank lines, and the final catch-all "- : ALL : ALL" deny.
   mapfile -t entries < <(
-    awk '
-      /^[[:space:]]*#/ { next }
-      /^[[:space:]]*$/ { next }
-      {
-        # Strip "perm :" prefix, then look at the users field (field 2 after splitting on :)
-        n = split($0, f, ":")
-        if (n < 2) next
-        users = f[2]
-        # Skip the ALL catch-all
-        gsub(/[[:space:]]/, "", users)
-        if (users == "ALL") next
+      awk '
+        /^[[:space:]]*#/ { next }
+        /^[[:space:]]*$/ { next }
+        {
+          # Look only at the users field (2nd colon-separated field)
+          n = split($0, f, ":")
+          if (n < 2) next
+          users = f[2]
 
-        # Re-scan original line for tokens
-        line = $0
-        while (match(line, /@[A-Za-z0-9._-]+/)) {
-          tok = substr(line, RSTART, RLENGTH)
-          sub(/^@/, "", tok)
-          print "oud:" tok
-          line = substr(line, RSTART + RLENGTH)
+          # Skip the ALL catch-all
+          check = users
+          gsub(/[[:space:]]/, "", check)
+          if (check == "ALL") next
+
+          # Pull AD groups (parenthesized) first, then strip them from the field
+          while (match(users, /\([^)]+\)/)) {
+            tok = substr(users, RSTART+1, RLENGTH-2)
+            print "ad:" tok
+            users = substr(users, 1, RSTART-1) substr(users, RSTART+RLENGTH)
+          }
+
+          # Now scan what remains for OUD netgroups (@name)
+          while (match(users, /@[A-Za-z0-9._-]+/)) {
+            tok = substr(users, RSTART+1, RLENGTH-1)
+            print "oud:" tok
+            users = substr(users, RSTART+RLENGTH)
+          }
         }
-        line = $0
-        while (match(line, /\([^)]+\)/)) {
-          tok = substr(line, RSTART+1, RLENGTH-2)
-          print "ad:" tok
-          line = substr(line, RSTART + RLENGTH)
-        }
-      }
-    ' "$conf" | awk '!seen[$0]++'
-  )
+      ' "$conf" | awk '!seen[$0]++'
+    )
 
   # Pad to longest group name for clean alignment
   max=0
