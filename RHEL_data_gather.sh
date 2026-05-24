@@ -170,8 +170,8 @@ RESOLV_NS=$(grep '^nameserver' /etc/resolv.conf 2>/dev/null \
 [ -z "$RESOLV_NS" ] && RESOLV_NS="n/a"
 
 # ── NFS / CIFS counts ─────────────────────────────────────────────────────────
-NFS_COUNT=$(df -hT 2>/dev/null | grep -cE '\bnfs\b|\bnfs4\b' || echo 0)
-CIFS_COUNT=$(df -hT 2>/dev/null | grep -c '\bcifs\b' || echo 0)
+NFS_COUNT=$(df -hT 2>/dev/null | grep -cE '\bnfs\b|\bnfs4\b'; true)
+CIFS_COUNT=$(df -hT 2>/dev/null | grep -c '\bcifs\b'; true)
 
 # ── Service status ────────────────────────────────────────────────────────────
 SSSD_SVC=$(systemctl is-active sssd 2>/dev/null || echo "inactive")
