@@ -166,15 +166,15 @@ input.srch:focus{outline:none}
 input.srch::placeholder{color:var(--text-d)}
 
 /* ── table ─────────────────────────────────────────────────────────────── */
-.tbl-wrap{border:1px solid var(--border);border-radius:12px;overflow:hidden;overflow-x:auto}
-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px}
+.tbl-wrap{border:1px solid var(--border);border-radius:12px;overflow-x:auto}
+table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px;border-radius:12px;overflow:hidden}
 
 thead th{
   background:var(--bg-row);padding:10px 14px;
   text-align:left;font-size:11px;font-weight:600;
   color:var(--text-m);text-transform:uppercase;
   letter-spacing:.6px;border-bottom:1px solid var(--border);
-  position:sticky;top:54px;z-index:10;
+  position:sticky;top:0;z-index:10;
 }
 thead th:first-child{width:155px}
 thead th:not(:last-child){border-right:1px solid var(--border)}
@@ -221,17 +221,17 @@ tr:hover .td-diff{background:#fee2e2}
 
 /* ── section divider rows ──────────────────────────────────────────────── */
 .tr-sec td{
-  background:var(--section-bg);
-  border-bottom:2px solid var(--section-bdr);
-  border-top:2px solid var(--section-bdr);
-  padding:10px 14px 10px 18px;
-  font-size:12px;font-weight:700;
-  color:var(--section-txt);text-transform:uppercase;letter-spacing:.8px;
+  background:#dde4fb;
+  border-bottom:2px solid #b0bef5;
+  border-top:3px solid #b0bef5;
+  padding:10px 14px;
+  font-size:11px;font-weight:700;
+  color:#2a3eb1;text-transform:uppercase;letter-spacing:1px;
 }
 .tr-sec td::before{
-  content:'';display:inline-block;width:3px;height:12px;
-  background:var(--section-txt);border-radius:2px;margin-right:8px;
-  vertical-align:middle;
+  content:'';display:inline-block;width:4px;height:11px;
+  background:#2a3eb1;border-radius:2px;margin-right:9px;
+  vertical-align:middle;opacity:.8;
 }
 
 /* ── cell multi-line layouts ───────────────────────────────────────────── */
@@ -642,10 +642,19 @@ function redraw() {
         }
         case 'auth_method': {
           const v = val || { oud: 'n/a', ad: 'n/a' };
+          // Convert id_provider value to YES/NO pill:
+          // any non-empty, non-'n/a' value means auth is configured = YES
+          const authPill = rawVal => {
+            const s = String(rawVal ?? '').trim().toLowerCase();
+            const active = s.length > 0 && s !== 'n/a';
+            return active
+              ? `<span class="bdg bdg-yes">YES</span>`
+              : `<span class="bdg bdg-no">NO</span>`;
+          };
           tr += `<td class="${cellClass}">
             <div class="kv-block">
-              <div class="kv-row"><span class="kv-label">OUD</span><span class="kv-val${isDiff?' diff-val':''}">${esc(v.oud)}</span></div>
-              <div class="kv-row"><span class="kv-label">AD</span><span class="kv-val${isDiff?' diff-val':''}">${esc(v.ad)}</span></div>
+              <div class="kv-row"><span class="kv-label">OUD</span><span class="kv-val">${authPill(v.oud)}</span></div>
+              <div class="kv-row"><span class="kv-label">AD</span><span class="kv-val">${authPill(v.ad)}</span></div>
             </div>${matchBadge(isDiff)}</td>`;
           break;
         }
