@@ -1,0 +1,3 @@
+fetch(window.location.href.replace(/\/[^\/]*$/, '/') + 'data/lmrg10ia.json')
+  .then(r => console.log('Status:', r.status, 'URL:', r.url))
+  .catch(e => console.log('Error:', e))
