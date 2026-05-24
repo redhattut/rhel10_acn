@@ -192,26 +192,53 @@ je() {
 }
 
 
-# OUTPUT — all via stdout, captured by pssh into the log file on the jumphost.
-# No scp needed. The wrapper reads the log and writes files locally.
-# Same pattern as the original Midrange_Mod_Report gather approach.
+# OUTPUT — all via stdout through pssh, written to log on the jumphost.
+# No scp needed. The wrapper reads the log and assembles files locally.
+#
+# Two output types:
+#   CSV_DATA:<hostname>:<csv_row>
+#   JSON_START:<hostname>
+#   <json line 1>
+#   <json line 2>
+#   ...
+#   JSON_END:<hostname>
+#
+# Writing JSON as individual echo lines (not inside $()) avoids shell
+# command-substitution truncation that occurs with large single-line output.
 # ═════════════════════════════════════════════════════════════════════════════
 
 # CSV line (13 columns, unchanged format)
 echo "CSV_DATA:${HOSTNAME}:${HOSTNAME},${LOCATION},${MNEMONIC},${ENVIRONMENT},${RHEL_RELEASE},${SSSD},${LDAP_QUERY},${AD_QUERY},${DUAL_AUTH_PKG},${NSSWITCH},${KRB5_KEYTAB},${XQVSMLINAUTHSCAN_SUDO},${XQMRGLINENG_SUDO}"
 
-# JSON — emitted as a single line: JSON_DATA:<hostname>:<json>
-# The wrapper extracts the JSON and writes it to the data directory locally.
-# Single-line format: all newlines replaced with \n inside the JSON string.
-JSON_ONELINE=$(printf '{"host":"%s","collected_at":"%s","reachable":true,"data":{"location":"%s","environment":"%s","mnemonic":"%s","timezone":"%s","cpu":"%s","cores":"%s","sockets":"%s","memory":"%s","rhel_version":"%s","kernel":"%s","selinux":"%s","hugepages":"%s","resolv_search":"%s","resolv_ns":"%s","nfs_count":%s,"cifs_count":%s,"volumes":[%s],"auth_method":{"oud":"%s","ad":"%s"},"auth_query":{"oud":"%s","ad":"%s"},"services":{"sssd":"%s","sshd":"%s"}}}' \
-    "$(je "$HOSTNAME")" "$COLLECTED_AT" \
-    "$(je "$LOCATION")" "$(je "$ENVIRONMENT")" "$(je "$MNEMONIC")" "$(je "$TIMEZONE")" \
-    "$(je "$CPU")" "$(je "$CORES")" "$(je "$SOCKETS")" "$(je "$MEMORY")" \
-    "$(je "$RHEL_RELEASE")" "$(je "$KERNEL")" "$(je "$SELINUX")" "$(je "$HUGEPAGES")" \
-    "$(je "$RESOLV_SEARCH")" "$(je "$RESOLV_NS")" \
-    "$NFS_COUNT" "$CIFS_COUNT" "${VOLUMES_JSON_INNER}" \
-    "$(je "$SSSD")" "$(je "$SSSD")" \
-    "$(je "$LDAP_QUERY")" "$(je "$AD_QUERY")" \
-    "$(je "$SSSD_SVC")" "$(je "$SSHD_SVC")")
-
-echo "JSON_DATA:${HOSTNAME}:${JSON_ONELINE}"
+# JSON — emitted as multiple lines between start/end markers.
+# The wrapper collects lines between JSON_START and JSON_END and writes
+# the file locally. No $() capture means no truncation regardless of size.
+echo "JSON_START:${HOSTNAME}"
+echo "{"
+echo "  \"host\":         \"$(je "$HOSTNAME")\","
+echo "  \"collected_at\": \"$COLLECTED_AT\","
+echo "  \"reachable\":    true,"
+echo "  \"data\": {"
+echo "    \"location\":      \"$(je "$LOCATION")\","
+echo "    \"environment\":   \"$(je "$ENVIRONMENT")\","
+echo "    \"mnemonic\":      \"$(je "$MNEMONIC")\","
+echo "    \"timezone\":      \"$(je "$TIMEZONE")\","
+echo "    \"cpu\":           \"$(je "$CPU")\","
+echo "    \"cores\":         \"$(je "$CORES")\","
+echo "    \"sockets\":       \"$(je "$SOCKETS")\","
+echo "    \"memory\":        \"$(je "$MEMORY")\","
+echo "    \"rhel_version\":  \"$(je "$RHEL_RELEASE")\","
+echo "    \"kernel\":        \"$(je "$KERNEL")\","
+echo "    \"selinux\":       \"$(je "$SELINUX")\","
+echo "    \"hugepages\":     \"$(je "$HUGEPAGES")\","
+echo "    \"resolv_search\": \"$(je "$RESOLV_SEARCH")\","
+echo "    \"resolv_ns\":     \"$(je "$RESOLV_NS")\","
+echo "    \"nfs_count\":     ${NFS_COUNT},"
+echo "    \"cifs_count\":    ${CIFS_COUNT},"
+echo "    \"volumes\":       [${VOLUMES_JSON_INNER}],"
+echo "    \"auth_method\": {\"oud\": \"$(je "$SSSD")\", \"ad\": \"$(je "$SSSD")\"},"
+echo "    \"auth_query\":  {\"oud\": \"$(je "$LDAP_QUERY")\", \"ad\": \"$(je "$AD_QUERY")\"},"
+echo "    \"services\":    {\"sssd\": \"$(je "$SSSD_SVC")\", \"sshd\": \"$(je "$SSHD_SVC")\"}"
+echo "  }"
+echo "}"
+echo "JSON_END:${HOSTNAME}"

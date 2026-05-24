@@ -131,6 +131,9 @@ echo "Host,Location,Mnemonic,Environment,OS Version,Authentication Method,OUD Qu
 CSV_WRITTEN=0
 JSON_COLLECTED=0
 FAILED=0
+JSON_CURRENT_HOST=""
+JSON_BUFFER=""
+JSON_COLLECTING=false
 
 # Track which hosts we saw FAILURE for (to avoid double-processing)
 declare -A FAILED_HOSTS
@@ -148,19 +151,41 @@ while IFS= read -r line; do
         continue
     fi
 
-    # ── JSON data line — write file locally from pssh stdout ────────────────────
-    # Format: JSON_DATA:<hostname>:<json_content>
-    # No scp needed — content came through pssh stdout same as CSV.
-    if [[ "$line" == JSON_DATA:*:* ]]; then
-        rest="${line#JSON_DATA:}"
-        json_host="${rest%%:*}"
-        json_content="${rest#*:}"
-        json_dest="${COMPARE_DATA_DIR}/${json_host}.json"
-        printf '%s' "$json_content" > "$json_dest"
-        chmod 644 "$json_dest"
-        chcon -t httpd_sys_content_t "$json_dest" 2>/dev/null ||             restorecon "$json_dest" 2>/dev/null || true
-        echo "$(date "+%a %b %d %T %Z %Y"): JSON written locally: ${json_host} -> ${json_dest}"
-        JSON_COLLECTED=$((JSON_COLLECTED + 1))
+    # ── JSON start marker — begin accumulating JSON lines for this host ─────────
+    # Format: JSON_START:<hostname>
+    if [[ "$line" == JSON_START:* ]]; then
+        JSON_CURRENT_HOST="${line#JSON_START:}"
+        JSON_CURRENT_HOST="${JSON_CURRENT_HOST%$'\r'}"  # strip CR if present
+        JSON_BUFFER=""
+        JSON_COLLECTING=true
+        continue
+    fi
+
+    # ── JSON end marker — write accumulated JSON to file ──────────────────────
+    # Format: JSON_END:<hostname>
+    if [[ "$line" == JSON_END:* ]]; then
+        if [[ -n "$JSON_CURRENT_HOST" && -n "$JSON_BUFFER" ]]; then
+            json_dest="${COMPARE_DATA_DIR}/${JSON_CURRENT_HOST}.json"
+            printf '%s
+' "$JSON_BUFFER" > "$json_dest"
+            chmod 644 "$json_dest"
+            chcon -t httpd_sys_content_t "$json_dest" 2>/dev/null ||                 restorecon "$json_dest" 2>/dev/null || true
+            echo "$(date "+%a %b %d %T %Z %Y"): JSON written locally: ${JSON_CURRENT_HOST} -> ${json_dest}"
+            JSON_COLLECTED=$((JSON_COLLECTED + 1))
+        fi
+        JSON_CURRENT_HOST=""
+        JSON_BUFFER=""
+        JSON_COLLECTING=false
+        continue
+    fi
+
+    # ── JSON body line — accumulate while between START and END ───────────────
+    if [[ "$JSON_COLLECTING" == true ]]; then
+        if [[ -z "$JSON_BUFFER" ]]; then
+            JSON_BUFFER="$line"
+        else
+            JSON_BUFFER="${JSON_BUFFER}"$'\n'"${line}"
+        fi
         continue
     fi
 
