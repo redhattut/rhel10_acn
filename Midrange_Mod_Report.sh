@@ -5,17 +5,22 @@
 #   - Accepts -m (mail) and -h <hosts_file> flags
 #   - Auto-generates hosts list from RHEL_INVENTORY.dat when no -h given
 #   - Runs RHEL_data_gather.sh on all hosts via pssh in one pass
-#   - Produces Midrange_Mod_Report.csv (same path, same column order)
-#   - Archives CSV with date stamp, prunes after DAYS_TO_KEEP
-#   - Generates Midrange_Mod/index.html archive browser (your CSS preserved)
+#   - Produces Midrange_Mod_Report.csv (same path, same 13-column order)
+#   - Archives CSV, prunes after DAYS_TO_KEEP, generates Midrange_Mod/index.html
 #   - Optionally mails the CSV
 #
 # New in this version:
-#   - Same pssh run also writes /tmp/compare_<host>.json on each host
+#   - Same pssh run also writes /tmp/compare_<host>.json on each remote host
 #   - Wrapper scps those JSON files → /data/MRGeng/Compare/data/<host>.json
-#   - Unreachable/failed hosts get a stub JSON written locally (no scp needed)
 #   - JSON files are always overwritten — no archive
-#   - The -h <hosts_file> flag applies to BOTH outputs (CSV + JSON)
+#   - Unreachable/failed hosts get a stub JSON written locally
+#   - The -h <hosts_file> flag applies to BOTH outputs simultaneously
+#
+# Parser design: RHEL_data_gather.sh tags every output line with the hostname
+#   CSV_DATA:<hostname>:<csv_fields>
+#   JSON_WRITTEN:<hostname>:/tmp/compare_<hostname>.json
+# This makes parsing safe against pssh --inline-stdout interleaving output
+# from multiple hosts in parallel — no fragile state machine needed.
 #
 # Usage:
 #   ./Midrange_Mod_Report.sh [-m] [-h <hosts_file>]
@@ -29,15 +34,14 @@ DEFAULT_HOSTS_FILE="$SCRIPTS_DIR/rhel_hosts.txt"
 INPUT_FILE="$SCRIPTS_DIR/RHEL_data_gather.log"
 OUTPUT_CSV="/usr/local/midweb/RHEL/Midrange_Mod_Report.csv"
 
-# Compare JSON data directory (overwritten each run, no archive)
-COMPARE_DATA_DIR="/data/MRGeng/Compare/data"
+# Real directory inside the web root — no symlink, no httpd config changes needed.
+# httpd serves JSON files directly. Must be world-readable (see chmod 644 below).
+COMPARE_DATA_DIR="/usr/local/midweb/RHEL/compare/data"
 
-# Archive / index settings (unchanged)
 ARCHIVE_DIR="/usr/local/midweb/RHEL/Midrange_Mod/archive"
 INDEX_FILE="/usr/local/midweb/RHEL/Midrange_Mod/index.html"
 DAYS_TO_KEEP=31
 
-# pssh settings
 PSSH_BIN="/usr/local/pssh/bin/pssh"
 SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR"
 SSH_TIMEOUT=30
@@ -66,7 +70,7 @@ fi
 
 mkdir -p "$COMPARE_DATA_DIR"
 
-# ── Run gather script on all hosts via pssh (single SSH session per host) ─────
+# ── Run gather script on all hosts via pssh ───────────────────────────────────
 echo "$(date "+%a %b %d %T %Z %Y"): Running RHEL_data_gather.sh on all hosts"
 
 cat "$SCRIPTS_DIR/RHEL_data_gather.sh" \
@@ -80,7 +84,7 @@ cat "$SCRIPTS_DIR/RHEL_data_gather.sh" \
 
 echo "$(date "+%a %b %d %T %Z %Y"): Finished gathering. Result in: $INPUT_FILE"
 
-# ── Helper: write unreachable JSON stub (no scp needed) ───────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 write_unreachable_json() {
     local host="$1"
     local reason="${2:-Host unreachable or SSH failed during pssh collection}"
@@ -94,10 +98,10 @@ write_unreachable_json() {
   "error":        "${reason}"
 }
 STUB
+    chmod 644 "${COMPARE_DATA_DIR}/${host}.json"
     echo "$(date "+%a %b %d %T %Z %Y"): Unreachable stub written for ${host}"
 }
 
-# ── Helper: scp JSON from remote host → COMPARE_DATA_DIR ──────────────────────
 scp_json_back() {
     local host="$1"
     local remote_path="$2"
@@ -107,91 +111,89 @@ scp_json_back() {
     if [[ $? -eq 0 ]]; then
         echo "$(date "+%a %b %d %T %Z %Y"): JSON collected: ${host} → ${dest}"
         ssh $SSH_OPTS "root@${host}" "rm -f ${remote_path}" 2>/dev/null
+        chmod 644 "$dest"
     else
         echo "$(date "+%a %b %d %T %Z %Y"): WARN — scp failed for ${host}, writing stub"
         write_unreachable_json "$host" "scp of JSON failed after successful pssh run"
     fi
 }
 
-# ── Parse pssh output → CSV rows + trigger JSON scp ──────────────────────────
-# pssh inline-stdout format per host:
+# ── Parse pssh log — tag-based, interleave-safe ───────────────────────────────
+# RHEL_data_gather.sh emits two tagged line types:
+#
+#   CSV_DATA:<hostname>:<13-col-csv-row>
+#   JSON_WRITTEN:<hostname>:/tmp/compare_<hostname>.json
+#
+# pssh also emits header lines for each host:
 #   [N] HH:MM:SS [SUCCESS] hostname
-#   SUCCESS
-#   <csv_line>
-#   JSON_WRITTEN:/tmp/compare_hostname.json
-# or:
-#   [N] HH:MM:SS [FAILURE] hostname ...error...
+#   [N] HH:MM:SS [FAILURE] hostname ...
+#
+# We parse by line prefix — no assumptions about ordering between hosts.
+# All CSV_DATA lines go to the CSV. All JSON_WRITTEN lines trigger an scp.
+# All FAILURE lines get a placeholder CSV row and an unreachable JSON stub.
 
 echo "$(date "+%a %b %d %T %Z %Y"): Generating CSV from $INPUT_FILE"
 
 echo "Host,Location,Mnemonic,Environment,OS Version,Authentication Method,OUD Query,AD Query,pnc_join_ad,Nsswitch,KRB5 Keytab,xqvsmlinauthscan Sudo,xqmrglineng Sudo" \
     > "$OUTPUT_CSV"
 
-CURRENT_HOST=""
-EXPECT_SUCCESS=false
-EXPECT_CSV=false
 CSV_WRITTEN=0
-JSON_WRITTEN=0
+JSON_COLLECTED=0
 FAILED=0
+
+# Track which hosts we saw FAILURE for (to avoid double-processing)
+declare -A FAILED_HOSTS
 
 while IFS= read -r line; do
 
-    # ── pssh SUCCESS header ────────────────────────────────────────────────────
-    if [[ "$line" =~ \[SUCCESS\][[:space:]]+([^[:space:]]+) ]]; then
-        CURRENT_HOST="${BASH_REMATCH[1]}"
-        EXPECT_SUCCESS=true
-        EXPECT_CSV=false
-        continue
-    fi
-
-    # ── pssh FAILURE header ────────────────────────────────────────────────────
-    if [[ "$line" =~ \[FAILURE\] ]]; then
-        # Extract hostname — typically 4th space-delimited token after pssh prefix
-        FAILED_HOST=$(echo "$line" | awk '{print $4}')
-        [[ -z "$FAILED_HOST" ]] && FAILED_HOST="unknown"
-        echo "$FAILED_HOST,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a" >> "$OUTPUT_CSV"
-        write_unreachable_json "$FAILED_HOST"
-        FAILED=$((FAILED + 1))
-        EXPECT_SUCCESS=false
-        EXPECT_CSV=false
-        continue
-    fi
-
-    # ── "SUCCESS" keyword from gather script ───────────────────────────────────
-    if $EXPECT_SUCCESS && [[ "$line" == "SUCCESS" ]]; then
-        EXPECT_SUCCESS=false
-        EXPECT_CSV=true
-        continue
-    fi
-
-    # ── CSV data line ──────────────────────────────────────────────────────────
-    if $EXPECT_CSV && [[ -n "$line" ]] && [[ "$line" != JSON_WRITTEN:* ]]; then
-        echo "$line" >> "$OUTPUT_CSV"
+    # ── CSV data line ─────────────────────────────────────────────────────────
+    # Format: CSV_DATA:<hostname>:<csv_row>
+    if [[ "$line" == CSV_DATA:*:* ]]; then
+        # Strip the CSV_DATA:<hostname>: prefix — the rest is the actual CSV row
+        csv_row="${line#CSV_DATA:}"       # removes "CSV_DATA:"
+        csv_row="${csv_row#*:}"           # removes "<hostname>:"
+        echo "$csv_row" >> "$OUTPUT_CSV"
         CSV_WRITTEN=$((CSV_WRITTEN + 1))
-        EXPECT_CSV=false
         continue
     fi
 
-    # ── JSON_WRITTEN signal — scp the file back ────────────────────────────────
-    if [[ "$line" == JSON_WRITTEN:/tmp/compare_*.json ]]; then
-        REMOTE_JSON="${line#JSON_WRITTEN:}"
-        # Derive hostname from filename: /tmp/compare_lmrg34ja.json → lmrg34ja
-        HOST_FROM_JSON=$(basename "$REMOTE_JSON" .json)
-        HOST_FROM_JSON="${HOST_FROM_JSON#compare_}"
-        scp_json_back "$HOST_FROM_JSON" "$REMOTE_JSON"
-        JSON_WRITTEN=$((JSON_WRITTEN + 1))
+    # ── JSON ready — scp it back ──────────────────────────────────────────────
+    # Format: JSON_WRITTEN:<hostname>:/tmp/compare_<hostname>.json
+    if [[ "$line" == JSON_WRITTEN:*:* ]]; then
+        rest="${line#JSON_WRITTEN:}"      # removes "JSON_WRITTEN:"
+        host="${rest%%:*}"               # everything before first remaining ":"
+        remote_path="${rest#*:}"         # everything after first remaining ":"
+        scp_json_back "$host" "$remote_path"
+        JSON_COLLECTED=$((JSON_COLLECTED + 1))
         continue
     fi
+
+    # ── pssh FAILURE header ───────────────────────────────────────────────────
+    # Format: [N] HH:MM:SS [FAILURE] hostname ...
+    if [[ "$line" =~ \[FAILURE\] ]]; then
+        # hostname is the token immediately after [FAILURE]
+        failed_host=$(echo "$line" | grep -oP '\[FAILURE\]\s+\K\S+')
+        if [[ -n "$failed_host" && -z "${FAILED_HOSTS[$failed_host]}" ]]; then
+            FAILED_HOSTS[$failed_host]=1
+            echo "$failed_host,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a" \
+                >> "$OUTPUT_CSV"
+            write_unreachable_json "$failed_host"
+            FAILED=$((FAILED + 1))
+        fi
+        continue
+    fi
+
+    # All other lines (pssh headers, blank lines) are ignored
 
 done < "$INPUT_FILE"
 
-# Remove any accidental blank/header-only lines from CSV
-sed -i '/^10,n\/a/d' "$OUTPUT_CSV"
+# ── Remove any stray blank/malformed CSV lines ────────────────────────────────
+sed -i '/^[[:space:]]*$/d' "$OUTPUT_CSV"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo "$(date "+%a %b %d %T %Z %Y"): CSV Report generation complete"
-echo "$(date "+%a %b %d %T %Z %Y"): CSV rows written : $CSV_WRITTEN"
-echo "$(date "+%a %b %d %T %Z %Y"): JSON files written: $JSON_WRITTEN"
+echo "$(date "+%a %b %d %T %Z %Y"): CSV rows written  : $CSV_WRITTEN"
+echo "$(date "+%a %b %d %T %Z %Y"): JSON files written: $JSON_COLLECTED"
 echo "$(date "+%a %b %d %T %Z %Y"): Failed hosts      : $FAILED"
 echo "$(date "+%a %b %d %T %Z %Y"): CSV saved to $OUTPUT_CSV"
 echo "$(date "+%a %b %d %T %Z %Y"): JSON saved to $COMPARE_DATA_DIR"
@@ -220,7 +222,6 @@ else
     echo "$(date "+%a %b %d %T %Z %Y"): Warning: $OUTPUT_CSV not found for archiving"
 fi
 
-# Prune old archives
 DELETED_COUNT=$(find "$ARCHIVE_DIR" -name "Midrange_Mod_Report_*.csv" \
     -type f -mtime +$DAYS_TO_KEEP -delete -print | wc -l)
 if [ "$DELETED_COUNT" -gt 0 ]; then

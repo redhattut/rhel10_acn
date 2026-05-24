@@ -4,10 +4,14 @@
 # Runs REMOTELY on each host via pssh (piped via stdin by Midrange_Mod_Report.sh).
 #
 # Produces TWO outputs in one SSH session:
-#   1. stdout  → "SUCCESS\n<csv_line>\nJSON_WRITTEN:<path>"
-#                consumed by Midrange_Mod_Report.sh to build the CSV report
+#   1. stdout  → tagged lines consumed by Midrange_Mod_Report.sh
+#                CSV_DATA:<hostname>:<csv_fields>
+#                JSON_WRITTEN:<hostname>:/tmp/compare_<hostname>.json
 #   2. file    → /tmp/compare_<hostname>.json
 #                scp'd back to /data/MRGeng/Compare/data/ by the wrapper
+#
+# Lines are prefixed with hostname so they are self-identifying even when
+# pssh --inline-stdout interleaves output from parallel host executions.
 #
 # CSV column order (unchanged from original):
 #   Host, Location, Mnemonic, Environment, OS Version, Authentication Method,
@@ -141,11 +145,9 @@ HUGEPAGES=$(grep hugepage /etc/sysctl.conf /etc/sysctl.d/*.conf 2>/dev/null \
 [ -z "$HUGEPAGES" ] && HUGEPAGES="not set"
 
 # ── Volumes ───────────────────────────────────────────────────────────────────
-# Build a JSON array: [{"mp":"/boot","sz":"2.0G"}, ...]
 VOLUMES_JSON_INNER=""
 sep=""
 
-# Mounted filesystems (block devices only)
 while IFS= read -r line; do
     mp=$(echo "$line" | awk '{print $1}')
     sz=$(echo "$line" | awk '{print $2}')
@@ -153,7 +155,6 @@ while IFS= read -r line; do
     sep=","
 done < <(df -hP 2>/dev/null | grep '^/dev' | awk '{print $6" "$2}' | sort)
 
-# Swap
 while IFS= read -r line; do
     sz=$(echo "$line" | awk '{print $1}')
     [ -n "$sz" ] && VOLUMES_JSON_INNER+="${sep}{\"mp\":\"swap\",\"sz\":\"${sz}\"}" && sep=","
@@ -179,18 +180,7 @@ SSHD_SVC=$(systemctl is-active sshd 2>/dev/null || echo "inactive")
 # ── Timestamp ─────────────────────────────────────────────────────────────────
 COLLECTED_AT=$(date '+%Y-%m-%dT%H:%M:%S')
 
-# ═════════════════════════════════════════════════════════════════════════════
-# OUTPUT 1 — CSV stdout (consumed by Midrange_Mod_Report.sh, format unchanged)
-# ═════════════════════════════════════════════════════════════════════════════
-echo "SUCCESS"
-echo "$HOSTNAME,$LOCATION,$MNEMONIC,$ENVIRONMENT,$RHEL_RELEASE,$SSSD,$LDAP_QUERY,$AD_QUERY,$DUAL_AUTH_PKG,$NSSWITCH,$KRB5_KEYTAB,$XQVSMLINAUTHSCAN_SUDO,$XQMRGLINENG_SUDO"
-
-# ═════════════════════════════════════════════════════════════════════════════
-# OUTPUT 2 — JSON file for Server Comparator (scp'd back by the wrapper)
-# ═════════════════════════════════════════════════════════════════════════════
-JSON_FILE="/tmp/compare_${HOSTNAME}.json"
-
-# Safe JSON string escaping (no python/jq needed)
+# ── JSON escape helper ────────────────────────────────────────────────────────
 je() {
     local s="$1"
     s="${s//\\/\\\\}"
@@ -200,6 +190,11 @@ je() {
     s="${s//$'\t'/\\t}"
     printf '%s' "$s"
 }
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Write JSON file to /tmp on the remote host
+# ═════════════════════════════════════════════════════════════════════════════
+JSON_FILE="/tmp/compare_${HOSTNAME}.json"
 
 cat > "$JSON_FILE" << JSONEOF
 {
@@ -240,5 +235,14 @@ cat > "$JSON_FILE" << JSONEOF
 }
 JSONEOF
 
-# Signal to wrapper that JSON is ready to scp
-echo "JSON_WRITTEN:${JSON_FILE}"
+# ═════════════════════════════════════════════════════════════════════════════
+# OUTPUT — tagged lines to stdout
+# Each line is prefixed HOST:<hostname>: so the wrapper can parse by content,
+# not by position — safe against pssh parallel interleaving.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# CSV line (13 columns, unchanged format)
+echo "CSV_DATA:${HOSTNAME}:${HOSTNAME},${LOCATION},${MNEMONIC},${ENVIRONMENT},${RHEL_RELEASE},${SSSD},${LDAP_QUERY},${AD_QUERY},${DUAL_AUTH_PKG},${NSSWITCH},${KRB5_KEYTAB},${XQVSMLINAUTHSCAN_SUDO},${XQMRGLINENG_SUDO}"
+
+# Signal that JSON is ready for scp
+echo "JSON_WRITTEN:${HOSTNAME}:${JSON_FILE}"
