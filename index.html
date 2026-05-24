@@ -222,9 +222,16 @@ tr:hover .td-diff{background:#fee2e2}
 /* ── section divider rows ──────────────────────────────────────────────── */
 .tr-sec td{
   background:var(--section-bg);
-  border-bottom:1px solid var(--section-bdr);
-  padding:6px 14px;font-size:11px;font-weight:700;
+  border-bottom:2px solid var(--section-bdr);
+  border-top:2px solid var(--section-bdr);
+  padding:10px 14px 10px 18px;
+  font-size:12px;font-weight:700;
   color:var(--section-txt);text-transform:uppercase;letter-spacing:.8px;
+}
+.tr-sec td::before{
+  content:'';display:inline-block;width:3px;height:12px;
+  background:var(--section-txt);border-radius:2px;margin-right:8px;
+  vertical-align:middle;
 }
 
 /* ── cell multi-line layouts ───────────────────────────────────────────── */
@@ -587,18 +594,23 @@ function redraw() {
           break;
         }
         case 'volumes': {
-          // Collect all hosts' volumes for per-row diff comparison
+          // Show only these mount points in this order
+          const SHOW_MOUNTS = ['/boot', '/', 'swap', '/home', '/opt', '/var', '/tmp', '/app', '/opt/app'];
           const allVols = row.vals.filter(v => v.status === 'ok').map(v => v.value);
           let inner = '<div class="kv-block">';
           if (Array.isArray(val)) {
-            val.forEach((v, vi) => {
-              // Compare this mount's size against same index in other hosts
-              const others = allVols.filter((_,ai) => ai !== row.vals.indexOf(cell));
-              const thisSz = v.sz;
-              const rowDiff = others.some(o => Array.isArray(o) && o[vi]?.sz !== thisSz);
+            const mpMap = {};
+            val.forEach(v => { mpMap[v.mp] = v.sz; });
+            SHOW_MOUNTS.forEach(mp => {
+              const thisSz = mpMap[mp] ?? '\u2014';
+              const rowDiff = allVols.some(other => {
+                if (!Array.isArray(other)) return false;
+                const om = {}; other.forEach(v => { om[v.mp] = v.sz; });
+                return (om[mp] ?? '\u2014') !== thisSz;
+              });
               inner += `<div class="kv-row">
-                <span class="kv-label">${esc(v.mp)}</span>
-                <span class="kv-val${rowDiff && isDiff ? ' diff-val' : ''}">${esc(v.sz)}</span>
+                <span class="kv-label">${esc(mp)}</span>
+                <span class="kv-val${rowDiff && isDiff ? ' diff-val' : ''}">${esc(thisSz)}</span>
               </div>`;
             });
           } else {
