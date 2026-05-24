@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Server Config Comparator</title>
+<style>
+/* ── reset ─────────────────────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+/* ── variables ─────────────────────────────────────────────────────────── */
+:root{
+  --bg-page:    #f4f5f7;
+  --bg-card:    #ffffff;
+  --bg-row:     #f9fafb;
+  --bg-hover:   #f3f4f6;
+  --border:     #e2e4e9;
+  --border-s:   #f0f1f4;
+  --text:       #1a1d23;
+  --text-m:     #6b7280;
+  --text-d:     #9399a6;
+  --text-hi:    #111827;
+  --blue:       #2563eb;
+  --blue-bg:    #eff6ff;
+  --blue-bdr:   #bfdbfe;
+  --green:      #16a34a;
+  --green-bg:   #f0fdf4;
+  --green-bdr:  #bbf7d0;
+  --red:        #dc2626;
+  --red-bg:     #fff5f5;
+  --red-dark:   #991b1b;
+  --red-bdr:    #fecaca;
+  --yellow-bg:  #fffbeb;
+  --yellow-bdr: #fcd34d;
+  --yellow-txt: #92400e;
+  --yellow-bod: #78350f;
+  --section-bg: #eef2ff;
+  --section-bdr:#c7d7fb;
+  --section-txt:#3b5bdb;
+  --mono: 'SF Mono','Consolas','Liberation Mono',monospace;
+  --sans: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+}
+
+/* ── base ──────────────────────────────────────────────────────────────── */
+html,body{min-height:100%}
+body{background:var(--bg-page);font-family:var(--sans);color:var(--text);font-size:14px;line-height:1.5}
+
+/* ── topbar ────────────────────────────────────────────────────────────── */
+.topbar{
+  background:var(--bg-card);
+  border-bottom:1px solid var(--border);
+  padding:0 24px;height:54px;
+  display:flex;align-items:center;gap:12px;
+  position:sticky;top:0;z-index:50;
+}
+.topbar-icon{
+  width:30px;height:30px;background:var(--blue-bg);
+  border-radius:8px;display:flex;align-items:center;
+  justify-content:center;color:var(--blue);flex-shrink:0;
+}
+.topbar-title{font-size:15px;font-weight:600;color:var(--text-hi)}
+.topbar-sub{font-size:13px;color:var(--text-d);margin-left:2px}
+.topbar-right{margin-left:auto;font-size:12px;color:var(--text-d);display:flex;align-items:center;gap:5px}
+
+/* ── page ──────────────────────────────────────────────────────────────── */
+.page{padding:22px 24px 60px;max-width:1120px;margin:0 auto}
+
+/* ── card ──────────────────────────────────────────────────────────────── */
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px 22px;margin-bottom:16px}
+.card-lbl{font-size:11px;font-weight:600;color:var(--text-d);margin-bottom:14px;text-transform:uppercase;letter-spacing:.7px}
+
+/* ── host inputs ───────────────────────────────────────────────────────── */
+.host-grid{display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:10px;align-items:flex-end;margin-bottom:12px}
+@media(max-width:680px){.host-grid{grid-template-columns:1fr}}
+.field{display:flex;flex-direction:column;gap:5px}
+.field-lbl{font-size:12px;font-weight:500;color:var(--text-m)}
+input.hin{
+  font-family:var(--mono);font-size:13px;
+  padding:8px 12px;border-radius:8px;
+  border:1px solid #d1d5db;background:var(--bg-card);
+  color:var(--text);width:100%;
+  transition:border-color .15s,box-shadow .15s;
+}
+input.hin:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px #dbeafe}
+input.hin::placeholder{color:var(--text-d)}
+input.hin.ok{border-color:var(--green);background:var(--green-bg)}
+input.hin.er{border-color:var(--red);background:#fef2f2}
+
+.btn-row{display:flex;gap:8px;flex-wrap:wrap}
+.btn-cmp{
+  background:var(--blue);color:#fff;border:none;
+  border-radius:8px;padding:9px 20px;font-size:13px;
+  font-weight:500;cursor:pointer;white-space:nowrap;
+  font-family:var(--sans);display:flex;align-items:center;gap:6px;
+  transition:background .12s;
+}
+.btn-cmp:hover{background:#1d4ed8}
+.btn-cmp:active{transform:scale(.98)}
+.btn-ghost{
+  background:var(--bg-card);color:var(--text-m);
+  border:1px solid var(--border);border-radius:8px;
+  padding:8px 14px;font-size:13px;cursor:pointer;
+  font-family:var(--sans);transition:background .12s;
+}
+.btn-ghost:hover{background:var(--bg-row)}
+
+/* ── chips ─────────────────────────────────────────────────────────────── */
+.chips{display:flex;flex-wrap:wrap;gap:8px;padding-top:14px;border-top:1px solid var(--border-s);margin-top:6px}
+.chip{
+  display:flex;align-items:center;gap:8px;
+  background:var(--bg-row);border:1px solid var(--border);
+  border-radius:20px;padding:5px 13px;
+}
+.cdot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.cdot-ok{background:var(--green)}
+.cdot-er{background:var(--red)}
+.chip-name{font-size:13px;font-weight:600;color:var(--text)}
+.chip-meta{font-size:11px;color:var(--text-d);margin-left:4px}
+
+/* ── alerts ────────────────────────────────────────────────────────────── */
+.alert{
+  display:flex;align-items:flex-start;gap:12px;
+  border-radius:10px;padding:13px 16px;margin-bottom:12px;font-size:13px;
+}
+.alert-icon{font-size:18px;flex-shrink:0;margin-top:1px}
+.alert-title{font-weight:600;margin-bottom:2px}
+.alert-body{font-size:12px;line-height:1.6}
+.alert-warn{background:var(--yellow-bg);border:1px solid var(--yellow-bdr)}
+.alert-warn .alert-icon,.alert-warn .alert-title{color:var(--yellow-txt)}
+.alert-warn .alert-body{color:var(--yellow-bod)}
+.alert-err{background:#fef2f2;border:1px solid #fca5a5}
+.alert-err .alert-icon,.alert-err .alert-title{color:var(--red)}
+.alert-err .alert-body{color:#7f1d1d}
+
+/* ── summary stats ─────────────────────────────────────────────────────── */
+.stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px}
+.stat{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:12px 20px;min-width:90px}
+.stat-n{font-size:28px;font-weight:600;line-height:1;color:var(--text)}
+.stat-l{font-size:11px;color:var(--text-d);margin-top:3px;font-weight:500;text-transform:uppercase;letter-spacing:.5px}
+.stat.sg .stat-n{color:var(--green)}
+.stat.sr .stat-n{color:var(--red)}
+.stat.sb .stat-n{color:var(--blue)}
+
+/* ── filter row ────────────────────────────────────────────────────────── */
+.filter-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.tab{
+  background:var(--bg-card);border:1px solid var(--border);
+  border-radius:8px;padding:6px 14px;font-size:13px;
+  color:var(--text-m);cursor:pointer;font-family:var(--sans);
+  transition:all .12s;
+}
+.tab:hover{background:var(--bg-row);color:var(--text)}
+.tab.on{background:var(--blue-bg);border-color:var(--blue-bdr);color:var(--blue);font-weight:500}
+.srch-wrap{
+  margin-left:auto;display:flex;align-items:center;gap:7px;
+  background:var(--bg-card);border:1px solid #d1d5db;
+  border-radius:8px;padding:0 10px;
+}
+.srch-icon{color:var(--text-d);font-size:14px}
+input.srch{
+  border:none;background:transparent;padding:7px 0;
+  font-size:13px;color:var(--text);width:170px;
+  font-family:var(--sans);
+}
+input.srch:focus{outline:none}
+input.srch::placeholder{color:var(--text-d)}
+
+/* ── table ─────────────────────────────────────────────────────────────── */
+.tbl-wrap{border:1px solid var(--border);border-radius:12px;overflow:hidden;overflow-x:auto}
+table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px}
+
+thead th{
+  background:var(--bg-row);padding:10px 14px;
+  text-align:left;font-size:11px;font-weight:600;
+  color:var(--text-m);text-transform:uppercase;
+  letter-spacing:.6px;border-bottom:1px solid var(--border);
+  position:sticky;top:54px;z-index:10;
+}
+thead th:first-child{width:155px}
+thead th:not(:last-child){border-right:1px solid var(--border)}
+
+td{
+  padding:10px 14px;vertical-align:top;
+  word-break:break-word;border-bottom:1px solid var(--border-s);
+}
+tr:last-child td{border-bottom:none}
+
+.td-key{
+  background:var(--bg-row);font-size:12px;font-weight:600;
+  color:#374151;white-space:nowrap;
+  border-right:1px solid var(--border);
+}
+td:not(.td-key):not(:last-child){border-right:1px solid var(--border-s)}
+
+tr:hover td{background:var(--bg-hover)}
+tr:hover .td-key{background:#ececee}
+tr:hover .td-diff{background:#fee2e2}
+
+.td-match{color:var(--text)}
+.td-diff{color:var(--red-dark);background:var(--red-bg)}
+.td-miss{color:#c4c9d4;font-style:italic}
+.td-na{color:var(--text-d)}
+
+/* ── badges ────────────────────────────────────────────────────────────── */
+.bdg{
+  display:inline-flex;align-items:center;gap:3px;
+  border-radius:999px;padding:2px 8px;font-size:11px;
+  font-weight:500;border:1px solid;white-space:nowrap;
+  vertical-align:middle;
+}
+.bdg-ok  {background:var(--green-bg);color:#15803d;border-color:var(--green-bdr)}
+.bdg-diff{background:#fef2f2;color:#b91c1c;border-color:var(--red-bdr)}
+.bdg-miss{background:var(--bg-row);color:var(--text-d);border-color:var(--border)}
+.bdg-yes {background:var(--green-bg);color:#15803d;border-color:var(--green-bdr)}
+.bdg-no  {background:#fef2f2;color:#b91c1c;border-color:var(--red-bdr)}
+.bdg-act {background:var(--green-bg);color:#15803d;border-color:var(--green-bdr)}
+.bdg-ina {background:#fef2f2;color:#b91c1c;border-color:var(--red-bdr)}
+.bdg-na  {background:var(--bg-row);color:var(--text-d);border-color:var(--border)}
+.bdg-pass{background:var(--green-bg);color:#15803d;border-color:var(--green-bdr)}
+.bdg-fail{background:#fef2f2;color:#b91c1c;border-color:var(--red-bdr)}
+
+/* ── section divider rows ──────────────────────────────────────────────── */
+.tr-sec td{
+  background:var(--section-bg);
+  border-bottom:1px solid var(--section-bdr);
+  padding:6px 14px;font-size:11px;font-weight:700;
+  color:var(--section-txt);text-transform:uppercase;letter-spacing:.8px;
+}
+
+/* ── cell multi-line layouts ───────────────────────────────────────────── */
+.kv-block{display:flex;flex-direction:column;gap:4px;margin-bottom:5px}
+.kv-row{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px}
+.kv-label{color:var(--text-m);flex-shrink:0;font-family:var(--mono);font-size:11px}
+.kv-val{text-align:right;font-family:var(--mono);font-size:11px;color:var(--text)}
+.kv-val.diff-val{color:var(--red-dark);font-weight:600}
+
+/* ── timestamp sub-header ──────────────────────────────────────────────── */
+.ts-sub{font-size:10px;color:var(--text-d);font-weight:400;text-transform:none;letter-spacing:0;margin-top:2px}
+
+/* ── misc ──────────────────────────────────────────────────────────────── */
+.hidden{display:none!important}
+.mt4{margin-top:4px}
+.mt6{margin-top:6px}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:var(--bg-row)}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+</style>
+</head>
+<body>
+
+<!-- ── topbar ─────────────────────────────────────────────────────────────── -->
+<nav class="topbar">
+  <div class="topbar-icon">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+  </div>
+  <span class="topbar-title">Server comparator</span>
+  <span class="topbar-sub">— RHEL fleet</span>
+  <span class="topbar-right">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    Data collected nightly &bull; no live SSH
+  </span>
+</nav>
+
+<main class="page">
+
+  <!-- ── input panel ──────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-lbl">Hosts to compare</div>
+    <div class="host-grid">
+      <div class="field">
+        <div class="field-lbl">Host 1 *</div>
+        <input class="hin" id="h0" type="text" placeholder="e.g. lmrg34ja" autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="field">
+        <div class="field-lbl">Host 2 *</div>
+        <input class="hin" id="h1" type="text" placeholder="e.g. lmrg88xb" autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="field">
+        <div class="field-lbl">Host 3 (optional)</div>
+        <input class="hin" id="h2" type="text" placeholder="leave blank to skip" autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="field">
+        <div class="field-lbl">&nbsp;</div>
+        <button class="btn-cmp" id="btn-cmp" onclick="runCompare()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8L22 12L18 16"/><path d="M6 8L2 12L6 16"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
+          Compare
+        </button>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn-ghost" onclick="clearAll()">Clear</button>
+    </div>
+    <div class="chips" id="chips"></div>
+  </div>
+
+  <!-- ── alerts ───────────────────────────────────────────────────────────── -->
+  <div id="alerts"></div>
+
+  <!-- ── results ──────────────────────────────────────────────────────────── -->
+  <section id="results" class="hidden">
+    <div class="stats" id="stats"></div>
+    <div class="filter-row">
+      <button class="tab on"  onclick="setFilter('all',  this)">All</button>
+      <button class="tab"     onclick="setFilter('diff', this)">Differences only</button>
+      <button class="tab"     onclick="setFilter('match',this)">Matching only</button>
+      <div class="srch-wrap">
+        <span class="srch-icon">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        </span>
+        <input class="srch" id="srch" type="text" placeholder="Filter checks…" oninput="redraw()" />
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead id="thead"></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<script>
+// ── config ───────────────────────────────────────────────────────────────────
+// Path to JSON data files — relative to this HTML file.
+// Adjust if httpd serves data from a different location.
+const DATA_PATH = "data";
+
+// ── state ────────────────────────────────────────────────────────────────────
+let S = { hosts: [], records: {}, rows: [], filter: 'all' };
+
+// ── utilities ────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+function hostInputs() {
+  return ['h0','h1','h2'].map(id => $(id).value.trim().toLowerCase()).filter(Boolean);
+}
+
+function clearAlerts() { $('alerts').innerHTML = ''; }
+
+function addAlert(type, title, body) {
+  const icons = {
+    warn: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+    err:  '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
+  };
+  $('alerts').insertAdjacentHTML('beforeend',
+    `<div class="alert alert-${type}">
+       <span class="alert-icon">${icons[type]||''}</span>
+       <div><div class="alert-title">${title}</div><div class="alert-body">${body}</div></div>
+     </div>`);
+}
+
+// ── fetch one host JSON ───────────────────────────────────────────────────────
+async function fetchHost(host) {
+  try {
+    const r = await fetch(`${DATA_PATH}/${encodeURIComponent(host)}.json`, { cache: 'no-cache' });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+
+// ── badge helpers ─────────────────────────────────────────────────────────────
+function yesnoBadge(v) {
+  const u = String(v ?? '').toUpperCase();
+  if (u === 'YES')  return `<span class="bdg bdg-yes">YES</span>`;
+  if (u === 'NO')   return `<span class="bdg bdg-no">NO</span>`;
+  return `<span class="bdg bdg-na">${esc(v)}</span>`;
+}
+function svcBadge(v) {
+  const l = String(v ?? '').toLowerCase();
+  if (l === 'active')   return `<span class="bdg bdg-act">active</span>`;
+  if (l === 'inactive') return `<span class="bdg bdg-ina">inactive</span>`;
+  return `<span class="bdg bdg-na">${esc(v)}</span>`;
+}
+function matchBadge(isDiff) {
+  return isDiff
+    ? `<span class="bdg bdg-diff mt4" style="display:inline-flex">
+         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+         Diff
+       </span>`
+    : `<span class="bdg bdg-ok mt4" style="display:inline-flex">
+         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+         Match
+       </span>`;
+}
+
+// ── chip HTML ─────────────────────────────────────────────────────────────────
+function chip(host, ok, meta) {
+  return `<div class="chip">
+    <div class="cdot ${ok ? 'cdot-ok' : 'cdot-er'}"></div>
+    <span class="chip-name">${esc(host)}</span>
+    <span class="chip-meta">${meta}</span>
+  </div>`;
+}
+
+// ── main compare ─────────────────────────────────────────────────────────────
+async function runCompare() {
+  const hosts = hostInputs();
+  clearAlerts();
+  $('chips').innerHTML = '';
+  $('results').classList.add('hidden');
+  ['h0','h1','h2'].forEach(id => $(id).classList.remove('ok','er'));
+
+  if (hosts.length < 2) {
+    addAlert('warn', 'Need at least 2 hosts', 'Enter hostnames in the fields above.');
+    return;
+  }
+
+  $('btn-cmp').disabled = true;
+  const fetched = await Promise.all(hosts.map(h => fetchHost(h)));
+  $('btn-cmp').disabled = false;
+
+  const records = {};
+  hosts.forEach((h, i) => { records[h] = fetched[i]; });
+
+  // Status chips + alerts
+  hosts.forEach((h, i) => {
+    const rec = records[h];
+    const inputEl = $(['h0','h1','h2'][i]);
+    if (!rec) {
+      inputEl.classList.add('er');
+      addAlert('err', `No data found for "${h}"`,
+        `The file ${DATA_PATH}/${h}.json does not exist. This host may not have been collected yet, ` +
+        `the hostname may be incorrect, or the host was unreachable during the last nightly run.`);
+      $('chips').insertAdjacentHTML('beforeend', chip(h, false, 'no data file'));
+    } else if (!rec.reachable) {
+      inputEl.classList.add('er');
+      addAlert('warn', `"${h}" was unreachable at last collection`,
+        rec.error || 'Host did not respond during the last nightly pssh run.');
+      $('chips').insertAdjacentHTML('beforeend', chip(h, false,
+        `unreachable &bull; ${rec.collected_at || '?'}`));
+    } else {
+      inputEl.classList.add('ok');
+      $('chips').insertAdjacentHTML('beforeend', chip(h, true,
+        `collected ${rec.collected_at || '?'}`));
+    }
+  });
+
+  // ── build row definitions ───────────────────────────────────────────────
+  const SCHEMA = [
+    { section: 'Identity & location' },
+    { key: 'Location',      field: 'location',     type: 'text' },
+    { key: 'Environment',   field: 'environment',  type: 'text' },
+    { key: 'Timezone',      field: 'timezone',     type: 'text' },
+
+    { section: 'Hardware' },
+    { key: 'CPU',           field: 'cpu',          type: 'text' },
+    { key: 'Cores',         field: 'cores',        type: 'text' },
+    { key: 'Sockets',       field: 'sockets',      type: 'text' },
+    { key: 'Memory',        field: 'memory',       type: 'text' },
+
+    { section: 'Operating system' },
+    { key: 'RHEL version',  field: 'rhel_version', type: 'text' },
+    { key: 'Kernel',        field: 'kernel',       type: 'text' },
+    { key: 'SELinux',       field: 'selinux',      type: 'text' },
+    { key: 'Hugepages',     field: 'hugepages',    type: 'text' },
+
+    { section: 'Storage' },
+    { key: 'Volumes',                              type: 'volumes' },
+    { key: 'NFS/CIFS mounts',                     type: 'mounts' },
+
+    { section: 'Network' },
+    { key: 'resolv.conf',                          type: 'resolv' },
+
+    { section: 'Authentication' },
+    { key: 'Auth method',                          type: 'auth_method' },
+    { key: 'Auth query',                           type: 'auth_query' },
+
+    { section: 'Services' },
+    { key: 'Service status',                       type: 'services' },
+  ];
+
+  // Build rows with match determination
+  const rows = SCHEMA.map(def => {
+    if (def.section) return def;
+
+    const vals = hosts.map(h => {
+      const rec = records[h];
+      if (!rec)           return { status: 'missing',     value: null };
+      if (!rec.reachable) return { status: 'unreachable', value: null };
+      const d = rec.data || {};
+      let value;
+      switch (def.type) {
+        case 'text':        value = d[def.field] ?? null; break;
+        case 'volumes':     value = d.volumes ?? null; break;
+        case 'mounts':      value = { nfs: d.nfs_count ?? 0, cifs: d.cifs_count ?? 0 }; break;
+        case 'resolv':      value = { search: d.resolv_search ?? '', ns: (d.resolv_ns ?? '').split(' ').filter(Boolean) }; break;
+        case 'auth_method': value = d.auth_method ?? null; break;
+        case 'auth_query':  value = d.auth_query  ?? null; break;
+        case 'services':    value = d.services    ?? null; break;
+        default:            value = null;
+      }
+      return { status: 'ok', value };
+    });
+
+    // Determine match across live hosts
+    const liveVals = vals.filter(v => v.status === 'ok').map(v => JSON.stringify(v.value));
+    const match = liveVals.length >= 2 ? liveVals.every(v => v === liveVals[0]) : null;
+
+    return { ...def, vals, match };
+  });
+
+  // Summary counts
+  let matchC = 0, diffC = 0, totalC = 0;
+  rows.forEach(r => {
+    if (r.section) return;
+    totalC++;
+    if (r.match === true)  matchC++;
+    if (r.match === false) diffC++;
+  });
+
+  $('stats').innerHTML = `
+    <div class="stat sg"><div class="stat-n">${matchC}</div><div class="stat-l">Matching</div></div>
+    <div class="stat sr"><div class="stat-n">${diffC}</div><div class="stat-l">Differences</div></div>
+    <div class="stat"><div class="stat-n">${totalC}</div><div class="stat-l">Total checks</div></div>
+    <div class="stat sb"><div class="stat-n">${hosts.length}</div><div class="stat-l">Hosts</div></div>`;
+
+  // Table header
+  let th = '<tr><th>Check</th>';
+  hosts.forEach(h => {
+    const rec = records[h];
+    const ts = rec?.collected_at ? `<div class="ts-sub">${rec.collected_at}</div>` : '<div class="ts-sub">—</div>';
+    th += `<th>${esc(h)}${ts}</th>`;
+  });
+  th += '</tr>';
+  $('thead').innerHTML = th;
+
+  // Reset filter
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('on', i===0));
+  S = { hosts, records, rows, filter: 'all' };
+
+  $('results').classList.remove('hidden');
+  redraw();
+}
+
+// ── render table body ─────────────────────────────────────────────────────────
+function redraw() {
+  const { hosts, rows, filter } = S;
+  const q = $('srch').value.toLowerCase();
+  let html = '';
+
+  for (const row of rows) {
+    // Section header
+    if (row.section !== undefined) {
+      if (filter !== 'all') continue;
+      html += `<tr class="tr-sec"><td colspan="${hosts.length + 1}">${esc(row.section)}</td></tr>`;
+      continue;
+    }
+    if (filter === 'diff'  && row.match !== false) continue;
+    if (filter === 'match' && row.match !== true)  continue;
+    if (q && !row.key.toLowerCase().includes(q))   continue;
+
+    const isDiff = row.match === false;
+    let tr = `<tr><td class="td-key">${esc(row.key)}</td>`;
+
+    row.vals.forEach((cell, ci) => {
+      const host = hosts[ci];
+
+      if (cell.status === 'missing') {
+        tr += `<td class="td-miss"><span class="bdg bdg-miss">&#8212; no data file</span></td>`;
+        return;
+      }
+      if (cell.status === 'unreachable') {
+        tr += `<td class="td-miss"><span class="bdg bdg-miss">&#8212; unreachable</span></td>`;
+        return;
+      }
+
+      const cellClass = isDiff ? 'td-diff' : 'td-match';
+      const val = cell.value;
+
+      switch (row.type) {
+        case 'text': {
+          const v = val ?? 'n/a';
+          tr += `<td class="${cellClass}">${esc(String(v))}${matchBadge(isDiff)}</td>`;
+          break;
+        }
+        case 'volumes': {
+          // Collect all hosts' volumes for per-row diff comparison
+          const allVols = row.vals.filter(v => v.status === 'ok').map(v => v.value);
+          let inner = '<div class="kv-block">';
+          if (Array.isArray(val)) {
+            val.forEach((v, vi) => {
+              // Compare this mount's size against same index in other hosts
+              const others = allVols.filter((_,ai) => ai !== row.vals.indexOf(cell));
+              const thisSz = v.sz;
+              const rowDiff = others.some(o => Array.isArray(o) && o[vi]?.sz !== thisSz);
+              inner += `<div class="kv-row">
+                <span class="kv-label">${esc(v.mp)}</span>
+                <span class="kv-val${rowDiff && isDiff ? ' diff-val' : ''}">${esc(v.sz)}</span>
+              </div>`;
+            });
+          } else {
+            inner += `<div class="kv-row"><span class="kv-label">n/a</span></div>`;
+          }
+          inner += `</div>${matchBadge(isDiff)}`;
+          tr += `<td class="${cellClass}">${inner}</td>`;
+          break;
+        }
+        case 'mounts': {
+          const v = val || { nfs: 0, cifs: 0 };
+          tr += `<td class="${cellClass}">
+            <div class="kv-block">
+              <div class="kv-row"><span class="kv-label">NFS mounts</span><span class="kv-val">${v.nfs}</span></div>
+              <div class="kv-row"><span class="kv-label">CIFS mounts</span><span class="kv-val">${v.cifs}</span></div>
+            </div>${matchBadge(isDiff)}</td>`;
+          break;
+        }
+        case 'resolv': {
+          const v = val || { search: '', ns: [] };
+          let inner = '<div class="kv-block">';
+          inner += `<div class="kv-row"><span class="kv-label">search</span><span class="kv-val">${esc(v.search)}</span></div>`;
+          (v.ns || []).forEach(n => {
+            inner += `<div class="kv-row"><span class="kv-label">nameserver</span><span class="kv-val">${esc(n)}</span></div>`;
+          });
+          inner += `</div>${matchBadge(isDiff)}`;
+          tr += `<td class="${cellClass}">${inner}</td>`;
+          break;
+        }
+        case 'auth_method': {
+          const v = val || { oud: 'n/a', ad: 'n/a' };
+          tr += `<td class="${cellClass}">
+            <div class="kv-block">
+              <div class="kv-row"><span class="kv-label">OUD</span><span class="kv-val${isDiff?' diff-val':''}">${esc(v.oud)}</span></div>
+              <div class="kv-row"><span class="kv-label">AD</span><span class="kv-val${isDiff?' diff-val':''}">${esc(v.ad)}</span></div>
+            </div>${matchBadge(isDiff)}</td>`;
+          break;
+        }
+        case 'auth_query': {
+          const v = val || { oud: 'n/a', ad: 'n/a' };
+          tr += `<td class="${cellClass}">
+            <div class="kv-block">
+              <div class="kv-row"><span class="kv-label">OUD</span><span class="kv-val">${yesnoBadge(v.oud)}</span></div>
+              <div class="kv-row"><span class="kv-label">AD</span><span class="kv-val">${yesnoBadge(v.ad)}</span></div>
+            </div>${matchBadge(isDiff)}</td>`;
+          break;
+        }
+        case 'services': {
+          const v = val || { sssd: 'unknown', sshd: 'unknown' };
+          tr += `<td class="${cellClass}">
+            <div class="kv-block">
+              <div class="kv-row"><span class="kv-label">sssd</span><span class="kv-val">${svcBadge(v.sssd)}</span></div>
+              <div class="kv-row"><span class="kv-label">sshd</span><span class="kv-val">${svcBadge(v.sshd)}</span></div>
+            </div>${matchBadge(isDiff)}</td>`;
+          break;
+        }
+        default:
+          tr += `<td class="td-na">—</td>`;
+      }
+    });
+
+    tr += '</tr>';
+    html += tr;
+  }
+
+  if (!html) {
+    html = `<tr><td colspan="${S.hosts.length + 1}"
+      style="text-align:center;color:var(--text-d);padding:36px 14px">
+      No rows match the current filter.</td></tr>`;
+  }
+  $('tbody').innerHTML = html;
+}
+
+function setFilter(f, btn) {
+  S.filter = f;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
+  btn.classList.add('on');
+  redraw();
+}
+
+function clearAll() {
+  ['h0','h1','h2'].forEach(id => {
+    const el = $(id);
+    el.value = '';
+    el.classList.remove('ok','er');
+  });
+  $('chips').innerHTML = '';
+  $('alerts').innerHTML = '';
+  $('results').classList.add('hidden');
+  $('srch').value = '';
+  S = { hosts: [], records: {}, rows: [], filter: 'all' };
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('on', i===0));
+}
+
+// Enter key triggers compare
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && ['h0','h1','h2'].includes(document.activeElement?.id)) {
+    runCompare();
+  }
+});
+</script>
+</body>
+</html>
