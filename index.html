@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Server Config Comparator</title>
+<title>Server Compare Tool</title>
 <style>
 /* ── reset ─────────────────────────────────────────────────────────────── */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -260,11 +260,11 @@ tr:hover .td-diff{background:#fee2e2}
   <div class="topbar-icon">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
   </div>
-  <span class="topbar-title">Server comparator</span>
-  <span class="topbar-sub">— RHEL fleet</span>
+  <span class="topbar-title">Server Compare Tool</span>
+  <span class="topbar-sub">— Side-by-side server config comparison</span>
   <span class="topbar-right">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-    Data collected nightly &bull; no live SSH
+    Data last collected: <span id="last-collected">—</span>
   </span>
 </nav>
 
@@ -272,7 +272,7 @@ tr:hover .td-diff{background:#fee2e2}
 
   <!-- ── input panel ──────────────────────────────────────────────────────── -->
   <div class="card">
-    <div class="card-lbl">Hosts to compare</div>
+    <div class="card-lbl">Hosts to compare <span style="font-size:11px;color:var(--text-d);font-weight:400">(short names only)</span></div>
     <div class="host-grid">
       <div class="field">
         <div class="field-lbl">Host 1 *</div>
@@ -404,11 +404,10 @@ function matchBadge(isDiff) {
 }
 
 // ── chip HTML ─────────────────────────────────────────────────────────────────
-function chip(host, ok, meta) {
+function chip(host, ok) {
   return `<div class="chip">
     <div class="cdot ${ok ? 'cdot-ok' : 'cdot-er'}"></div>
     <span class="chip-name">${esc(host)}</span>
-    <span class="chip-meta">${meta}</span>
   </div>`;
 }
 
@@ -439,19 +438,17 @@ async function runCompare() {
     if (!rec) {
       inputEl.classList.add('er');
       addAlert('err', `No data found for "${h}"`,
-        `The file ${DATA_PATH}/${h}.json does not exist. This host may not have been collected yet, ` +
-        `the hostname may be incorrect, or the host was unreachable during the last nightly run.`);
-      $('chips').insertAdjacentHTML('beforeend', chip(h, false, 'no data file'));
+       addAlert('err', `No data found for "${h}"`,
+         `No collected data found. Verify the short hostname is correct, or wait for the next nightly run.`);
+       $('chips').insertAdjacentHTML('beforeend', chip(h, false));
     } else if (!rec.reachable) {
       inputEl.classList.add('er');
       addAlert('warn', `"${h}" was unreachable at last collection`,
         rec.error || 'Host did not respond during the last nightly pssh run.');
-      $('chips').insertAdjacentHTML('beforeend', chip(h, false,
-        `unreachable &bull; ${rec.collected_at || '?'}`));
+      $('chips').insertAdjacentHTML('beforeend', chip(h, false));
     } else {
       inputEl.classList.add('ok');
-      $('chips').insertAdjacentHTML('beforeend', chip(h, true,
-        `collected ${rec.collected_at || '?'}`));
+      $('chips').insertAdjacentHTML('beforeend', chip(h, true));
     }
   });
 
@@ -475,7 +472,7 @@ async function runCompare() {
     { key: 'Hugepages',     field: 'hugepages',    type: 'text' },
 
     { section: 'Storage' },
-    { key: 'Volumes',                              type: 'volumes' },
+    { key: 'OS Mountpoints',                       type: 'volumes' },
     { key: 'NFS/CIFS mounts',                     type: 'mounts' },
 
     { section: 'Network' },
@@ -543,6 +540,16 @@ async function runCompare() {
   });
   th += '</tr>';
   $('thead').innerHTML = th;
+
+  // Update "Data last collected" in topbar from the most recent collected_at
+  const timestamps = hosts
+    .map(h => records[h]?.collected_at)
+    .filter(Boolean)
+    .sort()
+    .reverse();
+  if (timestamps.length > 0) {
+    $('last-collected').textContent = timestamps[0].replace('T', ' ');
+  }
 
   // Reset filter
   document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('on', i===0));
@@ -641,20 +648,12 @@ function redraw() {
           break;
         }
         case 'auth_method': {
-          const v = val || { oud: 'n/a', ad: 'n/a' };
-          // Convert id_provider value to YES/NO pill:
-          // any non-empty, non-'n/a' value means auth is configured = YES
-          const authPill = rawVal => {
-            const s = String(rawVal ?? '').trim().toLowerCase();
-            const active = s.length > 0 && s !== 'n/a';
-            return active
-              ? `<span class="bdg bdg-yes">YES</span>`
-              : `<span class="bdg bdg-no">NO</span>`;
-          };
+          // gather script outputs YES/NO directly based on id_provider content
+          const v = val || { oud: 'NO', ad: 'NO' };
           tr += `<td class="${cellClass}">
             <div class="kv-block">
-              <div class="kv-row"><span class="kv-label">OUD</span><span class="kv-val">${authPill(v.oud)}</span></div>
-              <div class="kv-row"><span class="kv-label">AD</span><span class="kv-val">${authPill(v.ad)}</span></div>
+              <div class="kv-row"><span class="kv-label">OUD</span><span class="kv-val">${yesnoBadge(v.oud)}</span></div>
+              <div class="kv-row"><span class="kv-label">AD</span><span class="kv-val">${yesnoBadge(v.ad)}</span></div>
             </div>${matchBadge(isDiff)}</td>`;
           break;
         }

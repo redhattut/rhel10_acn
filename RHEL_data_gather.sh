@@ -19,12 +19,14 @@
 #   xqvsmlinauthscan Sudo, xqmrglineng Sudo
 
 # ── default values ────────────────────────────────────────────────────────────
-HOSTNAME=$(hostname -s)
+HOSTNAME=$(hostname -s | cut -d. -f1)
 RHEL_RELEASE="n/a"
 LOCATION="n/a"
 MNEMONIC="n/a"
 ENVIRONMENT="n/a"
 SSSD="n/a"
+AUTH_OUD="NO"
+AUTH_AD="NO"
 LDAP_QUERY="n/a"
 AD_QUERY="n/a"
 DUAL_AUTH_PKG="n/a"
@@ -50,6 +52,8 @@ LOCATION=$(cat /boot/PNC_PROVISION_CONFIG 2>/dev/null \
 [ -z "$LOCATION" ] && LOCATION="n/a"
 
 # ── Authentication method (SSSD id_provider) ──────────────────────────────────
+# Collect all id_provider values from sssd.conf and 50-pncad.conf, space-separated
+# Then derive AUTH_OUD (YES if "ldap" present) and AUTH_AD (YES if "ad" present)
 if [ -f /etc/sssd/sssd.conf ]; then
     SSSD=$(
         { grep -r ^id_provider /etc/sssd/sssd.conf 2>/dev/null \
@@ -61,6 +65,20 @@ if [ -f /etc/sssd/sssd.conf ]; then
     [ -z "$SSSD" ] && SSSD="n/a"
 else
     SSSD="n/a"
+fi
+
+# OUD: YES if any id_provider value contains "ldap"
+if echo "$SSSD" | grep -qi "ldap"; then
+    AUTH_OUD="YES"
+else
+    AUTH_OUD="NO"
+fi
+
+# AD: YES if any id_provider value contains "ad"
+if echo "$SSSD" | grep -qi "\bad\b"; then
+    AUTH_AD="YES"
+else
+    AUTH_AD="NO"
 fi
 
 # ── OUD query (netgroup lookup) ───────────────────────────────────────────────
@@ -236,7 +254,7 @@ echo "    \"resolv_ns\":     \"$(je "$RESOLV_NS")\","
 echo "    \"nfs_count\":     ${NFS_COUNT},"
 echo "    \"cifs_count\":    ${CIFS_COUNT},"
 echo "    \"volumes\":       [${VOLUMES_JSON_INNER}],"
-echo "    \"auth_method\": {\"oud\": \"$(je "$SSSD")\", \"ad\": \"$(je "$SSSD")\"},"
+echo "    \"auth_method\": {\"oud\": \"$(je "$AUTH_OUD")\", \"ad\": \"$(je "$AUTH_AD")\"},"
 echo "    \"auth_query\":  {\"oud\": \"$(je "$LDAP_QUERY")\", \"ad\": \"$(je "$AD_QUERY")\"},"
 echo "    \"services\":    {\"sssd\": \"$(je "$SSSD_SVC")\", \"sshd\": \"$(je "$SSHD_SVC")\"}"
 echo "  }"
