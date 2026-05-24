@@ -437,7 +437,6 @@ async function runCompare() {
     const inputEl = $(['h0','h1','h2'][i]);
     if (!rec) {
       inputEl.classList.add('er');
-      addAlert('err', `No data found for "${h}"`,
        addAlert('err', `No data found for "${h}"`,
          `No collected data found. Verify the short hostname is correct, or wait for the next nightly run.`);
        $('chips').insertAdjacentHTML('beforeend', chip(h, false));
