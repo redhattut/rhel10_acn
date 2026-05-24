@@ -532,14 +532,9 @@ async function runCompare() {
 
   // Table header
   let th = '<tr><th>Check</th>';
-  hosts.forEach(h => {
-    const rec = records[h];
-    const ts = rec?.collected_at ? `<div class="ts-sub">${rec.collected_at}</div>` : '<div class="ts-sub">—</div>';
-    th += `<th>${esc(h)}${ts}</th>`;
-  });
+  hosts.forEach(h => { th += `<th>${esc(h)}</th>`; });
   th += '</tr>';
   $('thead').innerHTML = th;
-
   // Update "Data last collected" in topbar from the most recent collected_at
   const timestamps = hosts
     .map(h => records[h]?.collected_at)
