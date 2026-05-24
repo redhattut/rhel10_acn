@@ -353,11 +353,22 @@ function addAlert(type, title, body) {
 
 // ── fetch one host JSON ───────────────────────────────────────────────────────
 async function fetchHost(host) {
+  // Build an absolute URL from the page's own origin + path so the fetch
+  // always resolves correctly regardless of trailing-slash or base-tag quirks.
+  // e.g. https://mrgmaster.pncint.net/RHEL/compare/data/lmrg10ia.json
+  const base = window.location.href.replace(/\/[^\/]*$/, '/');
+  const url  = `${base}${DATA_PATH}/${encodeURIComponent(host)}.json`;
   try {
-    const r = await fetch(`${DATA_PATH}/${encodeURIComponent(host)}.json`, { cache: 'no-cache' });
-    if (!r.ok) return null;
+    const r = await fetch(url, { cache: 'no-cache' });
+    if (!r.ok) {
+      console.error(`fetchHost ${host}: HTTP ${r.status} ${r.statusText} — ${url}`);
+      return null;
+    }
     return await r.json();
-  } catch { return null; }
+  } catch(e) {
+    console.error(`fetchHost ${host}: fetch threw — ${url} —`, e);
+    return null;
+  }
 }
 
 // ── badge helpers ─────────────────────────────────────────────────────────────

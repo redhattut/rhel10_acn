@@ -69,6 +69,9 @@ else
 fi
 
 mkdir -p "$COMPARE_DATA_DIR"
+# Ensure SELinux context allows httpd to read files in this directory.
+# chcon sets it immediately; restorecon is a fallback. Both are silent on error.
+chcon -R -t httpd_sys_content_t "$COMPARE_DATA_DIR" 2>/dev/null ||     restorecon -R "$COMPARE_DATA_DIR" 2>/dev/null || true
 
 # ── Run gather script on all hosts via pssh ───────────────────────────────────
 echo "$(date "+%a %b %d %T %Z %Y"): Running RHEL_data_gather.sh on all hosts"
@@ -99,6 +102,8 @@ write_unreachable_json() {
 }
 STUB
     chmod 644 "${COMPARE_DATA_DIR}/${host}.json"
+    chcon -t httpd_sys_content_t "${COMPARE_DATA_DIR}/${host}.json" 2>/dev/null ||\
+        restorecon "${COMPARE_DATA_DIR}/${host}.json" 2>/dev/null || true
     echo "$(date "+%a %b %d %T %Z %Y"): Unreachable stub written for ${host}"
 }
 
@@ -112,6 +117,8 @@ scp_json_back() {
         echo "$(date "+%a %b %d %T %Z %Y"): JSON collected: ${host} → ${dest}"
         ssh $SSH_OPTS "root@${host}" "rm -f ${remote_path}" 2>/dev/null
         chmod 644 "$dest"
+        chcon -t httpd_sys_content_t "$dest" 2>/dev/null ||\
+            restorecon "$dest" 2>/dev/null || true
     else
         echo "$(date "+%a %b %d %T %Z %Y"): WARN — scp failed for ${host}, writing stub"
         write_unreachable_json "$host" "scp of JSON failed after successful pssh run"

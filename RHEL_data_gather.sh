@@ -196,44 +196,65 @@ je() {
 # ═════════════════════════════════════════════════════════════════════════════
 JSON_FILE="/tmp/compare_${HOSTNAME}.json"
 
-cat > "$JSON_FILE" << JSONEOF
 {
-  "host":         "$(je "$HOSTNAME")",
-  "collected_at": "$COLLECTED_AT",
-  "reachable":    true,
-  "data": {
-    "location":      "$(je "$LOCATION")",
-    "environment":   "$(je "$ENVIRONMENT")",
-    "mnemonic":      "$(je "$MNEMONIC")",
-    "timezone":      "$(je "$TIMEZONE")",
-    "cpu":           "$(je "$CPU")",
-    "cores":         "$(je "$CORES")",
-    "sockets":       "$(je "$SOCKETS")",
-    "memory":        "$(je "$MEMORY")",
-    "rhel_version":  "$(je "$RHEL_RELEASE")",
-    "kernel":        "$(je "$KERNEL")",
-    "selinux":       "$(je "$SELINUX")",
-    "hugepages":     "$(je "$HUGEPAGES")",
-    "resolv_search": "$(je "$RESOLV_SEARCH")",
-    "resolv_ns":     "$(je "$RESOLV_NS")",
-    "nfs_count":     $NFS_COUNT,
-    "cifs_count":    $CIFS_COUNT,
-    "volumes":       [${VOLUMES_JSON_INNER}],
-    "auth_method": {
-      "oud": "$(je "$SSSD")",
-      "ad":  "$(je "$SSSD")"
-    },
-    "auth_query": {
-      "oud": "$(je "$LDAP_QUERY")",
-      "ad":  "$(je "$AD_QUERY")"
-    },
-    "services": {
-      "sssd": "$(je "$SSSD_SVC")",
-      "sshd": "$(je "$SSHD_SVC")"
-    }
-  }
-}
-JSONEOF
+    # Build JSON using printf — safe when script is piped through pssh.
+    # Heredocs can be terminated early if a variable value contains the
+    # delimiter string on its own line. printf has no such risk.
+    printf '{
+'
+    printf '  "host":         "%s",
+'  "$(je "$HOSTNAME")"
+    printf '  "collected_at": "%s",
+'  "$COLLECTED_AT"
+    printf '  "reachable":    true,
+'
+    printf '  "data": {
+'
+    printf '    "location":      "%s",
+'  "$(je "$LOCATION")"
+    printf '    "environment":   "%s",
+'  "$(je "$ENVIRONMENT")"
+    printf '    "mnemonic":      "%s",
+'  "$(je "$MNEMONIC")"
+    printf '    "timezone":      "%s",
+'  "$(je "$TIMEZONE")"
+    printf '    "cpu":           "%s",
+'  "$(je "$CPU")"
+    printf '    "cores":         "%s",
+'  "$(je "$CORES")"
+    printf '    "sockets":       "%s",
+'  "$(je "$SOCKETS")"
+    printf '    "memory":        "%s",
+'  "$(je "$MEMORY")"
+    printf '    "rhel_version":  "%s",
+'  "$(je "$RHEL_RELEASE")"
+    printf '    "kernel":        "%s",
+'  "$(je "$KERNEL")"
+    printf '    "selinux":       "%s",
+'  "$(je "$SELINUX")"
+    printf '    "hugepages":     "%s",
+'  "$(je "$HUGEPAGES")"
+    printf '    "resolv_search": "%s",
+'  "$(je "$RESOLV_SEARCH")"
+    printf '    "resolv_ns":     "%s",
+'  "$(je "$RESOLV_NS")"
+    printf '    "nfs_count":     %s,
+'   "$NFS_COUNT"
+    printf '    "cifs_count":    %s,
+'   "$CIFS_COUNT"
+    printf '    "volumes":       [%s],
+'  "${VOLUMES_JSON_INNER}"
+    printf '    "auth_method": {"oud": "%s", "ad": "%s"},
+'            "$(je "$SSSD")" "$(je "$SSSD")"
+    printf '    "auth_query":  {"oud": "%s", "ad": "%s"},
+'            "$(je "$LDAP_QUERY")" "$(je "$AD_QUERY")"
+    printf '    "services":    {"sssd": "%s", "sshd": "%s"}
+'            "$(je "$SSSD_SVC")" "$(je "$SSHD_SVC")"
+    printf '  }
+'
+    printf '}
+'
+} > "$JSON_FILE"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # OUTPUT — tagged lines to stdout
