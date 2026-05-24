@@ -18,7 +18,7 @@
 #
 # Parser design: RHEL_data_gather.sh tags every output line with the hostname
 #   CSV_DATA:<hostname>:<csv_fields>
-#   JSON_WRITTEN:<hostname>:/tmp/compare_<hostname>.json
+#   JSON_DATA:<hostname>:<json_content>
 # This makes parsing safe against pssh --inline-stdout interleaving output
 # from multiple hosts in parallel — no fragile state machine needed.
 #
@@ -107,36 +107,20 @@ STUB
     echo "$(date "+%a %b %d %T %Z %Y"): Unreachable stub written for ${host}"
 }
 
-scp_json_back() {
-    local host="$1"
-    local remote_path="$2"
-    local dest="${COMPARE_DATA_DIR}/${host}.json"
-
-    scp $SSH_OPTS "root@${host}:${remote_path}" "$dest" 2>/dev/null
-    if [[ $? -eq 0 ]]; then
-        echo "$(date "+%a %b %d %T %Z %Y"): JSON collected: ${host} → ${dest}"
-        ssh $SSH_OPTS "root@${host}" "rm -f ${remote_path}" 2>/dev/null
-        chmod 644 "$dest"
-        chcon -t httpd_sys_content_t "$dest" 2>/dev/null ||\
-            restorecon "$dest" 2>/dev/null || true
-    else
-        echo "$(date "+%a %b %d %T %Z %Y"): WARN — scp failed for ${host}, writing stub"
-        write_unreachable_json "$host" "scp of JSON failed after successful pssh run"
-    fi
-}
+# (scp_json_back removed — JSON now comes via pssh stdout)
 
 # ── Parse pssh log — tag-based, interleave-safe ───────────────────────────────
 # RHEL_data_gather.sh emits two tagged line types:
 #
 #   CSV_DATA:<hostname>:<13-col-csv-row>
-#   JSON_WRITTEN:<hostname>:/tmp/compare_<hostname>.json
+#   JSON_DATA:<hostname>:<json_content>
 #
 # pssh also emits header lines for each host:
 #   [N] HH:MM:SS [SUCCESS] hostname
 #   [N] HH:MM:SS [FAILURE] hostname ...
 #
 # We parse by line prefix — no assumptions about ordering between hosts.
-# All CSV_DATA lines go to the CSV. All JSON_WRITTEN lines trigger an scp.
+# All CSV_DATA lines go to the CSV. All JSON_DATA lines are written locally.
 # All FAILURE lines get a placeholder CSV row and an unreachable JSON stub.
 
 echo "$(date "+%a %b %d %T %Z %Y"): Generating CSV from $INPUT_FILE"
@@ -164,13 +148,18 @@ while IFS= read -r line; do
         continue
     fi
 
-    # ── JSON ready — scp it back ──────────────────────────────────────────────
-    # Format: JSON_WRITTEN:<hostname>:/tmp/compare_<hostname>.json
-    if [[ "$line" == JSON_WRITTEN:*:* ]]; then
-        rest="${line#JSON_WRITTEN:}"      # removes "JSON_WRITTEN:"
-        host="${rest%%:*}"               # everything before first remaining ":"
-        remote_path="${rest#*:}"         # everything after first remaining ":"
-        scp_json_back "$host" "$remote_path"
+    # ── JSON data line — write file locally from pssh stdout ────────────────────
+    # Format: JSON_DATA:<hostname>:<json_content>
+    # No scp needed — content came through pssh stdout same as CSV.
+    if [[ "$line" == JSON_DATA:*:* ]]; then
+        rest="${line#JSON_DATA:}"
+        json_host="${rest%%:*}"
+        json_content="${rest#*:}"
+        json_dest="${COMPARE_DATA_DIR}/${json_host}.json"
+        printf '%s' "$json_content" > "$json_dest"
+        chmod 644 "$json_dest"
+        chcon -t httpd_sys_content_t "$json_dest" 2>/dev/null ||             restorecon "$json_dest" 2>/dev/null || true
+        echo "$(date "+%a %b %d %T %Z %Y"): JSON written locally: ${json_host} -> ${json_dest}"
         JSON_COLLECTED=$((JSON_COLLECTED + 1))
         continue
     fi

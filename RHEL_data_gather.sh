@@ -191,79 +191,27 @@ je() {
     printf '%s' "$s"
 }
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Write JSON file to /tmp on the remote host
-# ═════════════════════════════════════════════════════════════════════════════
-JSON_FILE="/tmp/compare_${HOSTNAME}.json"
 
-{
-    # Build JSON using printf — safe when script is piped through pssh.
-    # Heredocs can be terminated early if a variable value contains the
-    # delimiter string on its own line. printf has no such risk.
-    printf '{
-'
-    printf '  "host":         "%s",
-'  "$(je "$HOSTNAME")"
-    printf '  "collected_at": "%s",
-'  "$COLLECTED_AT"
-    printf '  "reachable":    true,
-'
-    printf '  "data": {
-'
-    printf '    "location":      "%s",
-'  "$(je "$LOCATION")"
-    printf '    "environment":   "%s",
-'  "$(je "$ENVIRONMENT")"
-    printf '    "mnemonic":      "%s",
-'  "$(je "$MNEMONIC")"
-    printf '    "timezone":      "%s",
-'  "$(je "$TIMEZONE")"
-    printf '    "cpu":           "%s",
-'  "$(je "$CPU")"
-    printf '    "cores":         "%s",
-'  "$(je "$CORES")"
-    printf '    "sockets":       "%s",
-'  "$(je "$SOCKETS")"
-    printf '    "memory":        "%s",
-'  "$(je "$MEMORY")"
-    printf '    "rhel_version":  "%s",
-'  "$(je "$RHEL_RELEASE")"
-    printf '    "kernel":        "%s",
-'  "$(je "$KERNEL")"
-    printf '    "selinux":       "%s",
-'  "$(je "$SELINUX")"
-    printf '    "hugepages":     "%s",
-'  "$(je "$HUGEPAGES")"
-    printf '    "resolv_search": "%s",
-'  "$(je "$RESOLV_SEARCH")"
-    printf '    "resolv_ns":     "%s",
-'  "$(je "$RESOLV_NS")"
-    printf '    "nfs_count":     %s,
-'   "$NFS_COUNT"
-    printf '    "cifs_count":    %s,
-'   "$CIFS_COUNT"
-    printf '    "volumes":       [%s],
-'  "${VOLUMES_JSON_INNER}"
-    printf '    "auth_method": {"oud": "%s", "ad": "%s"},
-'            "$(je "$SSSD")" "$(je "$SSSD")"
-    printf '    "auth_query":  {"oud": "%s", "ad": "%s"},
-'            "$(je "$LDAP_QUERY")" "$(je "$AD_QUERY")"
-    printf '    "services":    {"sssd": "%s", "sshd": "%s"}
-'            "$(je "$SSSD_SVC")" "$(je "$SSHD_SVC")"
-    printf '  }
-'
-    printf '}
-'
-} > "$JSON_FILE"
-
-# ═════════════════════════════════════════════════════════════════════════════
-# OUTPUT — tagged lines to stdout
-# Each line is prefixed HOST:<hostname>: so the wrapper can parse by content,
-# not by position — safe against pssh parallel interleaving.
+# OUTPUT — all via stdout, captured by pssh into the log file on the jumphost.
+# No scp needed. The wrapper reads the log and writes files locally.
+# Same pattern as the original Midrange_Mod_Report gather approach.
 # ═════════════════════════════════════════════════════════════════════════════
 
 # CSV line (13 columns, unchanged format)
 echo "CSV_DATA:${HOSTNAME}:${HOSTNAME},${LOCATION},${MNEMONIC},${ENVIRONMENT},${RHEL_RELEASE},${SSSD},${LDAP_QUERY},${AD_QUERY},${DUAL_AUTH_PKG},${NSSWITCH},${KRB5_KEYTAB},${XQVSMLINAUTHSCAN_SUDO},${XQMRGLINENG_SUDO}"
 
-# Signal that JSON is ready for scp
-echo "JSON_WRITTEN:${HOSTNAME}:${JSON_FILE}"
+# JSON — emitted as a single line: JSON_DATA:<hostname>:<json>
+# The wrapper extracts the JSON and writes it to the data directory locally.
+# Single-line format: all newlines replaced with \n inside the JSON string.
+JSON_ONELINE=$(printf '{"host":"%s","collected_at":"%s","reachable":true,"data":{"location":"%s","environment":"%s","mnemonic":"%s","timezone":"%s","cpu":"%s","cores":"%s","sockets":"%s","memory":"%s","rhel_version":"%s","kernel":"%s","selinux":"%s","hugepages":"%s","resolv_search":"%s","resolv_ns":"%s","nfs_count":%s,"cifs_count":%s,"volumes":[%s],"auth_method":{"oud":"%s","ad":"%s"},"auth_query":{"oud":"%s","ad":"%s"},"services":{"sssd":"%s","sshd":"%s"}}}' \
+    "$(je "$HOSTNAME")" "$COLLECTED_AT" \
+    "$(je "$LOCATION")" "$(je "$ENVIRONMENT")" "$(je "$MNEMONIC")" "$(je "$TIMEZONE")" \
+    "$(je "$CPU")" "$(je "$CORES")" "$(je "$SOCKETS")" "$(je "$MEMORY")" \
+    "$(je "$RHEL_RELEASE")" "$(je "$KERNEL")" "$(je "$SELINUX")" "$(je "$HUGEPAGES")" \
+    "$(je "$RESOLV_SEARCH")" "$(je "$RESOLV_NS")" \
+    "$NFS_COUNT" "$CIFS_COUNT" "${VOLUMES_JSON_INNER}" \
+    "$(je "$SSSD")" "$(je "$SSSD")" \
+    "$(je "$LDAP_QUERY")" "$(je "$AD_QUERY")" \
+    "$(je "$SSSD_SVC")" "$(je "$SSHD_SVC")")
+
+echo "JSON_DATA:${HOSTNAME}:${JSON_ONELINE}"
