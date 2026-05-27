@@ -9,11 +9,26 @@ allpssh() {
     local cmd
     if [[ $# -eq 1 ]]; then cmd="$1"; else cmd="$*"; fi
 
-    # Write the command to a temp file, pssh ships it as stdin to remote bash.
-    # No quoting nightmares - the remote bash just reads the script from stdin.
     local tmp
     tmp=$(mktemp)
-    printf '%s\n' "$cmd" > "$tmp"
+
+    # Run command, capture output+rc, then emit status line.
+    # CHANGED = exit 0 (with or without output)
+    # FAILED  = non-zero exit
+    {
+        printf '%s\n' '__out=$(mktemp)'
+        printf '%s\n' '__rc=0'
+        printf '%s\n' "{ $cmd ; } >\"\$__out\" 2>&1 || __rc=\$?"
+        printf '%s\n' 'if [[ $__rc -ne 0 ]]; then'
+        printf '%s\n' '  echo "FAILED (rc=$__rc)"'
+        printf '%s\n' '  cat "$__out"'
+        printf '%s\n' 'else'
+        printf '%s\n' '  echo "CHANGED"'
+        printf '%s\n' '  cat "$__out"'
+        printf '%s\n' 'fi'
+        printf '%s\n' 'rm -f "$__out"'
+        printf '%s\n' 'exit 0'
+    } > "$tmp"
 
     sudo /usr/local/pssh/bin/pssh \
         -h "$hostfile" \
@@ -35,15 +50,15 @@ allpssh() {
               host = $4
               reason = ""
               for (i=5; i<=NF; i++) reason = reason (i>5?" ":"") $i
-              failed[++nf] = host " >> [UNREACHABLE] " reason
+              unreachable[++nu] = host " >> [UNREACHABLE] " reason
               next
           }
           { print }
           END {
-              if (nf > 0) {
+              if (nu > 0) {
                   print ""
-                  print "=== Unreachable hosts (" nf ") ==="
-                  for (i=1; i<=nf; i++) print failed[i]
+                  print "=== Unreachable hosts (" nu ") ==="
+                  for (i=1; i<=nu; i++) print unreachable[i]
               }
           }
         '
