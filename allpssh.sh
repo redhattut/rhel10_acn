@@ -8,13 +8,25 @@ allpssh() {
 
     [[ ! -r "$hostfile" ]] && { echo "hosts file not found: $hostfile" >&2; return 1; }
 
-    # Encode args so quotes/special chars survive intact through pssh + remote shell
-    local encoded
-    encoded=$(printf '%s\0' "$@" | base64 -w0)
+    # Join all args into a single command string. If only one arg was passed
+    # (e.g. allpssh 'lvs | grep OLD'), it's used as-is. If multiple args were
+    # passed (e.g. allpssh ls -ltr /etc), they're joined with spaces and the
+    # remote bash -c parses the result naturally.
+    local cmd
+    if [[ $# -eq 1 ]]; then
+        cmd="$1"
+    else
+        cmd="$*"
+    fi
 
-    # Remote wrapper: decode args into array, then exec via bash -c with proper quoting.
-    # The leading ':' is a no-op that swallows any stray positional weirdness.
-    local remote=': ; readarray -d "" -t a < <(base64 -d <<<"'"$encoded"'"); bash -c "$(printf "%q " "${a[@]}")"'
+    # Base64-encode the whole command string so quotes/special chars survive
+    # the trip through pssh and the remote shell.
+    local encoded
+    encoded=$(printf '%s' "$cmd" | base64 -w0)
+
+    # Remote wrapper: decode the command string, then hand it to bash -c.
+    # This means pipes, redirects, globs, $(...), etc. all evaluate on the remote.
+    local remote='bash -c "$(base64 -d <<<"'"$encoded"'")"'
 
     sudo /usr/local/pssh/bin/pssh \
         -h "$hostfile" \
