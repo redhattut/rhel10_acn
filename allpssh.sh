@@ -12,20 +12,18 @@ allpssh() {
     local tmp
     tmp=$(mktemp)
 
-    # Run command, capture output+rc, then emit status line.
-    # CHANGED = exit 0 (with or without output)
-    # FAILED  = non-zero exit
+    # Emit a status marker line followed by output. The awk filter merges the
+    # status onto the "host >>" line so each host's verdict is greppable.
     {
         printf '%s\n' '__out=$(mktemp)'
         printf '%s\n' '__rc=0'
         printf '%s\n' "{ $cmd ; } >\"\$__out\" 2>&1 || __rc=\$?"
         printf '%s\n' 'if [[ $__rc -ne 0 ]]; then'
-        printf '%s\n' '  echo "FAILED (rc=$__rc)"'
-        printf '%s\n' '  cat "$__out"'
+        printf '%s\n' '  echo "__ALLPSSH_STATUS__:FAILED (rc=$__rc)"'
         printf '%s\n' 'else'
-        printf '%s\n' '  echo "CHANGED"'
-        printf '%s\n' '  cat "$__out"'
+        printf '%s\n' '  echo "__ALLPSSH_STATUS__:CHANGED"'
         printf '%s\n' 'fi'
+        printf '%s\n' 'cat "$__out"'
         printf '%s\n' 'rm -f "$__out"'
         printf '%s\n' 'exit 0'
     } > "$tmp"
@@ -45,22 +43,24 @@ allpssh() {
         -x "-T -q" \
         -- bash < "$tmp" 2>&1 \
       | awk '
-          /^\[[0-9]+\] [0-9:]+ \[SUCCESS\] / { print $NF " >>"; next }
+          # Reachable host header - buffer it, wait for status marker on next relevant line
+          /^\[[0-9]+\] [0-9:]+ \[SUCCESS\] / {
+              pending_host = $NF
+              next
+          }
+          # Unreachable host - emit immediately on one line
           /^\[[0-9]+\] [0-9:]+ \[FAILURE\] / {
-              host = $4
-              reason = ""
-              for (i=5; i<=NF; i++) reason = reason (i>5?" ":"") $i
-              unreachable[++nu] = host " >> [UNREACHABLE] " reason
+              print $4 " >> UNREACHABLE"
+              next
+          }
+          # Status marker from a reachable host - merge with the buffered host
+          /^__ALLPSSH_STATUS__:/ {
+              status = substr($0, index($0,":")+1)
+              print pending_host " >> " status
+              pending_host = ""
               next
           }
           { print }
-          END {
-              if (nu > 0) {
-                  print ""
-                  print "=== Unreachable hosts (" nu ") ==="
-                  for (i=1; i<=nu; i++) print unreachable[i]
-              }
-          }
         '
 
     rm -f "$tmp"
