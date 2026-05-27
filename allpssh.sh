@@ -1,32 +1,19 @@
 allpssh() {
     local hostfile="./hosts.txt"
 
-    [[ $# -eq 0 ]] && { echo "Usage: allpssh <command>  or  allpssh -- <command>"; return 1; }
-
+    [[ $# -eq 0 ]] && { echo "Usage: allpssh <command>"; return 1; }
     [[ "$1" == "--" ]] && shift
     [[ $# -eq 0 ]] && { echo "Usage: allpssh <command>"; return 1; }
-
     [[ ! -r "$hostfile" ]] && { echo "hosts file not found: $hostfile" >&2; return 1; }
 
-    # Join all args into a single command string. If only one arg was passed
-    # (e.g. allpssh 'lvs | grep OLD'), it's used as-is. If multiple args were
-    # passed (e.g. allpssh ls -ltr /etc), they're joined with spaces and the
-    # remote bash -c parses the result naturally.
     local cmd
-    if [[ $# -eq 1 ]]; then
-        cmd="$1"
-    else
-        cmd="$*"
-    fi
+    if [[ $# -eq 1 ]]; then cmd="$1"; else cmd="$*"; fi
 
-    # Base64-encode the whole command string so quotes/special chars survive
-    # the trip through pssh and the remote shell.
-    local encoded
-    encoded=$(printf '%s' "$cmd" | base64 -w0)
-
-    # Remote wrapper: decode the command string, then hand it to bash -c.
-    # This means pipes, redirects, globs, $(...), etc. all evaluate on the remote.
-    local remote='bash -c "$(base64 -d <<<"'"$encoded"'")"'
+    # Write the command to a temp file, pssh ships it as stdin to remote bash.
+    # No quoting nightmares - the remote bash just reads the script from stdin.
+    local tmp
+    tmp=$(mktemp)
+    printf '%s\n' "$cmd" > "$tmp"
 
     sudo /usr/local/pssh/bin/pssh \
         -h "$hostfile" \
@@ -34,13 +21,14 @@ allpssh() {
         -t 30 \
         --inline-stdout \
         -l root \
+        -I \
         -O StrictHostKeyChecking=no \
         -O UserKnownHostsFile=/dev/null \
         -O GlobalKnownHostsFile=/dev/null \
         -O LogLevel=ERROR \
         -O BatchMode=yes \
         -x "-T -q" \
-        -- bash -c "$remote" 2>&1 \
+        -- bash < "$tmp" 2>&1 \
       | awk '
           /^\[[0-9]+\] [0-9:]+ \[SUCCESS\] / { print $NF " >>"; next }
           /^\[[0-9]+\] [0-9:]+ \[FAILURE\] / {
@@ -59,4 +47,6 @@ allpssh() {
               }
           }
         '
+
+    rm -f "$tmp"
 }
