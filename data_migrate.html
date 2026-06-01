@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Data Migration Portal — Midrange Engineering</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --red: #CC0000;
+    --red-dark: #990000;
+    --red-muted: #f9e6e6;
+    --red-border: #f0c0c0;
+    --bg: #f4f4f4;
+    --surface: #ffffff;
+    --surface2: #fafafa;
+    --border: #e0e0e0;
+    --border-strong: #c8c8c8;
+    --text: #161616;
+    --text-secondary: #525252;
+    --text-tertiary: #8d8d8d;
+    --mono: 'IBM Plex Mono', monospace;
+    --sans: 'IBM Plex Sans', sans-serif;
+    --radius: 4px;
+    --radius-lg: 8px;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+  .topbar {
+    background: var(--red);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 2rem;
+    height: 48px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .topbar-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.03em;
+  }
+  .topbar-right {
+    font-size: 12px;
+    opacity: 0.75;
+    font-family: var(--mono);
+  }
+  .shell {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 4rem;
+  }
+  .page-header {
+    margin-bottom: 2rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .page-eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--red);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .page-title {
+    font-size: 26px;
+    font-weight: 300;
+    color: var(--text);
+    margin-bottom: 8px;
+    letter-spacing: -0.02em;
+  }
+  .page-title strong { font-weight: 600; }
+  .page-desc {
+    font-size: 14px;
+    color: var(--text-secondary);
+    max-width: 580px;
+    line-height: 1.65;
+  }
+  .notice {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--red);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 2rem;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    line-height: 1.6;
+  }
+  .notice-icon { color: var(--red); flex-shrink: 0; font-size: 17px; margin-top: 0px; }
+  .transfer-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    margin-bottom: 1.25rem;
+    overflow: hidden;
+    animation: slideIn 0.2s ease;
+  }
+  .transfer-card:focus-within {
+    box-shadow: 0 0 0 2px var(--red);
+    border-color: var(--red);
+  }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .card-header {
+    background: var(--text);
+    color: #fff;
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .card-header-left { display: flex; align-items: center; gap: 10px; }
+  .card-num-badge {
+    background: var(--red);
+    color: #fff;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 2px;
+    letter-spacing: 0.05em;
+  }
+  .card-title-text { font-size: 13px; font-weight: 500; letter-spacing: 0.02em; }
+  .remove-btn {
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.25);
+    color: rgba(255,255,255,0.7);
+    font-size: 12px;
+    font-family: var(--sans);
+    padding: 4px 10px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.15s;
+  }
+  .remove-btn:hover { background: rgba(255,255,255,0.1); color: #fff; border-color: rgba(255,255,255,0.5); }
+  .card-body { padding: 20px; }
+  .section-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .section-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+  .field-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  .field-group { display: flex; flex-direction: column; gap: 6px; }
+  label { font-size: 12px; font-weight: 500; color: var(--text-secondary); letter-spacing: 0.02em; }
+  label .hint { font-weight: 400; color: var(--text-tertiary); font-size: 11px; }
+  input[type="text"] {
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 9px 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--surface2);
+    color: var(--text);
+    outline: none;
+    width: 100%;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  input[type="text"]:focus { border-color: var(--red); background: #fff; box-shadow: 0 0 0 3px rgba(204,0,0,0.08); }
+  input[type="text"]::placeholder { color: var(--text-tertiary); }
+  textarea {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.7;
+    padding: 9px 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--surface2);
+    color: var(--text);
+    outline: none;
+    width: 100%;
+    resize: vertical;
+    min-height: 80px;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  textarea:focus { border-color: var(--red); background: #fff; box-shadow: 0 0 0 3px rgba(204,0,0,0.08); }
+  textarea::placeholder { color: var(--text-tertiary); }
+  .ownership-grid {
+    display: grid;
+    grid-template-columns: 1fr 32px 1fr;
+    gap: 10px;
+    align-items: end;
+  }
+  .ownership-arrow { text-align: center; font-size: 18px; color: var(--text-tertiary); padding-bottom: 10px; }
+  .card-divider { height: 1px; background: var(--border); margin: 16px 0; }
+  .add-transfer-btn {
+    width: 100%;
+    background: transparent;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-lg);
+    color: var(--text-secondary);
+    font-family: var(--sans);
+    font-size: 14px;
+    padding: 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: 2rem;
+    transition: all 0.15s;
+  }
+  .add-transfer-btn:hover { background: var(--surface); border-color: var(--red); color: var(--red); }
+  .complete-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+  .complete-header {
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .complete-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .complete-header-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 3px; }
+  .complete-header-sub { font-size: 13px; color: var(--text-secondary); }
+  .complete-btn {
+    background: var(--red);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    padding: 10px 22px;
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .complete-btn:hover { background: var(--red-dark); }
+  .complete-btn:active { transform: scale(0.98); }
+  .complete-body { padding: 20px; }
+  .row-counter { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+  .counter-pill {
+    background: var(--red-muted);
+    color: var(--red-dark);
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 3px 10px;
+    border-radius: 99px;
+    border: 1px solid var(--red-border);
+  }
+  .counter-label { font-size: 13px; color: var(--text-secondary); }
+  .preview-box { background: #1a1a1a; border-radius: var(--radius); overflow: hidden; }
+  .preview-toolbar {
+    background: #2a2a2a;
+    padding: 8px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .preview-toolbar-label { font-family: var(--mono); font-size: 11px; color: #888; letter-spacing: 0.06em; text-transform: uppercase; }
+  .copy-btn {
+    background: transparent;
+    border: 1px solid #444;
+    color: #aaa;
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .copy-btn:hover { background: #333; color: #fff; border-color: #666; }
+  .preview-content {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: #d4d4d4;
+    padding: 14px;
+    line-height: 1.9;
+    white-space: pre;
+    overflow-x: auto;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+  .csv-header { color: #6a9955; }
+  .success-box {
+    display: none;
+    background: #f0f7ee;
+    border: 1px solid #b7d9b0;
+    border-radius: var(--radius);
+    padding: 12px 16px;
+  }
+  .success-box.visible { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .success-title { font-size: 14px; font-weight: 600; color: #2d6a27; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+  .success-body { font-size: 13px; color: #3a7a33; line-height: 1.7; }
+  .snow-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 12px;
+    background: var(--red);
+    color: #fff;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 8px 16px;
+    border-radius: var(--radius);
+    transition: background 0.15s;
+  }
+  .snow-link:hover { background: var(--red-dark); }
+  .footer {
+    margin-top: 3rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    font-family: var(--mono);
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-brand">
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+      <rect x="2" y="3" width="16" height="10" rx="1.5" stroke="white" stroke-width="1.5"/>
+      <path d="M6 17h8" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+      <path d="M10 13v4" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+      <circle cx="6" cy="8" r="1" fill="white"/>
+      <circle cx="9" cy="8" r="1" fill="white"/>
+    </svg>
+    Midrange Engineering &mdash; MRG
+  </div>
+  <div class="topbar-right">Data Migration Portal v1.0</div>
+</div>
+
+<div class="shell">
+
+  <div class="page-header">
+    <p class="page-eyebrow">&#9632; Datacenter Migration</p>
+    <h1 class="page-title">Data <strong>Transfer Request</strong></h1>
+    <p class="page-desc">Use this form to request file data transfers between servers during datacenter migration. Specify your source servers, destination servers, paths, and ownership mapping. When complete, download the CSV and attach it to your Midrange ServiceNow request.</p>
+  </div>
+
+  <div class="notice">
+    <span class="notice-icon">&#9432;</span>
+    <span>This portal <strong>does not execute any transfers.</strong> Before submitting, review your CSV carefully and validate that all ownership mappings are correct — source users, target AD accounts, paths, and server names. A Midrange engineer will execute the transfer exactly as specified in your mappings.</span>
+  </div>
+
+  <div id="cards-container"></div>
+
+  <button class="add-transfer-btn" onclick="addCard()">
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+      <path d="M7.5 2v11M2 7.5h11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>
+    Add another data transfer
+  </button>
+
+  <div class="complete-section">
+    <div class="complete-header">
+      <div class="complete-header-row">
+        <div>
+          <p class="complete-header-title">Ready to submit?</p>
+          <p class="complete-header-sub">Download your CSV and attach it to a Midrange request in ServiceNow.</p>
+        </div>
+        <button class="complete-btn" onclick="complete()">
+          <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+            <path d="M7.5 2v8M4.5 7l3 3 3-3" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M2 12h11" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          Complete
+        </button>
+      </div>
+      <div class="success-box" id="success-box">
+        <p class="success-title" style="margin:0;">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style="flex-shrink:0;">
+            <circle cx="8" cy="8" r="6" stroke="#2d6a27" stroke-width="1.5"/>
+            <path d="M5 8l2 2 4-4" stroke="#2d6a27" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          CSV downloaded successfully
+        </p>
+        <p class="success-body" style="margin:0;">Your file is ready — attach it to your Midrange ServiceNow request.</p>
+        <a class="snow-link" href="midrange-request.html" style="margin:0;white-space:nowrap;">
+          Open Midrange Request &rarr;
+        </a>
+      </div>
+    </div>
+    <div class="complete-body">
+      <div class="row-counter">
+        <span class="counter-pill" id="row-count">0</span>
+        <span class="counter-label">transfer rows will be generated in your CSV</span>
+      </div>
+      <div class="preview-box">
+        <div class="preview-toolbar">
+          <span class="preview-toolbar-label">CSV preview</span>
+          <button class="copy-btn" id="copy-btn" onclick="copyCSV()">copy</button>
+        </div>
+        <div class="preview-content" id="csv-preview"><span class="csv-header">#Source server,Destination server,Source path,Destination path,Source user,Target user</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <span>MRG &mdash; Midrange Engineering</span>
+    <span>Internal use only</span>
+  </div>
+
+</div>
+
+<script>
+  var uid = 0;
+  var cards = [];
+
+  function addCard(preset) {
+    var id = uid++;
+    cards.push(id);
+    var num = cards.length;
+    var container = document.getElementById('cards-container');
+    var div = document.createElement('div');
+    div.className = 'transfer-card';
+    div.id = 'card-' + id;
+    div.innerHTML =
+      '<div class="card-header">' +
+        '<div class="card-header-left">' +
+          '<span class="card-num-badge">DT-<span class="card-n">' + num + '</span></span>' +
+          '<span class="card-title-text">Data Transfer ' + num + '</span>' +
+        '</div>' +
+        '<button class="remove-btn" onclick="removeCard(' + id + ')">' +
+          '<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M1.5 1.5l8 8M9.5 1.5l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>' +
+          ' Remove' +
+        '</button>' +
+      '</div>' +
+      '<div class="card-body">' +
+        '<p class="section-label">Servers</p>' +
+        '<div class="field-row">' +
+          '<div class="field-group">' +
+            '<label>Source server</label>' +
+            '<input type="text" id="src_srv_' + id + '" placeholder="rhel8-app01.dc1.corp" oninput="update()">' +
+          '</div>' +
+          '<div class="field-group">' +
+            '<label>Destination servers <span class="hint">one per line</span></label>' +
+            '<textarea id="dst_srv_' + id + '" rows="3" placeholder="rhel9-app01.dc2.corp&#10;rhel9-app02.dc2.corp" oninput="update()"></textarea>' +
+          '</div>' +
+        '</div>' +
+        '<p class="section-label">Paths</p>' +
+        '<div class="field-row">' +
+          '<div class="field-group">' +
+            '<label>Source paths <span class="hint">one per line</span></label>' +
+            '<textarea id="src_path_' + id + '" rows="3" placeholder="/app/data/jdoe/reports&#10;/app/data/jdoe/config" oninput="update()"></textarea>' +
+          '</div>' +
+          '<div class="field-group">' +
+            '<label>Destination path</label>' +
+            '<input type="text" id="dst_path_' + id + '" placeholder="/var/tmp" oninput="update()">' +
+          '</div>' +
+        '</div>' +
+        '<div class="card-divider"></div>' +
+        '<p class="section-label">Ownership mapping</p>' +
+        '<div class="ownership-grid">' +
+          '<div class="field-group">' +
+            '<label>Source user</label>' +
+            '<input type="text" id="src_usr_' + id + '" placeholder="localuser01" oninput="update()">' +
+          '</div>' +
+          '<div class="ownership-arrow">&rarr;</div>' +
+          '<div class="field-group">' +
+            '<label>Target AD user</label>' +
+            '<input type="text" id="dst_usr_' + id + '" placeholder="CORP\\ad_user01" oninput="update()">' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    container.appendChild(div);
+    if (preset) {
+      document.getElementById('src_srv_'  + id).value = preset.src_srv  || '';
+      document.getElementById('dst_srv_'  + id).value = preset.dst_srv  || '';
+      document.getElementById('src_path_' + id).value = preset.src_path || '';
+      document.getElementById('dst_path_' + id).value = preset.dst_path || '';
+      document.getElementById('src_usr_'  + id).value = preset.src_usr  || '';
+      document.getElementById('dst_usr_'  + id).value = preset.dst_usr  || '';
+    }
+    update();
+  }
+
+  function removeCard(id) {
+    var idx = cards.indexOf(id);
+    if (idx > -1) cards.splice(idx, 1);
+    var el = document.getElementById('card-' + id);
+    if (el) el.remove();
+    renumber();
+    update();
+  }
+
+  function renumber() {
+    cards.forEach(function(id, i) {
+      var n = i + 1;
+      var badge = document.querySelector('#card-' + id + ' .card-n');
+      var title = document.querySelector('#card-' + id + ' .card-title-text');
+      if (badge) badge.textContent = n;
+      if (title) title.textContent = 'Data Transfer ' + n;
+    });
+  }
+
+  function getLines(str) {
+    return (str || '').split('\n').map(function(s){ return s.trim(); }).filter(Boolean);
+  }
+
+  function clean(s) {
+    return (s || '').trim().replace(/,/g, '');
+  }
+
+  function buildCSV() {
+    var rows = ['#Source server,Destination server,Source path,Destination path,Source user,Target user'];
+    cards.forEach(function(id) {
+      var srcSrv   = clean(document.getElementById('src_srv_'  + id).value);
+      var dstSrvs  = getLines(document.getElementById('dst_srv_'  + id).value);
+      var srcPaths = getLines(document.getElementById('src_path_' + id).value);
+      var dstPath  = clean(document.getElementById('dst_path_' + id).value);
+      var srcUsr   = clean(document.getElementById('src_usr_'  + id).value);
+      var dstUsr   = clean(document.getElementById('dst_usr_'  + id).value);
+      if (!srcSrv && !dstSrvs.length && !srcPaths.length) return;
+      var dsts  = dstSrvs.length  ? dstSrvs  : [''];
+      var paths = srcPaths.length ? srcPaths : [''];
+      dsts.forEach(function(dst) {
+        paths.forEach(function(sp) {
+          rows.push([srcSrv, clean(dst), clean(sp), dstPath, srcUsr, dstUsr].join(','));
+        });
+      });
+    });
+    return rows.join('\n');
+  }
+
+  function update() {
+    var csv = buildCSV();
+    var dataRows = csv.split('\n').filter(function(l){ return l && l.charAt(0) !== '#'; }).length;
+    document.getElementById('row-count').textContent = dataRows;
+    var lines = csv.split('\n');
+    document.getElementById('csv-preview').innerHTML = lines.map(function(l, i){
+      return i === 0 ? '<span class="csv-header">' + l + '</span>' : l;
+    }).join('\n');
+  }
+
+  function complete() {
+    var csv = buildCSV();
+    var blob = new Blob([csv], { type: 'text/csv' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    var now = new Date();
+    var ts = now.getFullYear().toString() +
+      String(now.getMonth()+1).padStart(2,'0') +
+      String(now.getDate()).padStart(2,'0') + '_' +
+      String(now.getHours()).padStart(2,'0') +
+      String(now.getMinutes()).padStart(2,'0') +
+      String(now.getSeconds()).padStart(2,'0');
+    a.download = 'migration_request_' + ts + '.csv';
+    a.click();
+    var box = document.getElementById('success-box');
+    box.classList.add('visible');
+    box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function copyCSV() {
+    var btn = document.getElementById('copy-btn');
+    navigator.clipboard.writeText(buildCSV()).then(function() {
+      btn.textContent = 'copied!';
+      setTimeout(function(){ btn.textContent = 'copy'; }, 2000);
+    });
+  }
+
+  addCard({
+    src_srv:  'rhel8-app01.dc1.corp',
+    dst_srv:  'rhel9-app01.dc2.corp\nrhel9-app02.dc2.corp',
+    src_path: '/app/data/jdoe/reports\n/app/data/jdoe/config\n/app/data/jdoe/logs',
+    dst_path: '/var/tmp',
+    src_usr:  'jdoe',
+    dst_usr:  'CORP\\ad_jdoe'
+  });
+</script>
+</body>
+</html>
