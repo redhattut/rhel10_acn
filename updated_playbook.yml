@@ -1,0 +1,96 @@
+---
+- name: Cache Satellite Content View Version JSON Data
+  hosts: all
+  become: yes
+  become_user: root
+
+  tasks:
+    - name: Execute CVV cache script
+      shell: |
+
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        # Pre-defined content-view IDs
+        CV_IDS=( 8 11 9 )
+        VERSIONS_TO_KEEP=5
+
+        # Variables
+        api_user="{{ satellite_username }}"
+        auth_token="{{ satellite_password }}"
+        API="https://mrg-sat.uat.pncint.net/katello/api"
+        BASE_DIR="/opt/app/Sat_Report/cache"
+
+        # Loop over each Content view ID
+        for cv_id in "${CV_IDS[@]}"; do
+            cv_dir="${BASE_DIR}/CV_${cv_id}"
+            mkdir -p "$cv_dir"
+
+            echo "$(date): Processing Content View ID: ${cv_id}"
+
+            # Fetch the complete list of versions for the current Content View ID
+            all_versions_json=$(curl -ksu "${api_user}:${auth_token}" \
+                    "${API}/content_views/${cv_id}:content_view_id/content_view_versions")
+
+            # NOTE: Stale file cleanup has been intentionally removed.
+            # JSON lifecycle (age-based retention of 6 months) is now managed
+            # exclusively by sat_html_gen.sh at the end of its run. This prevents
+            # a race condition where the playbook would delete historical JSONs
+            # (whose CVV no longer exists on Satellite) before sat_html_gen.sh
+            # has a chance to use them for archive HTML generation.
+
+            # --- Cache Generation Loop ---
+            # Loop from the latest version (0) to the Nth version to keep
+            for i in $(seq 0 $((VERSIONS_TO_KEEP - 1))); do
+                # Get the JSON object for the specific content view version (e.g., results[0], results[1], etc..)
+                cvv_json=$(echo "$all_versions_json" | jq -r ".results[$i]")
+
+                # Extract the ID and Description from the version
+                cvv_id=$(echo "$cvv_json" | jq -r '.id')
+                cvv_desc=$(echo "$cvv_json" | jq -r '.description')
+
+                # If the API returns null, stop for this CV
+                if [[ -z "$cvv_id" || "$cvv_id" == "null" || -z "$cvv_desc" || "$cvv_desc" == "null" ]]; then
+                    echo "$(date): No more versions found for CV ${cv_id}. Moving to next."
+                    break
+                fi
+
+                echo "$(date): Processing version '${cvv_desc}' (CV ID: ${cvv_id})"
+
+                # Define file paths using the description
+                errata_file="${cv_dir}/${cvv_desc}_ERRATA.json"
+                packages_file="${cv_dir}/${cvv_desc}_PACKAGES.json"
+
+                # Download Errata list if it doesn't already exist
+                if [[ ! -f "$errata_file" ]]; then
+                    echo "$(date): Downloading Errata list to $(basename "$errata_file")"
+                    curl -ksu "${api_user}:${auth_token}" \
+                        "${API}/errata?full_result=true&content_view_version_id=${cvv_id}" \
+                        -o "$errata_file"
+                fi
+
+                # Download Packages list if it doesn't already exist
+                if [[ ! -f "$packages_file" ]]; then
+                    echo "$(date): Downloading Packages list to $(basename "$packages_file")"
+                    curl -ksu "${api_user}:${auth_token}" \
+                        "${API}/packages?full_result=true&content_view_version_id=${cvv_id}" \
+                        -o "$packages_file"
+                fi
+            done
+        done
+
+        echo "$(date): Cache generation complete"
+
+      register: cache_result
+
+    - name: Display cache results
+      debug:
+        var: cache_result.stdout_lines
+
+    - name: Execute compare and html generate script
+      shell: /opt/app/Sat_Report/sat_html_gen.sh
+      register: html_result
+
+    - name: Display HTML generated result
+      debug:
+        var: html_result.stdout_lines
