@@ -223,39 +223,63 @@ build_remote_script() {
         cat > "${script_file}" << 'ENDBODY'
 echo "HOST:$(hostname)"
 for u in __IDS__; do
-  for p in "/home/${u}" "/home/${u}OUD"; do
-    [ -e "${p}" ] && echo "HOME_DRY_RUN:${p}" || true
+  # Check home dirs in both lowercase and uppercase.
+  # IDs are normalized to lowercase before the script runs, but some legacy
+  # home dirs may have been created with uppercase. Check all four variants
+  # and report only the first one found — never report the same user twice.
+  ul=$(echo "${u}" | tr '[:upper:]' '[:lower:]')
+  uu=$(echo "${u}" | tr '[:lower:]' '[:upper:]')
+  home_found=0
+  for p in "/home/${ul}" "/home/${ul}OUD" "/home/${uu}" "/home/${uu}OUD"; do
+    if [ -e "${p}" ] && [ "${home_found}" -eq 0 ]; then
+      echo "HOME_DRY_RUN:${p}"
+      home_found=1
+    fi
   done
-  grep -q "^${u}:" /etc/passwd 2>/dev/null && echo "PASSWD_DRY_RUN:${u}" || true
-  groups=$(grep -P "^[^:]+:[^:]+:[^:]+:.*\b${u}\b" /etc/group 2>/dev/null \
-    | cut -d: -f1 | tr '\n' ',' | sed 's/,$//')
-  [ -n "${groups}" ] && echo "GROUP_DRY_RUN:${u}:${groups}" || true
+  grep -q "^${ul}:" /etc/passwd 2>/dev/null && echo "PASSWD_DRY_RUN:${ul}" || true
+  groups=$(grep -P "^[^:]+:[^:]+:[^:]+:.*${ul}" /etc/group 2>/dev/null     | cut -d: -f1 | tr '
+' ',' | sed 's/,$//')
+  [ -n "${groups}" ] && echo "GROUP_DRY_RUN:${ul}:${groups}" || true
 done
 ENDBODY
     else
         cat > "${script_file}" << 'ENDBODY'
 echo "HOST:$(hostname)"
 for u in __IDS__; do
-  for p in "/home/${u}" "/home/${u}OUD"; do
-    if [ -e "${p}" ]; then
+  ul=$(echo "${u}" | tr '[:upper:]' '[:lower:]')
+  uu=$(echo "${u}" | tr '[:lower:]' '[:upper:]')
+  home_found=0
+  for p in "/home/${ul}" "/home/${ul}OUD" "/home/${uu}" "/home/${uu}OUD"; do
+    if [ -e "${p}" ] && [ "${home_found}" -eq 0 ]; then
       rm -rf "${p}" && echo "HOME_REMOVED:${p}" || echo "HOME_FAILED:${p}"
+      home_found=1
     fi
   done
-  if grep -q "^${u}:" /etc/passwd 2>/dev/null; then
-    userdel "${u}" 2>/dev/null && echo "PASSWD_REMOVED:${u}" || echo "PASSWD_FAILED:${u}"
+  if grep -q "^${ul}:" /etc/passwd 2>/dev/null; then
+    userdel "${ul}" 2>/dev/null && echo "PASSWD_REMOVED:${ul}" || echo "PASSWD_FAILED:${ul}"
   fi
-  groups=$(grep -P "^[^:]+:[^:]+:[^:]+:.*\b${u}\b" /etc/group 2>/dev/null \
-    | cut -d: -f1 | tr '\n' ',' | sed 's/,$//')
+  groups=$(grep -P "^[^:]+:[^:]+:[^:]+:.*${ul}" /etc/group 2>/dev/null     | cut -d: -f1 | tr '
+' ',' | sed 's/,$//')
   if [ -n "${groups}" ]; then
-    cp /etc/group "/etc/group.preremove.${u}" && \
-    sed -i -e "s/,${u}//g" -e "s/${u},//g" -e "s/:${u}\$//g" /etc/group && \
-    echo "GROUP_REMOVED:${u}:${groups}" || echo "GROUP_FAILED:${u}"
+    cp /etc/group "/etc/group.preremove.${ul}" &&     sed -i -e "s/,${ul}//g" -e "s/${ul},//g" -e "s/:${ul}\$//g" /etc/group &&     echo "GROUP_REMOVED:${ul}:${groups}" || echo "GROUP_FAILED:${ul}"
   fi
 done
 ENDBODY
     fi
 
-    sed -i "s/__IDS__/${ids_literal}/" "${script_file}"
+    # Replace __IDS__ placeholder with the actual ID list.
+    # Using Python instead of sed because:
+    #   1. sed uses / as delimiter — any / in ids_literal breaks s/__IDS__/.../ 
+    #   2. Very long substitution strings (300+ IDs) can exceed sed limits
+    #   3. Python handles arbitrary string content safely with no delimiter issues
+    python3 -c "
+import sys
+with open(sys.argv[1], 'r') as f:
+    data = f.read()
+data = data.replace('__IDS__', sys.argv[2])
+with open(sys.argv[1], 'w') as f:
+    f.write(data)
+" "${script_file}" "${ids_literal}"
 }
 
 # run_pssh_batch HOST_FILE SCRIPT_FILE OUT_FILE
