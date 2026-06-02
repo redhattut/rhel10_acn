@@ -184,8 +184,8 @@ else
     "${SCRIPT_DIR}/getdata.sh" || getdata_rc=$?
 
     case "${getdata_rc}" in
-        0) log_success "Terms data available — proceeding." ;;
-        1) log_info "No terminations to process today — terms.ids is empty."
+        0) log_success "OIM data fetched — proceeding with cleanup." ;;
+        1) log_info "No OIM data to process today — both terms.ids and trans.ids are empty."
            send_completion_email
            trap - ERR EXIT; release_lock; exit 0 ;;
         *) log_fatal "getdata.sh returned exit code ${getdata_rc}." ;;

@@ -231,11 +231,17 @@ process_kind "trans" || true
 
 log_info "===== getdata.sh done ====="
 
-# Exit 1 if terms.ids is empty — no terminations to process today.
-# main.sh treats exit 1 as a clean "nothing to do" and exits gracefully.
-# This covers both a genuine 0-byte OIM file and a failed SCP for terms.
-if [[ ! -s "${DATA_DIR}/terms.ids" ]]; then
-    log_info "terms.ids is empty — no terminations to process today."
+# Report the state of both ID files clearly
+terms_empty=false
+trans_empty=false
+[[ ! -s "${DATA_DIR}/terms.ids" ]] && terms_empty=true && log_info "terms.ids is empty — no terminations today."
+[[ ! -s "${DATA_DIR}/trans.ids" ]] && trans_empty=true && log_info "trans.ids is empty — no transfers today."
+
+# Exit 1 only when BOTH are empty — main.sh will exit cleanly with no work to do.
+# If either has IDs, exit 0 so main.sh proceeds; the cleanup steps check each file
+# independently and skip whichever is empty.
+if ${terms_empty} && ${trans_empty}; then
+    log_info "Both terms.ids and trans.ids are empty — nothing to process today."
     exit 1
 fi
 exit 0
