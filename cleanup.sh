@@ -312,6 +312,7 @@ run_pssh_batch() {
     local pssh_rc=0
     # shellcheck disable=SC2086
     cat "${script_file}" | "${PSSH_BIN}" ${PSSH_OPTS} \
+        -x "${PSSH_SSH_OPTS}" \
         -h "${host_file}" \
         bash \
         > "${out_file}" 2>/dev/null || pssh_rc=$?
@@ -469,7 +470,7 @@ if ${DEBUG_PSSH}; then
     done < "${REMOTE_SCRIPT_FILE}"
 
     log_info "DEBUG-PSSH: Running: ssh ${SSH_OPTS} -l ${PSSH_LOGIN} ${first_server} bash -s < script"
-    ssh_out=$( ssh ${SSH_OPTS} -l "${PSSH_LOGIN}" "${first_server}" 'bash -s'                < "${REMOTE_SCRIPT_FILE}" 2>&1 ) || true
+    ssh_out=$( ssh ${SSH_OPTS} -i "${PSSH_IDENTITY}" -l "${PSSH_LOGIN}" "${first_server}" 'bash -s'                < "${REMOTE_SCRIPT_FILE}" 2>&1 ) || true
     ssh_rc=$?
     log_info "DEBUG-PSSH: ssh exit code: ${ssh_rc}"
     log_info "DEBUG-PSSH: Raw output (every line):"
@@ -485,7 +486,7 @@ if ${DEBUG_PSSH}; then
     # Extra verification: directly list /home/ on the server and check which
     # of our user IDs appear there, regardless of the remote script output.
     log_info "DEBUG-PSSH: Checking /home/ listing on ${first_server}:"
-    home_list=$( ssh ${SSH_OPTS} -l "${PSSH_LOGIN}" "${first_server}"         'ls /home/ 2>/dev/null' 2>&1 ) || true
+    home_list=$( ssh ${SSH_OPTS} -i "${PSSH_IDENTITY}" -l "${PSSH_LOGIN}" "${first_server}"         'ls /home/ 2>/dev/null' 2>&1 ) || true
     if [[ -z "${home_list}" ]]; then
         log_info "DEBUG-PSSH:   /home/ is empty or not readable"
     else
@@ -503,7 +504,7 @@ if ${DEBUG_PSSH}; then
 
     # Also verify /etc/passwd for any of our users
     log_info "DEBUG-PSSH: Checking /etc/passwd on ${first_server} for any of our users:"
-    passwd_matches=$( ssh ${SSH_OPTS} -l "${PSSH_LOGIN}" "${first_server}"         "grep -E '^($(IFS='|'; echo "${USER_IDS[*]}"|sed 's/ /|/g')):' /etc/passwd 2>/dev/null || true"         2>&1 ) || true
+    passwd_matches=$( ssh ${SSH_OPTS} -i "${PSSH_IDENTITY}" -l "${PSSH_LOGIN}" "${first_server}"         "grep -E '^($(IFS='|'; echo "${USER_IDS[*]}"|sed 's/ /|/g')):' /etc/passwd 2>/dev/null || true"         2>&1 ) || true
     if [[ -z "${passwd_matches}" ]]; then
         log_info "DEBUG-PSSH:   No local /etc/passwd entries found for any of our users"
     else
