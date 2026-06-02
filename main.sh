@@ -171,39 +171,55 @@ log_info "================================================================"
 acquire_lock
 
 # ------------------------------------------------------------------
-# Step 1 — Fetch OIM data
+# Step 1 — Fetch OIM data (skipped when --ids-file is provided)
 # ------------------------------------------------------------------
-log_info "--- Step 1: getdata.sh ---"
-getdata_rc=0
-"${SCRIPT_DIR}/getdata.sh" || getdata_rc=$?
+if [[ -n "${IDS_FILE_FLAG}" ]]; then
+    # Custom ID file supplied — skip getdata.sh entirely.
+    # The caller already knows which users to process; no OIM fetch needed.
+    log_info "--- Step 1: getdata.sh SKIPPED (--ids-file provided) ---"
+    log_info "Using custom ID file: ${IDS_FILE_FLAG#--ids-file }"
+else
+    log_info "--- Step 1: getdata.sh ---"
+    getdata_rc=0
+    "${SCRIPT_DIR}/getdata.sh" || getdata_rc=$?
 
-case "${getdata_rc}" in
-    0) log_success "New terms data available — proceeding." ;;
-    1) log_info "Terms unchanged — nothing to do."
-       send_completion_email
-       trap - ERR EXIT; release_lock; exit 0 ;;
-    *) log_fatal "getdata.sh returned exit code ${getdata_rc}." ;;
-esac
+    case "${getdata_rc}" in
+        0) log_success "Terms data available — proceeding." ;;
+        1) log_info "No terminations to process today — terms.ids is empty."
+           send_completion_email
+           trap - ERR EXIT; release_lock; exit 0 ;;
+        *) log_fatal "getdata.sh returned exit code ${getdata_rc}." ;;
+    esac
+fi
 
 # ------------------------------------------------------------------
 # Step 2 — Combined cleanup: home dirs + /etc/passwd + /etc/group
 # ------------------------------------------------------------------
-log_info "--- Step 2: cleanup.sh terms ---"
-if [[ -s "${DATA_DIR}/terms.ids" ]]; then
+# When --ids-file is used, cleanup.sh runs for terms mode only
+# (the custom file is the ID source; trans is not applicable).
+if [[ -n "${IDS_FILE_FLAG}" ]]; then
+    log_info "--- Step 2: cleanup.sh terms (custom IDs) ---"
     # shellcheck disable=SC2086
     "${SCRIPT_DIR}/cleanup.sh" --mode terms ${DRY_RUN_FLAG} ${NO_EMAIL_FLAG} ${DEBUG_FLAG} ${IDS_FILE_FLAG} ${HOSTS_FILE_FLAG}
     log_success "Cleanup (terms) complete."
 else
-    log_warn "terms.ids empty — skipping cleanup for terms."
-fi
+    log_info "--- Step 2: cleanup.sh terms ---"
+    if [[ -s "${DATA_DIR}/terms.ids" ]]; then
+        # shellcheck disable=SC2086
+        "${SCRIPT_DIR}/cleanup.sh" --mode terms ${DRY_RUN_FLAG} ${NO_EMAIL_FLAG} ${DEBUG_FLAG} ${HOSTS_FILE_FLAG}
+        log_success "Cleanup (terms) complete."
+    else
+        log_warn "terms.ids empty — skipping cleanup for terms."
+    fi
 
-log_info "--- Step 3: cleanup.sh trans ---"
-if [[ -s "${DATA_DIR}/trans.ids" ]]; then
-    # shellcheck disable=SC2086
-    "${SCRIPT_DIR}/cleanup.sh" --mode trans ${DRY_RUN_FLAG} ${NO_EMAIL_FLAG} ${DEBUG_FLAG} ${IDS_FILE_FLAG} ${HOSTS_FILE_FLAG}
-    log_success "Cleanup (trans) complete."
-else
-    log_info "trans.ids empty — no cleanup needed for trans."
+    log_info "--- Step 3: cleanup.sh trans ---"
+    if [[ -s "${DATA_DIR}/trans.ids" ]]; then
+        # shellcheck disable=SC2086
+        "${SCRIPT_DIR}/cleanup.sh" --mode trans ${DRY_RUN_FLAG} ${NO_EMAIL_FLAG} ${DEBUG_FLAG} ${HOSTS_FILE_FLAG}
+        log_success "Cleanup (trans) complete."
+    else
+        log_info "trans.ids empty — no cleanup needed for trans."
+    fi
 fi
 
 # ------------------------------------------------------------------

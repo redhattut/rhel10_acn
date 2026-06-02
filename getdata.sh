@@ -84,8 +84,16 @@ fetch_oim_raw() {
         log_error "SCP failed for raw ${kind} file"
         return 1
     fi
-    [[ -s "${staging}" ]] || { log_error "Raw ${kind} staging file is empty after SCP"; return 1; }
-    log_success "Fetched raw ${kind} — $(wc -l < "${staging}") rows"
+    # A 0-byte file is valid — it means no records for this kind today.
+    # Only fail if the file doesn't exist at all (SCP silently produced nothing).
+    [[ -f "${staging}" ]] || { log_error "Raw ${kind} staging file missing after SCP"; return 1; }
+    local row_count
+    row_count=$(wc -l < "${staging}")
+    if [[ ${row_count} -eq 0 ]]; then
+        log_info "Fetched raw ${kind} — 0 rows (no records today)"
+    else
+        log_success "Fetched raw ${kind} — ${row_count} rows"
+    fi
     return 0
 }
 
@@ -104,8 +112,14 @@ fetch_oim_ids() {
         log_error "SCP failed for ${kind}.id. file"
         return 1
     fi
-    [[ -s "${staging}" ]] || { log_error "${kind}.id. staging file is empty after SCP"; return 1; }
-    log_success "Fetched ${kind}.id. — $(wc -l < "${staging}") IDs"
+    [[ -f "${staging}" ]] || { log_error "${kind}.id. staging file missing after SCP"; return 1; }
+    local id_count
+    id_count=$(wc -l < "${staging}")
+    if [[ ${id_count} -eq 0 ]]; then
+        log_info "Fetched ${kind}.id. — 0 IDs (no records today)"
+    else
+        log_success "Fetched ${kind}.id. — ${id_count} IDs"
+    fi
     return 0
 }
 
@@ -217,8 +231,11 @@ process_kind "trans" || true
 
 log_info "===== getdata.sh done ====="
 
-# Exit 1 only if terms.ids ended up empty — that means no IDs to process
-# and cleanup should be skipped. A re-run with unchanged OIM data still
-# produces a populated terms.ids from the existing archive and exits 0.
-[[ -s "${DATA_DIR}/terms.ids" ]] || exit 1
+# Exit 1 if terms.ids is empty — no terminations to process today.
+# main.sh treats exit 1 as a clean "nothing to do" and exits gracefully.
+# This covers both a genuine 0-byte OIM file and a failed SCP for terms.
+if [[ ! -s "${DATA_DIR}/terms.ids" ]]; then
+    log_info "terms.ids is empty — no terminations to process today."
+    exit 1
+fi
 exit 0
