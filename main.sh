@@ -147,16 +147,114 @@ trap 'release_lock; log_error "main.sh exited unexpectedly."' ERR EXIT
 # --- Email -------------------------------------------------------------------
 # ttinotify is a local mail alias defined in /etc/aliases.
 # It maps to one or more real email addresses. Run 'newaliases' after editing.
-# Mail is sent as the Unix user running this script (typically root).
-# The body is tti_cleanup.log (or its dryrun equivalent), sent at completion.
+# Mail is sent as the Unix user running this script (root via sudo).
+#
+# Email format:
+#   Subject : TTI EAR Cleanup Report — hostname — date [DRY-RUN if applicable]
+#   Body    : Short human-readable summary (counts from SUMMARY log lines)
+#   Attachment: full tti_cleanup.log (or dryrun equivalent)
+#
+# Using mailx -a for attachment. If tti_cleanup.log is empty (no terms/trans
+# today), the body explains that clearly and no attachment is sent.
+
+# build_email_body OUTPUT_FILE
+#   Writes a short summary to OUTPUT_FILE.
+#   Parses SUMMARY lines from LOG_CLEANUP for counts.
+#   Falls back to a "nothing to process" message if log is empty.
+build_email_body() {
+    local out="$1"
+    local run_date host_name mode_tag
+    run_date=$(date '+%Y-%m-%d %H:%M')
+    host_name=$(hostname)
+    mode_tag="$( ${DRY_RUN} && echo ' [DRY-RUN]' || true )"
+
+    {
+        echo "TTI EAR Cleanup Report${mode_tag}"
+        echo "Host     : ${host_name}"
+        echo "Date     : ${run_date}"
+        echo "========================================="
+        echo ""
+
+        # Check if cleanup.log has any content
+        if [[ ! -s "${LOG_CLEANUP}" ]]; then
+            echo "No terminations or transfers to process today."
+            echo "OIM files were empty for this run."
+            echo ""
+            echo "No cleanup log to attach."
+            return
+        fi
+
+        # Extract SUMMARY lines per mode and format them
+        local terms_lines trans_lines
+        terms_lines=$(grep "\[SUMMARY\].*cleanup complete\|cleanup_homes\|cleanup complete"             "${LOG_CLEANUP}" 2>/dev/null || true)
+
+        # Parse each SUMMARY line from the log into readable output
+        # Two-pass approach:
+        # Pass 1 — collect all SUMMARY lines stripped of their log prefix.
+        # Pass 2 — walk the stripped lines to build the section output.
+        # This avoids ordering issues where "cleanup complete" appears before "Mode".
+        local stripped_file
+        stripped_file=$(mktemp /var/tmp/tti_summary.XXXXXX)
+        grep "\[SUMMARY" "${LOG_CLEANUP}" |             sed 's/^\[.*\] \[SUMMARY *\] \[.*\] //' > "${stripped_file}"
+
+        local in_terms=false in_trans=false
+        while IFS= read -r msg; do
+            if echo "${msg}" | grep -q "Mode.*:.*terms"; then
+                in_terms=true; in_trans=false
+                echo "Terminations:"
+                continue
+            elif echo "${msg}" | grep -q "Mode.*:.*trans"; then
+                in_terms=false; in_trans=true
+                echo ""; echo "Transfers:"
+                continue
+            fi
+            # Skip the "cleanup complete" header line
+            echo "${msg}" | grep -q "^cleanup complete" && continue
+            # Print all other SUMMARY fields indented
+            if ${in_terms} || ${in_trans}; then
+                echo "  ${msg}"
+            fi
+        done < "${stripped_file}"
+        rm -f "${stripped_file}"
+
+        # Add placeholder sections for any mode that had no cleanup run
+        if ! grep -q "Mode.*:.*terms" "${LOG_CLEANUP}" 2>/dev/null; then
+            echo "Terminations:"
+            echo "  No terminations to process today."
+        fi
+        if ! grep -q "Mode.*:.*trans" "${LOG_CLEANUP}" 2>/dev/null; then
+            echo ""; echo "Transfers:"
+            echo "  No transfers to process today."
+        fi
+
+        echo ""
+        echo "========================================="
+        echo "Full cleanup log attached."
+    } > "${out}"
+}
+
 send_completion_email() {
     if ! ${SEND_EMAIL}; then
         log_info "Email notification skipped (--no-email)."
         return
     fi
-    local subject="TTI EAR cleanup complete$( ${DRY_RUN} && echo ' [DRY-RUN]' || true ) — $(hostname) $(date '+%Y-%m-%d %H:%M')"
-    /usr/bin/mail -s "${subject}" "${NOTIFY}" < "${LOG_CLEANUP}" || true
-    log_info "Completion email sent to ${NOTIFY}."
+
+    local subject="TTI EAR Cleanup Report$( ${DRY_RUN} && echo ' [DRY-RUN]' || true ) — $(hostname) — $(date '+%Y-%m-%d %H:%M')"
+    local body_file
+    body_file=$(mktemp /var/tmp/tti_email_body.XXXXXX)
+    trap 'rm -f "${body_file}"' RETURN
+
+    build_email_body "${body_file}"
+
+    if [[ -s "${LOG_CLEANUP}" ]]; then
+        # Full log as attachment, summary as body
+        mailx -s "${subject}"               -a "${LOG_CLEANUP}"               "${NOTIFY}" < "${body_file}" || true
+        log_info "Completion email sent to ${NOTIFY} (with ${LOG_CLEANUP##*/} attached)."
+    else
+        # No attachment when log is empty — nothing happened
+        mailx -s "${subject}"               "${NOTIFY}" < "${body_file}" || true
+        log_info "Completion email sent to ${NOTIFY} (no attachment — nothing processed)."
+    fi
 }
 
 # =============================================================================

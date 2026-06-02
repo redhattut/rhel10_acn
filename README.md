@@ -9,18 +9,21 @@ Modern rewrite of the TTI EAR automation suite. Replaces the legacy KSH scripts 
 1. [Background](#background)
 2. [Folder Layout](#folder-layout)
 3. [Script Overview](#script-overview)
-4. [Log Files](#log-files)
-5. [Email Notification](#email-notification)
-6. [Run Examples](#run-examples)
-7. [Dry-Run Mode](#dry-run-mode)
-8. [Targeted Testing (custom IDs and hosts)](#targeted-testing)
-9. [What Changed vs Legacy](#what-changed-vs-legacy)
+4. [Configuration (tti.conf)](#configuration)
+5. [OIM File Format](#oim-file-format)
+6. [Log Files](#log-files)
+7. [Email Notification](#email-notification)
+8. [Run Examples](#run-examples)
+9. [Dry-Run Mode](#dry-run-mode)
+10. [Targeted Testing (custom IDs and hosts)](#targeted-testing)
+11. [Cron Schedule](#cron-schedule)
+12. [What Changed vs Legacy](#what-changed-vs-legacy)
 
 ---
 
 ## Background
 
-The EAR process is driven by Oracle Identity Manager (OIM), which is the authoritative source for terminated and transferred user accounts. OIM server produces daily data files for terminated or transferrred users. This process collects those files, extracts affected user IDs, and fans out across the Linux estate via pssh to remove any traces of those accounts.
+The EAR process is driven by Oracle Identity Manager (OIM), which is the authoritative source for terminated and transferred user accounts. OIM produces daily data files on `loim375a` under `/app/OIM/AppSupport/EAR/`. This process collects those files, extracts affected user IDs, and fans out across the Linux estate via pssh to remove any traces of those accounts.
 
 Account authentication and group membership in LDAP/OUD and Active Directory are managed elsewhere. This process handles:
 
@@ -44,9 +47,9 @@ Account authentication and group membership in LDAP/OUD and Active Directory are
 ├── data/
 │   ├── terms.ids         Current run termination IDs (one per line, lowercase)
 │   ├── trans.ids         Current run transfer IDs (one per line, lowercase)
-│   ├── terms/            Raw OIM termination files archived
+│   ├── terms/            Raw OIM termination files archived from loim375a
 │   │   └── terms.YYYYMMDDHHMM
-│   ├── trans/            Raw OIM transfer files archived
+│   ├── trans/            Raw OIM transfer files archived from loim375a
 │   │   └── trans.YYYYMMDDHHMM
 │   └── ids/              Timestamped ID snapshots — one file per run
 │       ├── terms.ids.YYMMDDHHMM
@@ -89,7 +92,7 @@ Central configuration sourced by every script. All paths, OIM server details, ps
 The orchestrator. Called by cron daily. Acquires a lock, truncates working logs (fresh start), calls `getdata.sh`, then calls `cleanup.sh` for both terms and trans modes. Archives the unreachable hosts log. Sends a completion email. Releases the lock.
 
 ### `getdata.sh`
-Fetches two file types per kind (terms/trans) from the specific OIM server:
+Fetches two file types per kind (terms/trans) from `loim375a:/app/OIM/AppSupport/EAR/`:
 - Raw tilde-delimited file → archived to `data/terms/` or `data/trans/`
 - `.id.` pre-extracted ID file → lowercased → written as `data/terms.ids` or `data/trans.ids`
 
@@ -103,6 +106,48 @@ The core cleanup engine. For each server in the host list (in parallel batches o
 3. **`/etc/group`** — checks member lists for the user ID, backs up and patches the file with `sed` if found
 
 One pssh invocation per batch = one SSH connection per server per batch, regardless of how many users are in the list.
+
+---
+
+## Configuration
+
+All settings in `scripts/tti.conf`. Key values:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BASE_DIR` | `/export/home/xamrgpti` | Root of the entire process |
+| `OIM_HOST` | `loim375a` | OIM server to SCP files from |
+| `OIM_EAR_DIR` | `/app/OIM/AppSupport/EAR` | Directory on OIM server |
+| `SERVER_LIST` | `/usr/local/bin/hosts.linux.nonfed.txt` | One hostname per line |
+| `PSSH_BIN` | `/usr/local/pssh/bin/pssh` | Path to pssh binary |
+| `PSSH_LOGIN` | `root` | Remote user for pssh connections |
+| `PSSH_BATCH` | `75` | Hosts in parallel per pssh call |
+| `PSSH_TIMEOUT` | `30` | Per-host timeout in seconds |
+| `NOTIFY` | `ttinotify` | Mail alias for notifications |
+| `DRYRUN_LOGS_DIR` | `logs/dryrun` | Isolated directory for all dry-run logs |
+
+---
+
+## OIM File Format
+
+Four files produced per run under `/app/OIM/AppSupport/EAR/` on `loim375a`:
+
+**`terms.id.YYYYMMDDHHMMSS`** — pre-extracted termination IDs, one uppercase ID per line:
+```
+SA48980
+PL54191
+PN15145
+```
+
+**`terms.YYYYMMDDHHMMSS`** — raw tilde-delimited termination data:
+```
+2026-05-20~SA48980~Doe, John A~00001~RETAIL BANKING~OH - NDR~Unknown~Smith, Jane~Unknown~
+2026-05-20~PL54191~Reyes, Maria~00001~SHARED SERVICES~PA - PHL~Unknown~Brown, David~Unknown~
+```
+
+`trans.id.*` and `trans.*` follow the same format for transferred users.
+
+`getdata.sh` uses the `.id.` files for the ID list (OIM pre-extracts them) and archives the raw files for audit. IDs are always lowercased before use since Linux home directories and passwd entries are lowercase.
 
 ---
 
@@ -146,9 +191,54 @@ Same files with `dryrun_` prefix. Working logs are overwritten each dry-run. Tim
 
 ## Email Notification
 
-Email is sent at **run completion** (after all cleanup steps finish). The body is `logs/tti_cleanup.log` — the full cleanup output including all SUCCESS/FAILURE lines and the SUMMARY block.
+Email is sent at **run completion** (after all cleanup steps finish) using `mailx`.
 
-**How it works:** `/usr/bin/mail -s "subject" ttinotify` uses the system's local MTA (sendmail or postfix). `ttinotify` is a local mail alias defined in `/etc/aliases` on the TTI server. It maps to one or more real email addresses. Mail is sent as the Unix user running the script (typically root).
+**Format:**
+- **Subject:** `TTI EAR Cleanup Report — hostname — date [DRY-RUN if applicable]`
+- **Body:** Short human-readable summary of counts extracted from the SUMMARY log lines
+- **Attachment:** Full `tti_cleanup.log` (or dryrun equivalent) for detailed review
+
+The body is intentionally kept short so it is readable in any mail client regardless of how many servers or users were processed. The full detail is in the attachment.
+
+**Example body — normal run with terms and no trans:**
+```
+TTI EAR Cleanup Report
+Host     : lmrg34la
+Date     : 2026-06-02 11:33
+=========================================
+
+Terminations:
+  User IDs          : 52
+  Servers in scope  : 22468
+  Hosts reached     : 22441
+  Unreachable hosts : 27
+  Home dirs removed : 8
+  Home dirs failed  : 1
+  /etc/passwd removed : 2
+  /etc/group  removed : 3
+
+Transfers:
+  No transfers to process today.
+
+=========================================
+Full cleanup log attached.
+```
+
+**Example body — nothing to process (both OIM files empty):**
+```
+TTI EAR Cleanup Report
+Host     : lmrg34la
+Date     : 2026-06-02 11:33
+=========================================
+
+No terminations or transfers to process today.
+OIM files were empty for this run.
+
+No cleanup log to attach.
+```
+When both are empty, no attachment is sent.
+
+**How it works:** `mailx` uses the system local MTA (sendmail/postfix). `ttinotify` is a local mail alias defined in `/etc/aliases` on the TTI server. Mail is sent as the Unix user running the script (root via sudo).
 
 **To change recipients:** edit `/etc/aliases`, add or modify the `ttinotify` entry, then run `newaliases` to apply.
 
@@ -190,7 +280,7 @@ grep FAILURE /export/home/xamrgpti/logs/tti_cleanup.log
 
 **Find everything touched for a specific user:**
 ```bash
-grep 'sa12345' /export/home/xamrgpti/logs/tti_cleanup.log
+grep 'sa48980' /export/home/xamrgpti/logs/tti_cleanup.log
 ```
 
 **See which hosts were unreachable:**
@@ -244,15 +334,15 @@ Use `--ids-file` and `--hosts-file` to test against a known set of users and ser
 ```bash
 # Users you know have homes to clean up
 cat > /tmp/test.ids << 'EOF'
-sa12345
-pl12345
+sa48980
+pl54191
 EOF
 
 # Servers you know those homes exist on
 cat > /tmp/test.hosts << 'EOF'
-lmrg10ia
-lmrg10yw
-lmrg12da
+lcdo322a
+lcdo323a
+lcdo317a
 EOF
 ```
 
@@ -261,6 +351,14 @@ EOF
 ./cleanup.sh --mode terms --dry-run \
     --ids-file /tmp/test.ids \
     --hosts-file /tmp/test.hosts
+```
+
+**Verify SSH connectivity first:**
+```bash
+./cleanup.sh --mode terms --dry-run \
+    --ids-file /tmp/test.ids \
+    --hosts-file /tmp/test.hosts \
+    --debug-pssh
 ```
 
 **Live run once dry-run confirms:**
@@ -275,6 +373,22 @@ EOF
 - `--ids-file` and `--hosts-file` can be used independently (override one or both)
 - Dry-run still applies — `--ids-file` without `--dry-run` will make live changes
 - The log shows `[CUSTOM]` next to overridden paths so targeted runs are clearly identifiable
+
+---
+
+## Cron Schedule
+
+```cron
+# Main run — daily at 11:20
+20 11 * * * /export/home/xamrgpti/scripts/main.sh >> /dev/null 2>&1
+
+# Retention — daily at 23:00
+0 23 * * * find /export/home/xamrgpti/data/terms    -type f -mtime +365 -delete
+0 23 * * * find /export/home/xamrgpti/data/trans    -type f -mtime +365 -delete
+0 23 * * * find /export/home/xamrgpti/logs          -maxdepth 1 -type f -mtime +365 -delete
+0 23 * * * find /export/home/xamrgpti/data/ids      -type f -mtime +730 -delete
+0 23 * * * find /export/home/xamrgpti/logs/dryrun   -type f -mtime +90  -delete
+```
 
 ---
 
