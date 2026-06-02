@@ -105,10 +105,19 @@ done
 # IDS_FILE: use custom override if provided, otherwise default to data/MODE.ids
 if [[ -n "${CUSTOM_IDS_FILE}" ]]; then
     [[ -f "${CUSTOM_IDS_FILE}" ]] || { echo "[FATAL] --ids-file not found: ${CUSTOM_IDS_FILE}" >&2; exit 2; }
-    # Normalize to lowercase — OIM and manual files often use uppercase IDs.
-    # Home dirs and passwd entries on Linux servers are always lowercase.
     IDS_FILE=$(mktemp /var/tmp/tti_ids.XXXXXX)
-    tr '[:upper:]' '[:lower:]' < "${CUSTOM_IDS_FILE}" | grep -v '^\s*$' | sort -u > "${IDS_FILE}"
+    # Auto-detect file format:
+    #   Tilde-delimited OIM raw format: "2026-05-29~SA78728~Aldrich, Jazmin~..."
+    #     -> extract field 2 (the user ID), same as getdata.sh normalize_ids
+    #   Plain ID list: one ID per line (sa78728, SA78728, etc.)
+    #     -> use as-is after lowercasing
+    if grep -q '~' "${CUSTOM_IDS_FILE}" 2>/dev/null; then
+        # OIM raw format — extract field 2
+        awk -F'~' 'NF>=2 && length($2)>0 { print tolower($2) }'             "${CUSTOM_IDS_FILE}" | grep -v '^\s*$' | sort -u > "${IDS_FILE}"
+    else
+        # Plain ID list — just lowercase and deduplicate
+        tr '[:upper:]' '[:lower:]' < "${CUSTOM_IDS_FILE}"             | grep -v '^\s*$' | sort -u > "${IDS_FILE}"
+    fi
 else
     IDS_FILE="${DATA_DIR}/${MODE}.ids"
 fi
