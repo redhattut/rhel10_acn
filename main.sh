@@ -308,13 +308,13 @@ fi
 if [[ -n "${IDS_FILE_FLAG}" ]]; then
     log_info "--- Step 2: cleanup.sh terms (custom IDs) ---"
     # shellcheck disable=SC2086
-    "${SCRIPT_DIR}/cleanup.sh" --mode terms ${DRY_RUN_FLAG} ${NO_EMAIL_FLAG} ${DEBUG_FLAG} ${IDS_FILE_FLAG} ${HOSTS_FILE_FLAG}
+    "${SCRIPT_DIR}/cleanup.sh" --mode terms ${DRY_RUN_FLAG} ${NO_EMAIL_FLAG} ${DEBUG_FLAG} ${IDS_FILE_FLAG} ${HOSTS_FILE_FLAG} || true
     log_success "Cleanup (terms) complete."
 else
     log_info "--- Step 2: cleanup.sh terms ---"
     if [[ -s "${DATA_DIR}/terms.ids" ]]; then
         # shellcheck disable=SC2086
-        "${SCRIPT_DIR}/cleanup.sh" --mode terms ${DRY_RUN_FLAG} ${NO_EMAIL_FLAG} ${DEBUG_FLAG} ${HOSTS_FILE_FLAG}
+        "${SCRIPT_DIR}/cleanup.sh" --mode terms ${DRY_RUN_FLAG} ${NO_EMAIL_FLAG} ${DEBUG_FLAG} ${HOSTS_FILE_FLAG} || true
         log_success "Cleanup (terms) complete."
     else
         log_warn "terms.ids empty — skipping cleanup for terms."
@@ -323,7 +323,7 @@ else
     log_info "--- Step 3: cleanup.sh trans ---"
     if [[ -s "${DATA_DIR}/trans.ids" ]]; then
         # shellcheck disable=SC2086
-        "${SCRIPT_DIR}/cleanup.sh" --mode trans ${DRY_RUN_FLAG} ${NO_EMAIL_FLAG} ${DEBUG_FLAG} ${HOSTS_FILE_FLAG}
+        "${SCRIPT_DIR}/cleanup.sh" --mode trans ${DRY_RUN_FLAG} ${NO_EMAIL_FLAG} ${DEBUG_FLAG} ${HOSTS_FILE_FLAG} || true
         log_success "Cleanup (trans) complete."
     else
         log_info "trans.ids empty — no cleanup needed for trans."
