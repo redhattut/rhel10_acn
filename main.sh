@@ -267,15 +267,13 @@ send_completion_email() {
 
 log_info "================================================================"
 log_info "main.sh start — $(hostname)$( ${DRY_RUN} && echo ' [DRY-RUN]' || true )"
-local _notify_display
 if ! ${SEND_EMAIL}; then
-    _notify_display="no (--no-email)"
+    log_info "Send email  : no (--no-email)"
 elif [[ -n "${NOTIFY_OVERRIDE}" ]]; then
-    _notify_display="yes (${NOTIFY_OVERRIDE}) [--notify override]"
+    log_info "Send email  : yes (${NOTIFY_OVERRIDE}) [--notify override]"
 else
-    _notify_display="yes (${NOTIFY})"
+    log_info "Send email  : yes (${NOTIFY})"
 fi
-log_info "Send email  : ${_notify_display}"
 log_info "================================================================"
 
 acquire_lock
