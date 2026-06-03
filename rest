@@ -1,0 +1,316 @@
+### Introduction
+
+I am Anup Neupane and I work in the Linux OS Engineering focusing on building and standardizing RHEL platforms at scale. I design automated, secure, and consistent system builds using Ansible, manage patching lifecycle with Red Hat Satellite, and develop automation and reporting solutions to reduce manual work. Some of the projects I've been working is automating RHEL in-place upgrades, automating remediations for vulnerabilities, maintaining our server build code, rewriting custom packages, providing automation for other teams to use with documentation.
+
+### My daily work like:
+
+On a daily basis, my work is focused on maintaining and improving the Linux platform at scale rather than handling individual server issues. I spend a significant amount of time developing and maintaining automation using Ansible and Bash. This includes building reusable playbooks, enhancing scripts for compliance and system configuration, and creating workflows that reduce manual intervention. A big focus is making everything repeatable and reliable at scale.
+
+## Brief intro you can use
+
+“Thanks for meeting with us today. I’m going to ask a few Linux engineering questions. Some are scenario-based, so I’m not looking for one perfect command. I’m more interested in how you think through platform standards, automation, troubleshooting, risk, and repeatable engineering solutions.”
+
+---
+
+# 1. RHEL lifecycle / platform ownership
+
+## Main question
+
+“Walk me through how you’d approach building a **RHEL 10 platform standard from scratch**. What does that process look like before a single server gets provisioned?”
+
+## Clarifying bullets you can give if they need help
+
+“You can think about things like:”
+
+- Security and compliance baseline
+- Standard build/image/template
+- Required enterprise agents/tools
+- Identity integration
+- Patching/content lifecycle
+- Documentation
+- Pilot testing
+- How you would move from lab to production readiness
+
+## Follow-up questions
+
+- “What would you include in the baseline standard?”
+- “How would you validate that RHEL 10 is ready for enterprise use?”
+- “Who would you need to involve before approving RHEL 10 for production?”
+- “How would you handle standard software or security agents that are not yet supported on RHEL 10?”
+- “What documentation would you produce for support/provisioning teams?”
+
+## What you are listening for
+
+Strong answer should sound like platform engineering, not just server administration. They should talk about standards, security, hardening, templates, automation, lifecycle, testing, documentation, and phased adoption.
+
+## Red flag follow-up
+
+If they only say, “I would install RHEL 10 and patch it,” ask:
+
+“After the OS is installed, how do you make sure every future RHEL 10 server is built the same way and meets enterprise security standards?”
+
+---
+
+# 2. Ansible automation depth
+
+## Main question
+
+“Your resume mentions building Ansible playbooks for configuration management and standardization. Can you describe one Ansible automation you personally designed? What made it idempotent, safe, and reusable?”
+
+## Clarifying bullets you can give if they need help
+
+“You can use any example: patching, baseline config, user management, package install, service config, security hardening, or monitoring setup.”
+
+Ask them to cover:
+
+- What problem it solved
+- What the playbook changed
+- How they tested it
+- How they made sure it was safe to rerun
+- How it handled different environments or OS versions
+
+## Follow-up questions
+
+- “Did you use Ansible modules or mostly shell commands?”
+- “How did you prevent unnecessary changes on every run?”
+- “How did you handle service restarts?”
+- “Did you use handlers, templates, variables, roles, or conditionals?”
+- “How did you test it before production?”
+- “What happens if the playbook fails halfway through?”
+
+## What you are listening for
+
+Good answer should mention idempotency, modules, variables, handlers, testing, version control, check mode, lower environment testing, and safe rollback/backout thinking.
+
+## Red flag follow-up
+
+If they say they mostly use shell commands inside Ansible, ask:
+
+“When would you use an Ansible module instead of a shell command, and why?”
+
+A strong candidate should know that modules are usually safer, idempotent, and easier to validate.
+
+---
+
+# 3. RHEL 8/9 troubleshooting after patching
+
+## Main question
+
+“A RHEL 9 server was patched last night. After reboot, the application team says the app is down. The server is reachable by SSH. Walk me through how you would troubleshoot.”
+
+## Clarifying bullets you can give if they need help
+
+“You can start from the OS side. Assume you do not know yet whether it is an OS issue, application issue, network issue, storage issue, or patch issue.”
+
+Things they can check:
+
+- Server health
+- Failed services
+- Logs
+- Network ports
+- Firewall/SELinux
+- Mount points
+- Package/kernel changes
+- Application logs
+- Whether issue affects one server or many
+
+## Follow-up questions
+
+- “What commands would you run first?”
+- “How would you check whether the issue is related to the new kernel?”
+- “How would you check if SELinux is blocking something?”
+- “How would you confirm whether the app is listening on the expected port?”
+- “When would you rollback or boot into the previous kernel?”
+- “How would you communicate with the app team during the issue?”
+
+## What you are listening for
+
+Strong answer should be organized and calm. They should not immediately reboot or rollback. They should isolate the issue: system health, service status, logs, ports, firewall, SELinux, mounts, package changes, kernel changes, and scope.
+
+## Red flag follow-up
+
+If they jump straight to rollback, ask:
+
+“What would you check before deciding rollback is the right action?”
+
+---
+
+# 4. LVM / filesystem expansion
+
+## Main question
+
+“Your resume mentions LVM volume creation, expansion, resizing, and filesystem management. A team asks you to extend `/data` by 200 GB on RHEL. What checks and steps would you take?”
+
+## Clarifying bullets you can give if they need help
+
+“Assume `/data` is already mounted and used by an application. Walk through the checks first, then the change.”
+
+They can cover:
+
+- Current mount/filesystem
+- Whether it uses LVM
+- VG free space
+- Disk/LUN availability
+- XFS vs ext4
+- Backup/change approval
+- Commands to extend
+- Validation after the change
+
+## Follow-up questions
+
+- “How do you check if `/data` is on LVM?”
+- “How do you check if the volume group has enough free space?”
+- “What is the difference between growing XFS and ext4?”
+- “Can you shrink XFS?”
+- “What would you do if the VG does not have enough free space?”
+- “How would this change if the disk came from SAN/multipath?”
+
+## What you are listening for
+
+They should mention `df -h`, `lsblk`, `pvs`, `vgs`, `lvs`, `lvextend`, `xfs_growfs` for XFS, and `resize2fs` for ext4. They should know that XFS can be grown online but not shrunk in the normal supported way.
+
+## Red flag follow-up
+
+If they only say `lvextend`, ask:
+
+“After extending the logical volume, is the filesystem automatically bigger, or do you need another step?”
+
+---
+
+# 5. Bash scripting safety
+
+## Main question
+
+“Your resume mentions advanced Bash scripting for log rotation, cleanup, monitoring checks, and operational efficiency. What practices do you follow to make Bash scripts safe for production?”
+
+## Clarifying bullets you can give if they need help
+
+“You can think about a script that modifies files, cleans old data, checks services, or runs across multiple servers.”
+
+They can talk about:
+
+- Input validation
+- Quoting variables
+- Logging
+- Exit codes
+- Backups
+- Dry run
+- Avoiding dangerous wildcards
+- Lock files
+- Testing
+- Error handling
+
+## Follow-up questions
+
+- “How do you prevent a script from deleting the wrong files?”
+- “How do you handle empty variables in a script?”
+- “Do you use `set -euo pipefail`? When would you use it or avoid it?”
+- “How do you make logs useful for troubleshooting?”
+- “How do you make sure two copies of the same script do not run at the same time?”
+- “How would you safely test a cleanup script before enabling deletion?”
+
+## What you are listening for
+
+Strong answer should include safe scripting habits: quoting variables, validating inputs, logging, backups, dry-run mode, meaningful exit codes, avoiding broad `rm -rf`, and testing with sample data.
+
+## Red flag follow-up
+
+If they say, “I just test manually and run it,” ask:
+
+“What safeguards would you build in so the script does not cause damage if someone passes a bad input?”
+
+---
+
+# 6. Vulnerability remediation
+
+## Main question
+
+“Your resume says you conducted vulnerability analysis and remediation. If a high-severity OpenSSL vulnerability is reported across thousands of Linux servers, how would you handle it?”
+
+## Clarifying bullets you can give if they need help
+
+“You can walk through the process from vulnerability notification to closure.”
+
+They can cover:
+
+- Confirm affected versions
+- Identify impacted servers
+- Check vendor advisory
+- Confirm available fixed package
+- Test patch
+- Prioritize critical/internet-facing systems
+- Schedule rollout
+- Reboot or service restart needs
+- Validate after remediation
+- Report exceptions
+
+## Follow-up questions
+
+- “How would you know which servers are actually vulnerable?”
+- “How would you confirm Red Hat has released the fix?”
+- “How would you determine whether a reboot is needed?”
+- “How would you prioritize the rollout?”
+- “What would you do with servers that cannot be patched immediately?”
+- “How would you prove remediation is complete?”
+
+## What you are listening for
+
+Strong answer should sound controlled and risk-aware. They should not blindly patch everything. They should identify impacted versions, test, coordinate, patch in phases, validate, and track exceptions.
+
+## Red flag follow-up
+
+If they say, “I would patch all servers immediately,” ask:
+
+“How would you avoid causing an outage across production if the patch has an unexpected impact?”
+
+---
+
+# 7. Engineering mindset / standards
+
+## Main question
+
+“This role is not mainly break/fix support. It is about defining Linux platform standards and enabling other teams. Can you give an example of something you turned from a manual operational process into a repeatable platform standard?”
+
+## Clarifying bullets you can give if they need help
+
+“It could be anything you standardized: server builds, patching, monitoring setup, security baseline, user access, storage setup, cloud image build, or documentation.”
+
+Ask them to explain:
+
+- What was manual before
+- What problem it caused
+- What standard they created
+- What automation or documentation they built
+- Who used it afterward
+- How they measured success
+
+## Follow-up questions
+
+- “What made it a standard instead of just a one-time fix?”
+- “How did other teams consume or use your work?”
+- “Did you document it? What did the documentation include?”
+- “How did you handle exceptions?”
+- “How did you maintain the standard over time?”
+- “What would you improve if you did it again?”
+
+## What you are listening for
+
+This is probably the most important culture-fit question. A strong candidate should talk about repeatability, documentation, ownership, automation, adoption, and long-term maintainability.
+
+## Red flag follow-up
+
+If they only talk about fixing tickets, ask:
+
+“What did you do to prevent that same issue from coming back again across other servers?”
+
+---
+
+# Good closing question
+
+Use this near the end:
+
+“Looking at this role, where do you think you are strongest: Linux operations, automation, cloud engineering, or platform standards? And where would you need to ramp up?”
+
+## What this tells you
+
+This helps you see if they are self-aware. For this job, the best answer would probably be someone who says they are strong in Linux operations/automation and are comfortable growing into more platform ownership, roadmap, standards, and enterprise design work.
