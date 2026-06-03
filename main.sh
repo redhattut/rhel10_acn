@@ -73,11 +73,13 @@ IDS_FILE_FLAG=""
 HOSTS_FILE_FLAG=""
 NO_EMAIL_FLAG=""
 SEND_EMAIL=true
+NOTIFY_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run)    DRY_RUN=true; DRY_RUN_FLAG="--dry-run"; shift ;;
         --no-email)   SEND_EMAIL=false; NO_EMAIL_FLAG="--no-email"; shift ;;
+        --notify)     NOTIFY_OVERRIDE="$2"; shift 2 ;;
         --debug)      DEBUG_FLAG="--debug"; shift ;;
         --debug-pssh) DEBUG_FLAG="--debug-pssh"; shift ;;
         --ids-file)   IDS_FILE_FLAG="--ids-file $2"; shift 2 ;;
@@ -239,22 +241,24 @@ send_completion_email() {
         return
     fi
 
+    # --notify flag overrides NOTIFY alias — useful for testing to a single address
+    local send_to="${NOTIFY_OVERRIDE:-${NOTIFY}}"
+
     local subject="TTI EAR Cleanup Report$( ${DRY_RUN} && echo ' [DRY-RUN]' || true ) — $(hostname) — $(date '+%Y-%m-%d %H:%M')"
     local body_file
     body_file=$(mktemp /var/tmp/tti_email_body.XXXXXX)
-    trap 'rm -f "${body_file}"' RETURN
 
     build_email_body "${body_file}"
 
     if [[ -s "${LOG_CLEANUP}" ]]; then
-        # Full log as attachment, summary as body
-        mailx -s "${subject}"               -a "${LOG_CLEANUP}"               "${NOTIFY}" < "${body_file}" || true
-        log_info "Completion email sent to ${NOTIFY} (with ${LOG_CLEANUP##*/} attached)."
+        /usr/bin/mailx -s "${subject}"               -a "${LOG_CLEANUP}"               "${send_to}" < "${body_file}" || true
+        log_info "Completion email sent to ${send_to} (with ${LOG_CLEANUP##*/} attached)."
     else
-        # No attachment when log is empty — nothing happened
-        mailx -s "${subject}"               "${NOTIFY}" < "${body_file}" || true
-        log_info "Completion email sent to ${NOTIFY} (no attachment — nothing processed)."
+        /usr/bin/mailx -s "${subject}"               "${send_to}" < "${body_file}" || true
+        log_info "Completion email sent to ${send_to} (no attachment — nothing processed)."
     fi
+
+    rm -f "${body_file}"
 }
 
 # =============================================================================
@@ -263,7 +267,15 @@ send_completion_email() {
 
 log_info "================================================================"
 log_info "main.sh start — $(hostname)$( ${DRY_RUN} && echo ' [DRY-RUN]' || true )"
-log_info "Send email  : $( ${SEND_EMAIL} && echo "yes (${NOTIFY})" || echo "no (--no-email)" )"
+local _notify_display
+if ! ${SEND_EMAIL}; then
+    _notify_display="no (--no-email)"
+elif [[ -n "${NOTIFY_OVERRIDE}" ]]; then
+    _notify_display="yes (${NOTIFY_OVERRIDE}) [--notify override]"
+else
+    _notify_display="yes (${NOTIFY})"
+fi
+log_info "Send email  : ${_notify_display}"
 log_info "================================================================"
 
 acquire_lock
