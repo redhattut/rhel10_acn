@@ -17,9 +17,13 @@
 #   - Writes a timestamped snapshot to data/ids/
 #   - Skips the run if the raw file is identical to the last archive (no new data)
 #
+# Can be called standalone (11:30 cron) or from main.sh (20:30 cron).
+# When called standalone, logs go to logs/tti_process.log and logs/tti_getdata.log.
+# When called from main.sh, log paths are inherited from main.sh exports.
+#
 # Exit codes:
-#   0  terms.ids has content — caller should proceed with cleanup
-#   1  terms.ids is empty after all attempts — caller should skip
+#   0  at least terms.ids or trans.ids has content
+#   1  both terms.ids and trans.ids are empty — nothing to process
 #   2  fatal error
 # =============================================================================
 

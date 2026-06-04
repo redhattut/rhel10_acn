@@ -45,8 +45,16 @@
 #   --ids-file     Override ID file passed through to cleanup.sh
 #   --hosts-file   Override server list passed through to cleanup.sh
 #
-# Cron (daily 11:20):
-#   20 11 * * * /export/home/xamrgpti/scripts/main.sh >> /dev/null 2>&1
+# Cron schedule:
+#   Data fetch only at 11:30 — picks up OIM files early in the day:
+#   30 11 * * * sudo /export/home/xamrgpti/scripts/getdata.sh >> /dev/null 2>&1
+#
+#   Full cleanup run at 20:30 — uses latest OIM data, runs cleanup, sends email:
+#   30 20 * * * sudo /export/home/xamrgpti/scripts/main.sh >> /dev/null 2>&1
+#
+#   Reasoning: OIM data may arrive late. Fetching at 11:30 archives early data.
+#   The 20:30 main.sh run calls getdata.sh again — if new data arrived it picks
+#   it up, if unchanged it re-uses the existing IDs. Cleanup and email happen once.
 #
 # Retention cron (daily 23:00):
 #   0 23 * * * find /export/home/xamrgpti/data/terms  -type f -mtime +365 -delete
