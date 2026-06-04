@@ -15,6 +15,7 @@ set -uo pipefail
 DEFAULT_OWNER="root"
 DEFAULT_GROUP="root"
 LOG_FILE=""
+DRY_RUN=false
 CURRENT_HOSTNAME=$(hostname)
 
 # Paths excluded from remediation.
@@ -203,6 +204,12 @@ remediate_6_1_11() {
     local old_perms
     old_perms=$(stat -c '%a' "$path" 2>/dev/null || echo "N/A")
 
+    if [[ "$DRY_RUN" == true ]]; then
+        local display_perms="${target_perms:-$(if [[ -d "$path" ]]; then echo "(sticky bit)"; else echo "(o-w)"; fi)}"
+        echo "Permissions: $old_perms -> $display_perms [DRY RUN]"
+        return 0
+    fi
+
     if [[ -n "$target_perms" ]]; then
         chmod "$target_perms" "$path" 2>/dev/null || return 1
     else
@@ -226,6 +233,16 @@ remediate_6_1_12() {
     local current_owner current_group
     current_owner=$(stat -c '%U' "$path" 2>/dev/null || echo "")
     current_group=$(stat -c '%G' "$path" 2>/dev/null || echo "")
+
+    if [[ "$DRY_RUN" == true ]]; then
+        local display_owner="${target_owner:-$current_owner}:${target_group:-$current_group}"
+        changes="Owner: $old_owner -> $display_owner [DRY RUN]"
+        if [[ -n "$target_perms" ]]; then
+            changes="$changes, Permissions: $old_perms -> $target_perms [DRY RUN]"
+        fi
+        echo "$changes"
+        return 0
+    fi
 
     if [[ -n "$target_owner" && -n "$target_group" ]]; then
         if [[ "$target_owner" != "$current_owner" || "$target_group" != "$current_group" ]]; then
@@ -257,6 +274,19 @@ remediate_6_2_11() {
     local old_owner old_perms changes=""
     old_owner=$(stat -c '%U:%G' "$path" 2>/dev/null || echo "N/A")
     old_perms=$(stat -c '%a' "$path" 2>/dev/null || echo "N/A")
+
+    if [[ "$DRY_RUN" == true ]]; then
+        local current_owner current_group
+        current_owner=$(stat -c '%U' "$path" 2>/dev/null || echo "")
+        current_group=$(stat -c '%G' "$path" 2>/dev/null || echo "")
+        changes="Permissions: $old_perms -> ${target_perms:-"(u-x,go-wx)"} [DRY RUN]"
+        if [[ -n "$target_owner" || -n "$target_group" ]]; then
+            local display_owner="${target_owner:-$current_owner}:${target_group:-$current_group}"
+            changes="$changes, Owner: $old_owner -> $display_owner [DRY RUN]"
+        fi
+        echo "$changes"
+        return 0
+    fi
 
     if [[ -n "$target_perms" ]]; then
         chmod "$target_perms" "$path" 2>/dev/null || return 1
@@ -464,10 +494,12 @@ process_csv_line() {
 
     # Run remediation
     local changes
+    local log_level="CHANGED"
+    [[ "$DRY_RUN" == true ]] && log_level="DRYRUN"
     case "$cis_rule" in
         "6.1.11")
             if changes=$(remediate_6_1_11 "$path" "" "" "$target_perms"); then
-                log_message "CHANGED" "Line $line_num: CIS 6.1.11 - $path | $changes"
+                log_message "$log_level" "Line $line_num: CIS 6.1.11 - $path | $changes"
                 echo "SUCCESS|$changes"
             else
                 log_message "FAILED" "Line $line_num: CIS 6.1.11 - Remediation error: $path"
@@ -476,7 +508,7 @@ process_csv_line() {
             ;;
         "6.1.12")
             if changes=$(remediate_6_1_12 "$path" "$target_owner" "$target_group" "$target_perms"); then
-                log_message "CHANGED" "Line $line_num: CIS 6.1.12 - $path | $changes"
+                log_message "$log_level" "Line $line_num: CIS 6.1.12 - $path | $changes"
                 echo "SUCCESS|$changes"
             else
                 log_message "FAILED" "Line $line_num: CIS 6.1.12 - Remediation error: $path"
@@ -485,7 +517,7 @@ process_csv_line() {
             ;;
         "6.2.11")
             if changes=$(remediate_6_2_11 "$path" "$target_owner" "$target_group" "$target_perms"); then
-                log_message "CHANGED" "Line $line_num: CIS 6.2.11 - $path | $changes"
+                log_message "$log_level" "Line $line_num: CIS 6.2.11 - $path | $changes"
                 echo "SUCCESS|$changes"
             else
                 log_message "FAILED" "Line $line_num: CIS 6.2.11 - Remediation error: $path"
@@ -501,19 +533,21 @@ process_csv_line() {
 
 usage() {
     cat <<EOF
-Usage: $0 -i <input_csv> [-o <output_log>] [-j <jobs>]
+Usage: $0 -i <input_csv> [-o <output_log>] [-j <jobs>] [-n]
 
 Options:
   -i    Input CSV file (required)
         Format: Hostname,OS Version,CIS Rule,Description,Path,Owner,Group,Permissions,Recommendation
   -o    Output log file (default: /var/tmp/chg/lrp/custom_cis_remediation_<timestamp>.log)
   -j    Number of parallel jobs (default: nproc; use 1 for single-threaded)
+  -n    Dry run: show what would change without making any changes
   -h    Show this help message
 
 Examples:
   $0 -i remediation_input.csv
   $0 -i remediation_input.csv -o custom_log.log
   $0 -i remediation_input.csv -j 8
+  $0 -i remediation_input.csv -n
 
 Default Values:
   CIS 6.1.12 Owner: $DEFAULT_OWNER
@@ -527,11 +561,12 @@ EOF
 INPUT_CSV=""
 JOBS=""
 
-while getopts "i:o:j:h" opt; do
+while getopts "i:o:j:nh" opt; do
     case $opt in
         i) INPUT_CSV="$OPTARG" ;;
         o) LOG_FILE="$OPTARG" ;;
         j) JOBS="$OPTARG" ;;
+        n) DRY_RUN=true ;;
         h) usage ;;
         *) usage ;;
     esac
@@ -568,7 +603,13 @@ log_message "INFO" "Input CSV: $INPUT_CSV"
 log_message "INFO" "Log File: $LOG_FILE"
 log_message "INFO" "Hostname: $CURRENT_HOSTNAME"
 log_message "INFO" "Job Threads: $JOBS"
+if [[ "$DRY_RUN" == true ]]; then
+    log_message "INFO" "Mode: DRY RUN - no changes will be made"
+fi
 log_message "INFO" "======================================"
+
+# Export DRY_RUN so parallel subshells inherit it.
+export DRY_RUN
 
 # Pre-filter CSV to rows for this host only.
 # Each output line is prefixed with its original CSV line number: "NR|raw_line"
