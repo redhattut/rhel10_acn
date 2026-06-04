@@ -231,7 +231,16 @@ declare -i CNT_SERVERS=0 CNT_REACHED=0 CNT_UNREACHABLE=0
 declare -i CNT_NO_NFS=0
 declare -i CNT_OK=0
 declare -i CNT_HUNG=0
-declare -i CNT_RECOVERED=0 CNT_STILL_HUNG=0 CNT_SKIPPED=0
+declare -i CNT_RECOVERED=0 CNT_STILL_HUNG=0 CNT_SKIPPED=0 CNT_NO_OUTCOME=0
+
+# Tracks in-flight MOUNT_HUNG detections that have not yet received a result
+# token (RECOVERED, STILL_HUNG, SKIPPED). Key = "host|mountpoint", value = method.
+# If pssh drops the connection mid-script these entries never get cleared and
+# are counted as outcome-unknown at the end of parse_pssh_output.
+declare -A hung_pending=()
+
+# Tracks which hosts pssh marked as FAILURE so we can flag their partial output
+declare -A pssh_failed_hosts=()
 
 # =============================================================================
 # Remote script builder
@@ -388,19 +397,22 @@ parse_pssh_output() {
 
     while IFS= read -r line; do
 
-        # pssh FAILURE — SSH never connected
+        # pssh FAILURE — SSH timed out or was killed mid-execution.
+        # Record the host so we can flag any MOUNT_HUNG tokens that arrived
+        # before the connection dropped but never got a result token.
         if [[ "${line}" =~ ^\[[0-9]+\][[:space:]][0-9:]+[[:space:]]\[FAILURE\][[:space:]](.+)$ ]]; then
             local fhost="${BASH_REMATCH[1]}"
             if [[ -z "${seen_failure[${fhost}]:-}" ]]; then
                 seen_failure["${fhost}"]="1"
+                pssh_failed_hosts["${fhost}"]="1"
                 log_warn "Unreachable: ${fhost}"
-                print_warn "${fhost} — unreachable (SSH failed)"
+                print_warn "${fhost} — unreachable (SSH timed out or killed)"
                 (( CNT_UNREACHABLE++ )) || true
             fi
             continue
         fi
 
-        # pssh SUCCESS — SSH connected
+        # pssh SUCCESS — SSH connected and script completed cleanly
         if [[ "${line}" =~ ^\[[0-9]+\][[:space:]][0-9:]+[[:space:]]\[SUCCESS\][[:space:]](.+)$ ]]; then
             (( CNT_REACHED++ )) || true
             continue
@@ -417,7 +429,7 @@ parse_pssh_output() {
         [[ "${line}" =~ ^(NFS_NONE|MOUNT_OK|MOUNT_HUNG|MOUNT_DRY|RECOVERED|STILL_HUNG|SKIPPED): ]] || continue
 
         local token="${line%%:*}"
-        local data="${line#*:}"   # everything after first colon
+        local data="${line#*:}"
 
         case "${token}" in
 
@@ -447,6 +459,8 @@ parse_pssh_output() {
                 local method="${data##*:}"
                 log_hung "${current_host}: ${mp} is HUNG (method=${method}) — attempting recovery"
                 print_hung "${current_host}  ${mp}  [${method}]"
+                # Register as pending — cleared when RECOVERED/STILL_HUNG/SKIPPED arrives
+                hung_pending["${current_host}|${mp}"]="${method}"
                 (( CNT_HUNG++ )) || true
                 ;;
 
@@ -455,6 +469,8 @@ parse_pssh_output() {
                 local method="${data##*:}"
                 log_recovered "${current_host}: ${mp} RECOVERED (method=${method})"
                 print_recovered "${current_host}  ${mp}  [${method}]"
+                # Clear from pending — outcome known
+                unset "hung_pending[${current_host}|${mp}]"
                 (( CNT_RECOVERED++ )) || true
                 ;;
 
@@ -464,6 +480,7 @@ parse_pssh_output() {
                 log_failed "${current_host}: ${mp} STILL HUNG after recovery attempt (method=${method})"
                 print_failed "${current_host}  ${mp}  [${method}]  -> manual action required"
                 _log_hung_entry "${current_host}" "${mp}" "${method}"
+                unset "hung_pending[${current_host}|${mp}]"
                 (( CNT_STILL_HUNG++ )) || true
                 ;;
 
@@ -472,12 +489,29 @@ parse_pssh_output() {
                 log_skipped "${current_host}: ${mp} — method unknown (not in fstab, no systemd unit)"
                 print_skipped "${current_host}  ${mp}  -> not in fstab and no systemd unit, check manually"
                 _log_hung_entry "${current_host}" "${mp}" "unknown"
+                unset "hung_pending[${current_host}|${mp}]"
                 (( CNT_SKIPPED++ )) || true
                 ;;
 
         esac
 
     done < "${out_file}"
+
+    # --- Resolve no-outcome entries -------------------------------------------
+    # Any entry still in hung_pending never received a result token — pssh
+    # dropped the connection after the remote script emitted MOUNT_HUNG but
+    # before it could emit RECOVERED or STILL_HUNG. Treat these as unknown
+    # outcome: count them, log them, and add the host to the hosts file so
+    # the next run will retry that server.
+    for key in "${!hung_pending[@]}"; do
+        local no_host="${key%%|*}"
+        local no_mp="${key##*|}"
+        local no_method="${hung_pending[${key}]}"
+        log_warn "${no_host}: ${no_mp} — outcome unknown (SSH dropped mid-execution, method=${no_method})"
+        print_warn "${no_host}  ${no_mp}  [${no_method}]  -> outcome unknown, SSH dropped mid-execution"
+        _log_hung_entry "${no_host}" "${no_mp}" "${no_method} (outcome-unknown)"
+        (( CNT_NO_OUTCOME++ )) || true
+    done
 }
 
 # =============================================================================
@@ -575,9 +609,17 @@ else
 
     if [[ ${CNT_STILL_HUNG} -gt 0 ]]; then
         printf "  %-28s %s\n" "Still hung after recovery:" "${CNT_STILL_HUNG} — manual action required"
-        printf "  %-28s %s\n" "Servers still affected:"    "${CNT_HUNG_HOSTS}"
     else
         printf "  %-28s %s\n" "Still hung after recovery:" "${CNT_STILL_HUNG}"
+    fi
+
+    if [[ ${CNT_NO_OUTCOME} -gt 0 ]]; then
+        printf "  %-28s %s\n" "Outcome unknown:" "${CNT_NO_OUTCOME} — SSH dropped mid-execution, will retry"
+    fi
+
+    local cnt_needs_work=$(( CNT_STILL_HUNG + CNT_NO_OUTCOME ))
+    if [[ ${cnt_needs_work} -gt 0 ]]; then
+        printf "  %-28s %s\n" "Servers needing follow-up:"  "${CNT_HUNG_HOSTS}"
     fi
 
     [[ ${CNT_SKIPPED} -gt 0 ]] && \
@@ -586,13 +628,19 @@ else
     echo
     if [[ ${CNT_HUNG} -eq 0 ]]; then
         echo "  No hung mounts detected. All NFS mounts are responsive."
-    elif [[ ${CNT_STILL_HUNG} -eq 0 && ${CNT_SKIPPED} -eq 0 ]]; then
+    elif [[ ${cnt_needs_work} -eq 0 && ${CNT_SKIPPED} -eq 0 ]]; then
         echo "  All hung mounts recovered successfully."
-    elif [[ ${CNT_STILL_HUNG} -gt 0 ]]; then
-        echo "  Some mounts could not be recovered automatically."
-        echo  "  Manual steps per server:"
-        echo  "    fstab mount:  umount -lf /mountpoint && mount /mountpoint"
-        echo  "    systemd unit: umount -lf /mountpoint && systemctl start mnt-path.mount"
+    else
+        if [[ ${CNT_STILL_HUNG} -gt 0 ]]; then
+            echo "  Some mounts could not be recovered automatically."
+            echo  "  Manual steps per server:"
+            echo  "    fstab mount:  umount -lf /mountpoint && mount /mountpoint"
+            echo  "    systemd unit: umount -lf /mountpoint && systemctl start mnt-path.mount"
+        fi
+        if [[ ${CNT_NO_OUTCOME} -gt 0 ]]; then
+            echo "  Some servers lost SSH mid-execution — outcome unknown."
+            echo  "  Re-run the script using the generated hosts file to retry them."
+        fi
     fi
 fi
 
@@ -612,7 +660,8 @@ else
     log_summary "Hung mounts found     : ${CNT_HUNG}"
     log_summary "Recovered             : ${CNT_RECOVERED}"
     log_summary "Still hung            : ${CNT_STILL_HUNG}"
-    log_summary "Servers still affected: ${CNT_HUNG_HOSTS}"
+    log_summary "Outcome unknown       : ${CNT_NO_OUTCOME}"
+    log_summary "Servers needing work  : ${CNT_HUNG_HOSTS}"
     log_summary "Skipped               : ${CNT_SKIPPED}"
 fi
 log_summary "Full log              : ${LOG_FILE}"
@@ -640,8 +689,8 @@ fi
 
 echo
 
-# Exit non-zero if anything is still hung so callers (cron, AAP) can detect it
-if [[ ${CNT_STILL_HUNG} -gt 0 ]]; then
+# Exit non-zero if anything still needs attention so callers (cron, AAP) can detect it
+if [[ $(( CNT_STILL_HUNG + CNT_NO_OUTCOME )) -gt 0 ]]; then
     exit 1
 fi
 
