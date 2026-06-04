@@ -575,6 +575,9 @@ done
 [[ -z "$INPUT_CSV" ]] && { echo "Error: Input CSV file is required"; usage; }
 [[ ! -f "$INPUT_CSV" ]] && { echo "Error: Input CSV file not found: $INPUT_CSV"; exit 1; }
 
+# Strip Windows-style CRLF line endings that ServiceNow attachments commonly carry.
+sed -i 's/\r//' "$INPUT_CSV"
+
 if [[ -z "$LOG_FILE" ]]; then
     LOG_FILE="/var/tmp/chg/lrp/custom_cis_remediation_$(date +%m%d%Y_%H%M%S).log"
 fi
