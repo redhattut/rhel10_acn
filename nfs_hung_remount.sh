@@ -68,8 +68,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PSSH_BIN="/usr/local/pssh/bin/pssh"
 PSSH_LOGIN="root"
 PSSH_BATCH=75
-PSSH_TIMEOUT=60        # per-host SSH timeout — longer than stat_timeout to allow
-                       # time for detection + recovery + post-check on each host
+PSSH_TIMEOUT=120       # per-host SSH timeout — must be long enough to cover
+                       # stat_timeout x 2 per hung mount (detect + verify)
+                       # plus actual unmount/remount time.
+                       # Formula: (stat_timeout x 2 x max_hung_mounts) + 30s buffer
+                       # e.g. 5s timeout, 5 hung mounts = (5x2x5)+30 = 80s minimum
 
 # --- Defaults ----------------------------------------------------------------
 HOSTS_FILE=""
