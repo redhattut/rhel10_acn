@@ -433,7 +433,9 @@ parse_batch_output() {
 # Main
 # =============================================================================
 
-: > "${LOG_CLEANUP}"
+# Record how many lines are already in LOG_CLEANUP before this run starts.
+# Used at the end to extract only this mode's section for the archive.
+LOG_CLEANUP_START_LINE=$(( $(wc -l < "${LOG_CLEANUP}" 2>/dev/null || echo 0) + 1 ))
 
 log_info "================================================================"
 log_info "cleanup.sh start — mode=${MODE}$( ${DRY_RUN} && echo ' [DRY-RUN]' || true )"
@@ -553,7 +555,15 @@ else
 fi
 log_info "================================================================"
 
-cp "${LOG_CLEANUP}" "${ARCHIVE_LOG}"
+# Archive only this mode's section to the timestamped log.
+# LOG_CLEANUP accumulates terms then trans — we capture only the lines
+# written during this run using the line count saved at startup.
+local log_start="${LOG_CLEANUP_START_LINE:-1}"
+local total_lines
+total_lines=$(wc -l < "${LOG_CLEANUP}" 2>/dev/null || echo 0)
+local mode_lines=$(( total_lines - log_start + 1 ))
+tail -n "${mode_lines}" "${LOG_CLEANUP}" > "${ARCHIVE_LOG}" 2>/dev/null \
+    || cp "${LOG_CLEANUP}" "${ARCHIVE_LOG}"
 log_info "Log archived -> ${ARCHIVE_LOG##*/}"
 
 exit 0
