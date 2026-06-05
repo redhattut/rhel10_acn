@@ -61,6 +61,7 @@
 #   0 23 * * * find /export/home/xamrgpti/logs        -maxdepth 1 -type f -mtime +365 -delete
 #   0 23 * * * find /export/home/xamrgpti/data/ids    -type f -mtime +730 -delete
 #   0 23 * * * find /export/home/xamrgpti/logs/dryrun -type f -mtime +90  -delete
+#   0 23 * * * find /var/tmp -name "tti_cleanup_done.*" -mtime +1 -delete
 # =============================================================================
 
 set -euo pipefail
@@ -96,6 +97,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 RUN_STAMP=$(date +%y%m%d%H%M)
+TODAY=$(date +%y%m%d)
+
+# Stamp file tracks which OIM archive was last cleaned up.
+# Stores the terms archive filename used in the last successful cleanup.
+# If the current terms archive matches the stamp, cleanup already ran
+# on this data today — skip it to avoid redundant sweeps and email.
+# Cleared automatically each new day since it embeds the date.
+# Dry-run runs never write the stamp.
+CLEANUP_STAMP_FILE="/var/tmp/tti_cleanup_done.${TODAY}"
 
 # --- Log path setup ----------------------------------------------------------
 # All working logs are truncated (overwritten) at the start of each run.
@@ -308,7 +318,27 @@ else
 fi
 
 # ------------------------------------------------------------------
-# Step 2 — Combined cleanup: home dirs + /etc/passwd + /etc/group
+# Step 2 — Stamp check: skip cleanup if already ran on this OIM data today
+# ------------------------------------------------------------------
+# The stamp file stores the terms archive name used in the last cleanup.
+# If it matches today's current terms archive, OIM data hasn't changed
+# since the last run — cleanup already happened, no need to repeat it.
+# Dry-run and custom --ids-file runs always bypass the stamp check.
+CURRENT_TERMS_ARCHIVE=$(ls -t "${TERMS_ARCHIVE_DIR}/terms."* 2>/dev/null | head -1)
+SKIP_CLEANUP=false
+
+if [[ -z "${IDS_FILE_FLAG}" ]] && ! ${DRY_RUN} && [[ -f "${CLEANUP_STAMP_FILE}" ]]; then
+    LAST_CLEANED=$(cat "${CLEANUP_STAMP_FILE}" 2>/dev/null || true)
+    if [[ -n "${LAST_CLEANED}" && "${LAST_CLEANED}" == "${CURRENT_TERMS_ARCHIVE}" ]]; then
+        SKIP_CLEANUP=true
+        log_info "Cleanup already ran on this OIM data today (${CURRENT_TERMS_ARCHIVE##*/})."
+        log_info "OIM data unchanged since last cleanup — skipping this run."
+        trap - ERR EXIT; release_lock; exit 0
+    fi
+fi
+
+# ------------------------------------------------------------------
+# Step 3 — Combined cleanup: home dirs + /etc/passwd + /etc/group
 # ------------------------------------------------------------------
 # When --ids-file is used, cleanup.sh runs for terms mode only
 # (the custom file is the ID source; trans is not applicable).
@@ -334,6 +364,12 @@ else
         log_success "Cleanup (trans) complete."
     else
         log_info "trans.ids empty — no cleanup needed for trans."
+    fi
+
+    # Write stamp after successful cleanup so second daily run skips if unchanged
+    if ! ${DRY_RUN} && [[ -n "${CURRENT_TERMS_ARCHIVE}" ]]; then
+        echo "${CURRENT_TERMS_ARCHIVE}" > "${CLEANUP_STAMP_FILE}"
+        log_info "Cleanup stamp written -> ${CLEANUP_STAMP_FILE##*/}"
     fi
 fi
 
