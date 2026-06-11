@@ -177,6 +177,7 @@ fi
 # =============================================================================
 # CRLF strip
 # =============================================================================
+set -x
 if command -v dos2unix &>/dev/null; then
     dos2unix "${CSV_FILE}" 2>/dev/null
 else
@@ -222,7 +223,6 @@ log "[PARSE] ${TOTAL_ROWS} data rows found (${DT_COUNT} DATA_TRANSFER, ${OT_COUN
 declare -A SSH_STATUS
 ALL_HOSTS=()
 
-set -x
 while IFS=',' read -r type src_srv dst_srv src_path dst_path src_usr dst_usr src_grp dst_grp; do
     [[ "${type}" == \#* || -z "${type}" ]] && continue
     src_srv=$(echo "${src_srv}" | xargs)
