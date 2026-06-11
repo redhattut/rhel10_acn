@@ -59,7 +59,6 @@ RSYNC_LOG="${LOG_DIR}/${CSV_BASENAME}.rsync.log"
 # =============================================================================
 mkdir -p "${PENDING_DIR}" "${PROCESSED_DIR}" "${FAILED_DIR}" "${LOG_DIR}"
 
-# Initialise log files
 > "${RUN_LOG}"
 > "${RSYNC_LOG}"
 
@@ -88,11 +87,8 @@ elapsed() {
 # Finalise and exit
 # =============================================================================
 finish() {
-    local status="$1"      # "processed" | "failed" | "pending"
-    local extra_msg="${2:-}"
+    local status="$1"
 
-    [[ -n "${extra_msg}" ]] && log "${extra_msg}"
-    log ""
     log "================================================================================"
     log " Finished    : $(date '+%Y-%m-%d %H:%M:%S')"
     log " Duration    : $(elapsed "${START_TIME}")s"
@@ -128,13 +124,11 @@ check_ssh() {
 # Remote helpers
 # =============================================================================
 remote_du() {
-    # Returns size in bytes of path on host, or empty on failure
     ssh -o ConnectTimeout="${SSH_TIMEOUT}" -o BatchMode=yes -o StrictHostKeyChecking=no \
         "$1" "du -sb '$2' 2>/dev/null | cut -f1" 2>/dev/null
 }
 
 remote_df_avail() {
-    # Returns available bytes on the filesystem containing path on host
     ssh -o ConnectTimeout="${SSH_TIMEOUT}" -o BatchMode=yes -o StrictHostKeyChecking=no \
         "$1" "df -B1 --output=avail '$2' 2>/dev/null | tail -1" 2>/dev/null
 }
@@ -169,7 +163,6 @@ log " File       : ${CSV_FILENAME}"
 log " Started    : ${START_TS}"
 log " Mode       : ${MODE_LABEL}"
 log "================================================================================"
-log ""
 
 # =============================================================================
 # Validate file exists
@@ -218,13 +211,12 @@ for row in "${DATA_ROWS[@]}"; do
 done
 
 log "[PARSE] ${TOTAL_ROWS} data rows found (${DT_COUNT} DATA_TRANSFER, ${OT_COUNT} OWNERSHIP_TRANSFER)"
-log ""
 
 # =============================================================================
 # PRECHECK 1 — SSH connectivity
 # =============================================================================
 declare -A SSH_STATUS
-declare -a ALL_HOSTS
+ALL_HOSTS=()
 
 while IFS=',' read -r type src_srv dst_srv src_path dst_path src_usr dst_usr src_grp dst_grp; do
     [[ "${type}" == \#* || -z "${type}" ]] && continue
@@ -234,13 +226,17 @@ while IFS=',' read -r type src_srv dst_srv src_path dst_path src_usr dst_usr src
     [[ -n "${dst_srv}" ]] && ALL_HOSTS+=("${dst_srv}")
 done < "${CSV_FILE}"
 
-mapfile -t UNIQUE_HOSTS < <(printf '%s\n' "${ALL_HOSTS[@]}" | sort -u)
+# Deduplicate — handle empty array safely
+if [[ ${#ALL_HOSTS[@]} -gt 0 ]]; then
+    mapfile -t UNIQUE_HOSTS < <(printf '%s\n' "${ALL_HOSTS[@]}" | sort -u | grep -v '^$')
+else
+    UNIQUE_HOSTS=()
+fi
 
 log "[PRECHECK] Testing SSH connectivity for all hosts in CSV..."
-
 UNREACHABLE_HOSTS=()
+
 for host in "${UNIQUE_HOSTS[@]}"; do
-    [[ -z "${host}" ]] && continue
     if check_ssh "${host}"; then
         printf "  %-45s OK\n" "${host}" | tee -a "${RUN_LOG}"
         SSH_STATUS["${host}"]="OK"
@@ -250,7 +246,6 @@ for host in "${UNIQUE_HOSTS[@]}"; do
         UNREACHABLE_HOSTS+=("${host}")
     fi
 done
-log ""
 
 # Hard abort if any DT source is unreachable
 while IFS=',' read -r type src_srv dst_srv src_path dst_path src_usr dst_usr src_grp dst_grp; do
@@ -266,114 +261,98 @@ while IFS=',' read -r type src_srv dst_srv src_path dst_path src_usr dst_usr src
 done < "${CSV_FILE}"
 
 # =============================================================================
-# PRECHECK 2 — Space and ownership checks (reachable hosts only)
+# PRECHECK 2 — Space and ownership checks
 # =============================================================================
-
-# PRECHECK_FAILURES["host"]="reason1\nreason2"
 declare -A PRECHECK_FAILURES
-
-log "[PRECHECK] Space and ownership checks..."
-
-# Collect per-host check requirements from CSV
-# We need: for DT rows -> check space on dst, check user/group on dst
-#          for OT rows -> check user/group on src (in-place)
-
-declare -A HOST_SPACE_NEEDED   # HOST_SPACE_NEEDED["host"]= cumulative bytes needed
-declare -A HOST_DST_PATH       # representative dst path per host for df check
-declare -A HOST_CHECK_USER     # HOST_CHECK_USER["host:user"]="1"
-declare -A HOST_CHECK_GROUP    # HOST_CHECK_GROUP["host:group"]="1"
+declare -A HOST_SPACE_NEEDED
+declare -A HOST_DST_PATH
+declare -A HOST_CHECK_USER
+declare -A HOST_CHECK_GROUP
 
 while IFS=',' read -r type src_srv dst_srv src_path dst_path src_usr dst_usr src_grp dst_grp; do
     [[ "${type}" == \#* || -z "${type}" ]] && continue
 
-    type=$(echo "${type}"       | xargs)
-    src_srv=$(echo "${src_srv}" | xargs)
-    dst_srv=$(echo "${dst_srv}" | xargs)
+    type=$(echo "${type}"         | xargs)
+    src_srv=$(echo "${src_srv}"   | xargs)
+    dst_srv=$(echo "${dst_srv}"   | xargs)
     src_path=$(echo "${src_path}" | xargs)
     dst_path=$(echo "${dst_path}" | xargs)
     dst_usr=$(echo "${dst_usr}"   | xargs)
     dst_grp=$(echo "${dst_grp}"   | xargs)
 
     if [[ "${type}" == "DATA_TRANSFER" ]]; then
-        # Only check reachable hosts
         [[ "${SSH_STATUS[${dst_srv}]:-UNREACHABLE}" == "UNREACHABLE" ]] && continue
-
-        # Space: accumulate source sizes per destination host
         src_size=$(remote_du "${src_srv}" "${src_path}")
         if [[ -n "${src_size}" && "${src_size}" =~ ^[0-9]+$ ]]; then
             current=${HOST_SPACE_NEEDED["${dst_srv}"]:-0}
             HOST_SPACE_NEEDED["${dst_srv}"]=$(( current + src_size ))
             HOST_DST_PATH["${dst_srv}"]="${dst_path}"
         fi
-
-        # Ownership checks on destination
         [[ -n "${dst_usr}" ]] && HOST_CHECK_USER["${dst_srv}:${dst_usr}"]="1"
         [[ -n "${dst_grp}" ]] && HOST_CHECK_GROUP["${dst_srv}:${dst_grp}"]="1"
 
     elif [[ "${type}" == "OWNERSHIP_TRANSFER" ]]; then
         [[ "${SSH_STATUS[${src_srv}]:-UNREACHABLE}" == "UNREACHABLE" ]] && continue
-
-        # Ownership checks on same server (in-place)
         [[ -n "${dst_usr}" ]] && HOST_CHECK_USER["${src_srv}:${dst_usr}"]="1"
         [[ -n "${dst_grp}" ]] && HOST_CHECK_GROUP["${src_srv}:${dst_grp}"]="1"
     fi
 
 done < "${CSV_FILE}"
 
-# Run space checks
-for host_entry in "${!HOST_SPACE_NEEDED[@]}"; do
-    host="${host_entry}"
+# Space checks
+for host in "${!HOST_SPACE_NEEDED[@]}"; do
     needed=${HOST_SPACE_NEEDED["${host}"]}
     dst_path=${HOST_DST_PATH["${host}"]}
     avail=$(remote_df_avail "${host}" "${dst_path}")
-
     if [[ -z "${avail}" || ! "${avail}" =~ ^[0-9]+$ ]]; then
         existing="${PRECHECK_FAILURES[${host}]:-}"
-        PRECHECK_FAILURES["${host}"]="${existing:+${existing}\n}    - Could not determine available space on ${dst_path}"
+        PRECHECK_FAILURES["${host}"]="${existing:+${existing}|}Could not determine available space on ${dst_path}"
     elif (( needed > avail )); then
         needed_h=$(( needed / 1024 / 1024 ))
         avail_h=$(( avail  / 1024 / 1024 ))
         existing="${PRECHECK_FAILURES[${host}]:-}"
-        PRECHECK_FAILURES["${host}"]="${existing:+${existing}\n}    - Insufficient space: need ${needed_h}M, available ${avail_h}M on ${dst_path}"
+        PRECHECK_FAILURES["${host}"]="${existing:+${existing}|}Insufficient space: need ${needed_h}M, available ${avail_h}M on ${dst_path}"
     fi
 done
 
-# Run user existence checks
+# User existence checks
 for key in "${!HOST_CHECK_USER[@]}"; do
     host="${key%%:*}"
     user="${key#*:}"
     if ! remote_user_exists "${host}" "${user}"; then
         existing="${PRECHECK_FAILURES[${host}]:-}"
-        PRECHECK_FAILURES["${host}"]="${existing:+${existing}\n}    - User '${user}' not found"
+        PRECHECK_FAILURES["${host}"]="${existing:+${existing}|}User '${user}' not found"
     fi
 done
 
-# Run group existence checks
+# Group existence checks
 for key in "${!HOST_CHECK_GROUP[@]}"; do
     host="${key%%:*}"
     group="${key#*:}"
     if ! remote_group_exists "${host}" "${group}"; then
         existing="${PRECHECK_FAILURES[${host}]:-}"
-        PRECHECK_FAILURES["${host}"]="${existing:+${existing}\n}    - Group '${group}' not found"
+        PRECHECK_FAILURES["${host}"]="${existing:+${existing}|}Group '${group}' not found"
     fi
 done
 
-# Report space and ownership precheck results
+# Report space/ownership results
+log "[PRECHECK] Space and ownership checks..."
 PRECHECK_FAILED_HOSTS=()
+
 for host in "${UNIQUE_HOSTS[@]}"; do
-    [[ -z "${host}" ]] && continue
     [[ "${SSH_STATUS[${host}]:-UNREACHABLE}" == "UNREACHABLE" ]] && continue
     if [[ -n "${PRECHECK_FAILURES[${host}]:-}" ]]; then
         printf "  %-45s FAIL\n" "${host}" | tee -a "${RUN_LOG}"
-        echo -e "${PRECHECK_FAILURES[${host}]}" | tee -a "${RUN_LOG}"
+        IFS='|' read -ra reasons <<< "${PRECHECK_FAILURES[${host}]}"
+        for reason in "${reasons[@]}"; do
+            log "    - ${reason}"
+        done
         PRECHECK_FAILED_HOSTS+=("${host}")
     else
         printf "  %-45s OK\n" "${host}" | tee -a "${RUN_LOG}"
     fi
 done
-log ""
 
-# Summarise precheck state
 if [[ ${#UNREACHABLE_HOSTS[@]} -gt 0 || ${#PRECHECK_FAILED_HOSTS[@]} -gt 0 ]]; then
     if [[ ${#UNREACHABLE_HOSTS[@]} -gt 0 ]]; then
         UNREACHABLE_LIST=$(printf '%s, ' "${UNREACHABLE_HOSTS[@]}")
@@ -388,7 +367,6 @@ else
     log "[PRECHECK] All checks passed. Continuing."
 fi
 
-log ""
 log "--------------------------------------------------------------------------------"
 
 # =============================================================================
@@ -397,9 +375,9 @@ log "---------------------------------------------------------------------------
 SUCCEEDED=0
 SKIPPED=0
 FAILED=0
-declare -a SKIPPED_DETAIL
-declare -a FAILED_DETAIL
-declare -a HOSTS_TOUCHED
+SKIPPED_DETAIL=()
+FAILED_DETAIL=()
+HOSTS_TOUCHED=()
 
 ROW_NUM=0
 
@@ -423,7 +401,6 @@ while IFS=',' read -r type src_srv dst_srv src_path dst_path src_usr dst_usr src
         CHOWN_ARG="--chown=${dst_usr}:${dst_grp}"
     fi
 
-    log ""
     log "ROW ${ROW_NUM} — ${type}"
 
     # ------------------------------------------------------------------
@@ -442,7 +419,7 @@ while IFS=',' read -r type src_srv dst_srv src_path dst_path src_usr dst_usr src
         fi
 
         if [[ -n "${PRECHECK_FAILURES[${dst_srv}]:-}" ]]; then
-            REASON=$(echo -e "${PRECHECK_FAILURES[${dst_srv}]}" | head -1 | xargs)
+            REASON=$(echo "${PRECHECK_FAILURES[${dst_srv}]}" | cut -d'|' -f1)
             log "[SKIP] ${dst_srv} failed precheck (${REASON}) — skipping row ${ROW_NUM}"
             (( SKIPPED++ )) || true
             SKIPPED_DETAIL+=("ROW ${ROW_NUM}: ${dst_srv} — failed precheck")
@@ -458,7 +435,6 @@ while IFS=',' read -r type src_srv dst_srv src_path dst_path src_usr dst_usr src
         else
             log "[EXEC] ${RSYNC_CMD}"
             ROW_START=$(get_epoch)
-            rsync_log ""
             rsync_log "--- ROW ${ROW_NUM}: ${src_srv}:${src_path} -> ${dst_srv}:${dst_path} ---"
             if eval "${RSYNC_CMD}" >> "${RSYNC_LOG}" 2>&1; then
                 log "[OK]   exit 0 ($(elapsed "${ROW_START}")s)"
@@ -488,7 +464,7 @@ while IFS=',' read -r type src_srv dst_srv src_path dst_path src_usr dst_usr src
         fi
 
         if [[ -n "${PRECHECK_FAILURES[${src_srv}]:-}" ]]; then
-            REASON=$(echo -e "${PRECHECK_FAILURES[${src_srv}]}" | head -1 | xargs)
+            REASON=$(echo "${PRECHECK_FAILURES[${src_srv}]}" | cut -d'|' -f1)
             log "[SKIP] ${src_srv} failed precheck (${REASON}) — skipping row ${ROW_NUM}"
             (( SKIPPED++ )) || true
             SKIPPED_DETAIL+=("ROW ${ROW_NUM}: ${src_srv} — failed precheck")
@@ -504,7 +480,6 @@ while IFS=',' read -r type src_srv dst_srv src_path dst_path src_usr dst_usr src
         else
             log "[EXEC] ${RSYNC_CMD}"
             ROW_START=$(get_epoch)
-            rsync_log ""
             rsync_log "--- ROW ${ROW_NUM}: ${src_srv}:${src_path} (ownership remap in-place) ---"
             if eval "${RSYNC_CMD}" >> "${RSYNC_LOG}" 2>&1; then
                 log "[OK]   exit 0 ($(elapsed "${ROW_START}")s)"
@@ -530,7 +505,6 @@ done < "${CSV_FILE}"
 # =============================================================================
 # Summary
 # =============================================================================
-log ""
 log "--------------------------------------------------------------------------------"
 log "SUMMARY"
 
@@ -542,7 +516,6 @@ if [[ "${DRY_RUN}" == "true" ]]; then
         SCOPE_LIST=$(printf '%s, ' "${UNIQUE_HOSTS[@]}")
         log "  Hosts in scope: ${SCOPE_LIST%, }"
     fi
-    log ""
     log " DRY RUN complete — no changes were made."
     log " Re-run with DRY_RUN=false to execute."
     finish "pending"
@@ -558,7 +531,6 @@ else
     if [[ ${#FAILED_DETAIL[@]} -gt 0 ]]; then
         for f in "${FAILED_DETAIL[@]}"; do log "    - ${f}"; done
     fi
-
     if [[ ${#HOSTS_TOUCHED[@]} -gt 0 ]]; then
         mapfile -t UNIQUE_TOUCHED < <(printf '%s\n' "${HOSTS_TOUCHED[@]}" | sort -u)
         TOUCHED_LIST=$(printf '%s, ' "${UNIQUE_TOUCHED[@]}")
@@ -566,7 +538,6 @@ else
     fi
 
     if [[ ${FAILED} -gt 0 || ${SKIPPED} -gt 0 ]]; then
-        log ""
         [[ ${SKIPPED} -gt 0 ]] && log " WARNING: ${SKIPPED} row(s) skipped."
         [[ ${FAILED}  -gt 0 ]] && log " WARNING: ${FAILED} row(s) failed."
         log " CSV moved to failed/ — re-upload after resolving issues."
