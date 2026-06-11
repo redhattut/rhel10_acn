@@ -189,7 +189,7 @@
           <span class="preview-toolbar-label">CSV preview</span>
           <button class="copy-btn" id="copy-btn" onclick="copyCSV()">copy</button>
         </div>
-        <div class="preview-content" id="csv-preview"><span class="csv-header">#Type,Source server,Destination server,Source path,Destination path,Source user,Target user</span></div>
+        <div class="preview-content" id="csv-preview"><span class="csv-header">#Type,Source server,Destination server,Source path,Destination path,Source user,Target user,Source group,Target group</span></div>
       </div>
     </div>
   </div>
@@ -235,13 +235,24 @@ function dtFields(id) {
     '<p class="section-label">Ownership mapping <span class="optional-tag">optional</span></p>' +
     '<div class="ownership-grid">' +
       '<div class="field-group">' +
-        '<label>Source user <span class="hint">leave blank to keep ownership</span></label>' +
+        '<label>Source user <span class="hint">leave blank to keep</span></label>' +
         '<input type="text" id="src_usr_' + id + '" oninput="update()">' +
       '</div>' +
       '<div class="ownership-arrow">&rarr;</div>' +
       '<div class="field-group">' +
         '<label>Target AD user</label>' +
         '<input type="text" id="dst_usr_' + id + '" oninput="update()">' +
+      '</div>' +
+    '</div>' +
+    '<div class="ownership-grid" style="margin-top:10px;">' +
+      '<div class="field-group">' +
+        '<label>Source group <span class="hint">leave blank to keep</span></label>' +
+        '<input type="text" id="src_grp_' + id + '" oninput="update()">' +
+      '</div>' +
+      '<div class="ownership-arrow">&rarr;</div>' +
+      '<div class="field-group">' +
+        '<label>Target AD group</label>' +
+        '<input type="text" id="dst_grp_' + id + '" oninput="update()">' +
       '</div>' +
     '</div>';
 }
@@ -265,13 +276,24 @@ function otFields(id) {
     '<p class="section-label">Ownership mapping</p>' +
     '<div class="ownership-grid">' +
       '<div class="field-group">' +
-        '<label>Source user</label>' +
+        '<label>Source user <span class="hint">leave blank to keep</span></label>' +
         '<input type="text" id="src_usr_' + id + '" oninput="update()">' +
       '</div>' +
       '<div class="ownership-arrow">&rarr;</div>' +
       '<div class="field-group">' +
         '<label>Target AD user</label>' +
         '<input type="text" id="dst_usr_' + id + '" oninput="update()">' +
+      '</div>' +
+    '</div>' +
+    '<div class="ownership-grid" style="margin-top:10px;">' +
+      '<div class="field-group">' +
+        '<label>Source group <span class="hint">leave blank to keep</span></label>' +
+        '<input type="text" id="src_grp_' + id + '" oninput="update()">' +
+      '</div>' +
+      '<div class="ownership-arrow">&rarr;</div>' +
+      '<div class="field-group">' +
+        '<label>Target AD group</label>' +
+        '<input type="text" id="dst_grp_' + id + '" oninput="update()">' +
       '</div>' +
     '</div>';
 }
@@ -387,7 +409,7 @@ function getVal(id) {
 }
 
 function buildCSV() {
-  var rows = ['#Type,Source server,Destination server,Source path,Destination path,Source user,Target user'];
+  var rows = ['#Type,Source server,Destination server,Source path,Destination path,Source user,Target user,Source group,Target group'];
   cards.forEach(function(id) {
     var card = document.getElementById('card-' + id);
     var type = card ? card.dataset.type : 'DT';
@@ -405,7 +427,9 @@ function buildCSV() {
       var paths = srcPaths.length ? srcPaths : [''];
       dsts.forEach(function(dst) {
         paths.forEach(function(sp) {
-          rows.push(['DATA_TRANSFER', srcSrv, clean(dst), clean(sp), dstPath, srcUsr, dstUsr].join(','));
+          var srcGrp = clean(getVal('src_grp_' + id));
+          var dstGrp = clean(getVal('dst_grp_' + id));
+          rows.push(['DATA_TRANSFER', srcSrv, clean(dst), clean(sp), dstPath, srcUsr, dstUsr, srcGrp, dstGrp].join(','));
         });
       });
     } else {
@@ -415,7 +439,9 @@ function buildCSV() {
       var srvList = srvs.length ? srvs : [''];
       srvList.forEach(function(srv) {
         paths2.forEach(function(sp) {
-          rows.push(['OWNERSHIP_TRANSFER', clean(srv), '', clean(sp), '', srcUsr, dstUsr].join(','));
+          var srcGrp = clean(getVal('src_grp_' + id));
+          var dstGrp = clean(getVal('dst_grp_' + id));
+          rows.push(['OWNERSHIP_TRANSFER', clean(srv), '', clean(sp), '', srcUsr, dstUsr, srcGrp, dstGrp].join(','));
         });
       });
     }
