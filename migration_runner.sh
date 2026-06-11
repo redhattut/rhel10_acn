@@ -184,12 +184,9 @@ fi
 # =============================================================================
 # CRLF strip
 # =============================================================================
-set -x
-if command -v dos2unix &>/dev/null; then
-    dos2unix "${CSV_FILE}" 2>/dev/null
-else
-    sed -i $'s/\r//' "${CSV_FILE}"
-fi
+# tr -d is POSIX, universally available, and works regardless of file permissions
+local_tmp="${CSV_FILE}.tmp"
+tr -d '\r' < "${CSV_FILE}" > "${local_tmp}" && mv "${local_tmp}" "${CSV_FILE}"
 log "[PARSE] Stripping CRLF line endings... done"
 
 # =============================================================================
@@ -245,7 +242,6 @@ if [[ ${#ALL_HOSTS[@]} -gt 0 ]]; then
 else
     UNIQUE_HOSTS=()
 fi
-set +x
 
 log "[PRECHECK] Testing SSH connectivity for all hosts in CSV..."
 UNREACHABLE_HOSTS=()
