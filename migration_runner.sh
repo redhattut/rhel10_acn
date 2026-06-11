@@ -189,6 +189,8 @@ fi
 # tr -d is POSIX, universally available, and works regardless of file permissions
 local_tmp="${CSV_FILE}.tmp"
 tr -d $'\r' < "${CSV_FILE}" > "${local_tmp}" && mv "${local_tmp}" "${CSV_FILE}"
+# Ensure file ends with newline — while read silently skips last line without it
+[[ -n "$(tail -c1 "${CSV_FILE}")" ]] && echo >> "${CSV_FILE}"
 log "[PARSE] Stripping CRLF line endings... done"
 
 # =============================================================================
