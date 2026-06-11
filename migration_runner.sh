@@ -485,16 +485,18 @@ while IFS=',' read -r type src_srv dst_srv src_path dst_path src_usr dst_usr src
             continue
         fi
 
-        # OT: SSH into the server and chown in-place — no data movement
-        CHOWN_CMD="chown -R ${dst_usr}:${dst_grp} ${src_path}"
+        # OT: SSH into the server and run rsync in-place to remap ownership
+        RSYNC_CMD="rsync ${RSYNC_OPTS}"
+        [[ -n "${CHOWN_ARG}" ]] && RSYNC_CMD="${RSYNC_CMD} ${CHOWN_ARG}"
+        RSYNC_CMD="${RSYNC_CMD} ${src_path} ${src_path}"
 
         if [[ "${DRY_RUN}" == "true" ]]; then
-            log "[DRY-RUN] ssh ${src_srv} '${CHOWN_CMD}'"
+            log "[DRY-RUN] ssh ${src_srv} '${RSYNC_CMD}'"
         else
-            log "[EXEC] ssh ${src_srv} '${CHOWN_CMD}'"
+            log "[EXEC] ssh ${src_srv} '${RSYNC_CMD}'"
             ROW_START=$(get_epoch)
             rsync_log "--- ROW ${ROW_NUM}: ${src_srv}:${src_path} (ownership remap in-place) ---"
-            if ssh "${src_srv}" "${CHOWN_CMD}" >> "${RSYNC_LOG}" 2>&1; then
+            if ssh "${src_srv}" "${RSYNC_CMD}" >> "${RSYNC_LOG}" 2>&1; then
                 log "[OK]   exit 0 ($(elapsed "${ROW_START}")s)"
                 (( SUCCEEDED++ )) || true
                 HOSTS_TOUCHED+=("${src_srv}")
