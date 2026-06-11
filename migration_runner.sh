@@ -124,7 +124,9 @@ check_ssh() {
 # Strip carriage returns from a string (defense against CRLF survivors)
 # =============================================================================
 strip_cr() {
-    echo "${1//$'\r'/}"
+    local cr=$'\r'
+    local result="${1//${cr}/}"
+    echo "${result}"
 }
 
 # =============================================================================
@@ -186,7 +188,7 @@ fi
 # =============================================================================
 # tr -d is POSIX, universally available, and works regardless of file permissions
 local_tmp="${CSV_FILE}.tmp"
-tr -d '\r' < "${CSV_FILE}" > "${local_tmp}" && mv "${local_tmp}" "${CSV_FILE}"
+tr -d $'\r' < "${CSV_FILE}" > "${local_tmp}" && mv "${local_tmp}" "${CSV_FILE}"
 log "[PARSE] Stripping CRLF line endings... done"
 
 # =============================================================================
