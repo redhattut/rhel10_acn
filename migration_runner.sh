@@ -121,6 +121,13 @@ check_ssh() {
 }
 
 # =============================================================================
+# Strip carriage returns from a string (defense against CRLF survivors)
+# =============================================================================
+strip_cr() {
+    echo "${1//$'\r'/}"
+}
+
+# =============================================================================
 # Remote helpers
 # =============================================================================
 remote_du() {
@@ -224,9 +231,10 @@ declare -A SSH_STATUS
 ALL_HOSTS=()
 
 while IFS=',' read -r type src_srv dst_srv src_path dst_path src_usr dst_usr src_grp dst_grp; do
+    type=$(strip_cr "${type}")
     [[ "${type}" == \#* || -z "${type}" ]] && continue
-    src_srv=$(echo "${src_srv}" | xargs)
-    dst_srv=$(echo "${dst_srv}" | xargs)
+    src_srv=$(strip_cr "${src_srv}")
+    dst_srv=$(strip_cr "${dst_srv}")
     [[ -n "${src_srv}" ]] && ALL_HOSTS+=("${src_srv}")
     [[ -n "${dst_srv}" ]] && ALL_HOSTS+=("${dst_srv}")
 done < "${CSV_FILE}"
@@ -255,8 +263,9 @@ done
 
 # Hard abort if any DT source is unreachable
 while IFS=',' read -r type src_srv dst_srv src_path dst_path src_usr dst_usr src_grp dst_grp; do
+    type=$(strip_cr "${type}")
     [[ "${type}" == \#* || -z "${type}" ]] && continue
-    src_srv=$(echo "${src_srv}" | xargs)
+    src_srv=$(strip_cr "${src_srv}")
     if [[ "${type}" == "DATA_TRANSFER" && "${SSH_STATUS[${src_srv}]:-UNREACHABLE}" == "UNREACHABLE" ]]; then
         log "[PRECHECK] Source host ${src_srv} is unreachable."
         log "[ABORT] Cannot proceed — source host must be reachable for DATA_TRANSFER rows."
@@ -276,15 +285,15 @@ declare -A HOST_CHECK_USER
 declare -A HOST_CHECK_GROUP
 
 while IFS=',' read -r type src_srv dst_srv src_path dst_path src_usr dst_usr src_grp dst_grp; do
+    type=$(strip_cr "${type}")
     [[ "${type}" == \#* || -z "${type}" ]] && continue
 
-    type=$(echo "${type}"         | xargs)
-    src_srv=$(echo "${src_srv}"   | xargs)
-    dst_srv=$(echo "${dst_srv}"   | xargs)
-    src_path=$(echo "${src_path}" | xargs)
-    dst_path=$(echo "${dst_path}" | xargs)
-    dst_usr=$(echo "${dst_usr}"   | xargs)
-    dst_grp=$(echo "${dst_grp}"   | xargs)
+    src_srv=$(strip_cr "${src_srv}")
+    dst_srv=$(strip_cr "${dst_srv}")
+    src_path=$(strip_cr "${src_path}")
+    dst_path=$(strip_cr "${dst_path}")
+    dst_usr=$(strip_cr "${dst_usr}")
+    dst_grp=$(strip_cr "${dst_grp}")
 
     if [[ "${type}" == "DATA_TRANSFER" ]]; then
         [[ "${SSH_STATUS[${dst_srv}]:-UNREACHABLE}" == "UNREACHABLE" ]] && continue
@@ -373,8 +382,6 @@ else
     log "[PRECHECK] All checks passed. Continuing."
 fi
 
-log "================================================================================"
-
 # =============================================================================
 # Process rows
 # =============================================================================
@@ -388,19 +395,20 @@ HOSTS_TOUCHED=()
 ROW_NUM=0
 
 while IFS=',' read -r type src_srv dst_srv src_path dst_path src_usr dst_usr src_grp dst_grp; do
+    type=$(strip_cr "${type}")
     [[ "${type}" == \#* || -z "${type}" ]] && continue
 
     (( ROW_NUM++ )) || true
 
-    type=$(echo "${type}"         | xargs)
-    src_srv=$(echo "${src_srv}"   | xargs)
-    dst_srv=$(echo "${dst_srv}"   | xargs)
-    src_path=$(echo "${src_path}" | xargs)
-    dst_path=$(echo "${dst_path}" | xargs)
-    src_usr=$(echo "${src_usr}"   | xargs)
-    dst_usr=$(echo "${dst_usr}"   | xargs)
-    src_grp=$(echo "${src_grp}"   | xargs)
-    dst_grp=$(echo "${dst_grp}"   | xargs)
+    type=$(strip_cr "${type}")
+    src_srv=$(strip_cr "${src_srv}")
+    dst_srv=$(strip_cr "${dst_srv}")
+    src_path=$(strip_cr "${src_path}")
+    dst_path=$(strip_cr "${dst_path}")
+    src_usr=$(strip_cr "${src_usr}")
+    dst_usr=$(strip_cr "${dst_usr}")
+    src_grp=$(strip_cr "${src_grp}")
+    dst_grp=$(strip_cr "${dst_grp}")
 
     CHOWN_ARG=""
     if [[ -n "${dst_usr}" || -n "${dst_grp}" ]]; then
