@@ -14,7 +14,7 @@
   when: mrg_dual_auth_krb5_keytab_stat.stat.exists | default(false)
 
 - name: Remove computer account from Active Directory
-  ansible.builtin.command: "adcli delete-computer -C --domain={{ mrg_dual_auth_domain }} {{ ansible_hostname }}"
+  ansible.builtin.command: "timeout 60 adcli delete-computer -C --domain={{ mrg_dual_auth_domain }} {{ ansible_hostname }}"
   register: mrg_dual_auth_adcli_delete
   changed_when: true
   failed_when: false
