@@ -1,12 +1,31 @@
 ---
 # Orchestration only - logic lives in the individual task files below.
 #
-# Tag summary (see README.md for full detail):
-#   (no tags)   -> facts + preflight + health check + configure + join-if-needed
-#   configure   -> just reapply auth/sssd/krb5/sudoers config (safe, idempotent)
-#   join        -> just the AD join step (skipped automatically if already healthy)
-#   rejoin      -> never        -> explicit leave-then-rejoin (forced)
-#   leave_ad    -> never        -> full decommission (preun/postun equivalent)
+# mrg_dual_auth_lifecycle_action (vars/main.yml, default "configure") is the
+# primary control - it's a plain extra_var, which is what AAP Survey
+# questions actually produce (Surveys always become extra_vars, never the
+# Job Template's native "Job Tags" field - see README.md). Set it via:
+#   - an AAP Survey multiple-choice question (recommended - see README), or
+#   - -e mrg_dual_auth_lifecycle_action=rejoin on the CLI
+#
+# Tags are also attached below purely as a CLI convenience for ad-hoc
+# `--tags configure` / `--tags join` partial reruns - they are NOT required
+# to trigger rejoin/leave_ad; the `when:` conditions on
+# mrg_dual_auth_lifecycle_action are what actually gate those.
+#
+# IMPORTANT: configure_auth.yml is tagged both `configure` AND `join`,
+# deliberately. Joining AD is meaningless without the sssd/krb5/conf.d
+# config configure_auth.yml lays down first (it's what makes the
+# [domain/OUD] coexistence config exist at all) - so `--tags join` alone
+# must still apply configure_auth.yml, not skip straight to the join
+# itself. The reverse isn't true: `--tags configure` alone does NOT also
+# run join_ad.yml, since reapplying config shouldn't automatically also
+# attempt a domain join.
+#
+# Allowed mrg_dual_auth_lifecycle_action values:
+#   configure  (default) -> facts + preflight + health check + configure + join-if-needed
+#   rejoin                -> all of the above, then forced leave-then-rejoin
+#   leave_ad               -> all of the above, then full decommission
 
 - name: Gather environment facts (mrg_dual_auth_target_env, domain, realm, RHEL major, OU)
   ansible.builtin.import_tasks: facts.yml
@@ -25,16 +44,19 @@
   tags:
     - configure
     - auth_config
+    - join
 
 - name: Join server to Active Directory if not already healthily joined
   ansible.builtin.import_tasks: join_ad.yml
   tags: join
   when: not (mrg_dual_auth_healthy | default(false)) or mrg_dual_auth_force_configure
 
-- name: Forced leave-and-rejoin (explicit opt-in only)
+- name: Forced leave-and-rejoin
   ansible.builtin.import_tasks: rejoin.yml
-  tags: [rejoin, never]
+  tags: rejoin
+  when: mrg_dual_auth_lifecycle_action == 'rejoin'
 
 - name: Full decommission - leave AD and restore pre-join state
   ansible.builtin.import_tasks: leave_ad.yml
-  tags: [leave_ad, never]
+  tags: leave_ad
+  when: mrg_dual_auth_lifecycle_action == 'leave_ad'

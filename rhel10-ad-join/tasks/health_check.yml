@@ -33,3 +33,21 @@
 - name: Report current AD join health
   ansible.builtin.debug:
     msg: "AD join healthy: {{ mrg_dual_auth_healthy }}"
+
+- name: Validate krb5.conf is a known default before modifying it
+  ansible.builtin.assert:
+    that:
+      - >-
+        mrg_dual_auth_healthy
+        or mrg_dual_auth_lifecycle_action in ['rejoin', 'leave_ad']
+        or not mrg_dual_auth_krb5_conf_stat.stat.exists
+        or mrg_dual_auth_krb5_conf_stat.stat.checksum in (mrg_dual_auth_krb5_known_md5[mrg_dual_auth_rhel_major] | default([]))
+    fail_msg: >-
+      /etc/krb5.conf does not match a known default for RHEL {{ mrg_dual_auth_rhel_major }}
+      (checksum: {{ mrg_dual_auth_krb5_conf_stat.stat.checksum | default('n/a') }}), the host
+      is not already healthily joined, and mrg_dual_auth_lifecycle_action is not
+      rejoin/leave_ad. It may be hand-customized for something else (e.g. a
+      Hadoop cluster) - refusing to overwrite. Investigate before proceeding,
+      set mrg_dual_auth_lifecycle_action=rejoin to force it, or update
+      mrg_dual_auth_krb5_known_md5.
+    success_msg: "krb5.conf check passed (already healthy, forced action, matches known default, or absent)."

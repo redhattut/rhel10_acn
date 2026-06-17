@@ -1,4 +1,13 @@
 ---
+- name: Validate mrg_dual_auth_lifecycle_action is a known value
+  ansible.builtin.assert:
+    that:
+      - mrg_dual_auth_lifecycle_action in ['configure', 'rejoin', 'leave_ad']
+    fail_msg: >-
+      mrg_dual_auth_lifecycle_action={{ mrg_dual_auth_lifecycle_action }} is not
+      one of configure/rejoin/leave_ad - check the Survey choice value or -e override.
+    success_msg: "mrg_dual_auth_lifecycle_action value is valid."
+
 - name: Determine current sssd id_provider configuration
   ansible.builtin.shell:
     cmd: >-
@@ -30,18 +39,11 @@
     checksum_algorithm: md5
   register: mrg_dual_auth_krb5_conf_stat
 
-- name: Validate krb5.conf is a known default before modifying it
-  ansible.builtin.assert:
-    that:
-      - >-
-        not mrg_dual_auth_krb5_conf_stat.stat.exists
-        or mrg_dual_auth_krb5_conf_stat.stat.checksum in (mrg_dual_auth_krb5_known_md5[mrg_dual_auth_rhel_major] | default([]))
-    fail_msg: >-
-      /etc/krb5.conf does not match a known default for RHEL {{ mrg_dual_auth_rhel_major }}
-      (checksum: {{ mrg_dual_auth_krb5_conf_stat.stat.checksum | default('n/a') }}). It may be
-      hand-customized for something else (e.g. a Hadoop cluster) - refusing to
-      overwrite. Investigate before proceeding, or update mrg_dual_auth_krb5_known_md5.
-    success_msg: "krb5.conf check passed (matches known default, or absent)."
+# The "is krb5.conf safe to overwrite" check lives in health_check.yml, not
+# here - it needs to know mrg_dual_auth_healthy first (an already-healthy
+# host's krb5.conf is *our own* templated output, not the pristine OS
+# default, so checking it here against the pristine-default checksum list
+# would always wrongly fail). See health_check.yml.
 
 - name: Refuse to proceed if host is on the legacy pure-AD path, not yet OUD+AD
   ansible.builtin.assert:
