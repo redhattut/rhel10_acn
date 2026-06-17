@@ -16,8 +16,33 @@
 # `playbook_dir` magic variable (the absolute directory of *this* file,
 # stable for the whole run even as it imports task files from elsewhere) so
 # every reference resolves correctly regardless of AAP's working directory.
+
+# Optional: build an ad-hoc inventory group from a Survey textarea variable
+# called dynamic_hosts_input (one hostname per line), instead of relying on
+# a pre-populated AAP Inventory. This is entirely optional and backward
+# compatible - if dynamic_hosts_input isn't supplied, this play does
+# nothing and the second play below falls back to hosts: all (the normal
+# AAP-Inventory-driven flow). See README.md for the Survey question setup.
+- name: Add hosts to dynamic inventory from survey input
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    mrg_dual_auth_dynamic_lines: "{{ (dynamic_hosts_input | default('')).split('\n') | map('trim') | select('truthy') | list }}"
+  tasks:
+    - name: Show parsed host list
+      ansible.builtin.debug:
+        msg: "{{ mrg_dual_auth_dynamic_lines }}"
+      when: mrg_dual_auth_dynamic_lines | length > 0
+
+    - name: Register each provided hostname into dynamic_group
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups: dynamic_group
+      loop: "{{ mrg_dual_auth_dynamic_lines }}"
+
 - name: Configure PNC dual auth (OUD+AD) and join servers to Active Directory (static keytab variant)
-  hosts: all
+  hosts: "{{ 'dynamic_group' if (dynamic_hosts_input | default('') | length > 0) else 'all' }}"
   become: true
   vars_files:
     - "{{ playbook_dir }}/../vars/main.yml"
