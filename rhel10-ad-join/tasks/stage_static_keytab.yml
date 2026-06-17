@@ -34,5 +34,5 @@
     mode: "0600"
 
 - name: Obtain and cache a TGT for the AD service account
-  ansible.builtin.command: "kinit -k -t {{ mrg_dual_auth_tmp_keytab_path }} {{ mrg_dual_auth_username }}@{{ mrg_dual_auth_realm }}"
+  ansible.builtin.command: "timeout 30 kinit -k -t {{ mrg_dual_auth_tmp_keytab_path }} {{ mrg_dual_auth_username }}@{{ mrg_dual_auth_realm }}"
   changed_when: true
