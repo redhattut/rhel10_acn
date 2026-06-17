@@ -1,0 +1,57 @@
+---
+- name: Determine current sssd id_provider configuration
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      cat /etc/sssd/sssd.conf /etc/sssd/conf.d/* 2>/dev/null
+      | grep '^id_provider' | cut -d '=' -f2 | tr -d ' ' | paste -sd '+'
+  register: mrg_dual_auth_current_auth
+  changed_when: false
+  failed_when: false
+
+- name: Read current AUTHMETHOD from PNC provision config
+  ansible.builtin.command: "grep -m1 ^AUTHMETHOD= {{ mrg_dual_auth_provision_config_path }}"
+  register: mrg_dual_auth_authmethod_raw
+  changed_when: false
+  failed_when: false
+
+- name: Normalize current AUTHMETHOD value
+  ansible.builtin.set_fact:
+    mrg_dual_auth_current_authmethod: "{{ mrg_dual_auth_authmethod_raw.stdout.split('=')[1] | default('') | trim }}"
+
+- name: Check whether a krb5 keytab already exists
+  ansible.builtin.stat:
+    path: /etc/krb5.keytab
+  register: mrg_dual_auth_krb5_keytab_stat
+
+- name: Check current krb5.conf checksum
+  ansible.builtin.stat:
+    path: /etc/krb5.conf
+    checksum_algorithm: md5
+  register: mrg_dual_auth_krb5_conf_stat
+
+- name: Validate krb5.conf is a known default before modifying it
+  ansible.builtin.assert:
+    that:
+      - >-
+        not mrg_dual_auth_krb5_conf_stat.stat.exists
+        or mrg_dual_auth_krb5_conf_stat.stat.checksum in (mrg_dual_auth_krb5_known_md5[mrg_dual_auth_rhel_major] | default([]))
+    fail_msg: >-
+      /etc/krb5.conf does not match a known default for RHEL {{ mrg_dual_auth_rhel_major }}
+      (checksum: {{ mrg_dual_auth_krb5_conf_stat.stat.checksum | default('n/a') }}). It may be
+      hand-customized for something else (e.g. a Hadoop cluster) - refusing to
+      overwrite. Investigate before proceeding, or update mrg_dual_auth_krb5_known_md5.
+    success_msg: "krb5.conf check passed (matches known default, or absent)."
+
+- name: Refuse to proceed if host is on the legacy pure-AD path, not yet OUD+AD
+  ansible.builtin.assert:
+    that:
+      - >-
+        'AD' not in (mrg_dual_auth_current_auth.stdout | upper)
+        or mrg_dual_auth_current_authmethod == mrg_dual_auth_target_authmethod
+    fail_msg: >-
+      sssd already reports an AD id_provider but {{ mrg_dual_auth_provision_config_path }}
+      does not show AUTHMETHOD={{ mrg_dual_auth_target_authmethod }}. This host may be on
+      the legacy pure-AD path that this role does not manage - investigate
+      before running it here.
+    success_msg: "Auth method pre-check passed."

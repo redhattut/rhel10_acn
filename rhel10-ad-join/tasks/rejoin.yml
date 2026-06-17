@@ -1,0 +1,24 @@
+---
+# Only runs with an explicit `--tags rejoin`. Use this when the host shows
+# as joined but broken (e.g. corrupt keytab, stale machine account password,
+# domain unreachable from sssd's perspective) and a clean rejoin is needed.
+
+- name: Stage the static AD bind-account keytab and obtain TGT for removal
+  ansible.builtin.import_tasks: stage_static_keytab.yml
+
+- name: Remove existing computer account from Active Directory
+  ansible.builtin.command: "adcli delete-computer -C --domain={{ mrg_dual_auth_domain }} {{ ansible_hostname }}"
+  register: mrg_dual_auth_adcli_delete
+  changed_when: true
+  failed_when: false
+
+- name: Clean up transient keytab and ticket cache after removal
+  ansible.builtin.import_tasks: destroy_transient_keytab.yml
+
+- name: Remove the existing host keytab before rejoining
+  ansible.builtin.file:
+    path: /etc/krb5.keytab
+    state: absent
+
+- name: Rejoin the server to Active Directory
+  ansible.builtin.import_tasks: join_ad.yml

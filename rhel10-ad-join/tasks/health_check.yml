@@ -1,0 +1,35 @@
+---
+- name: Default health flag to false
+  ansible.builtin.set_fact:
+    mrg_dual_auth_healthy: false
+
+- name: Gather service facts
+  ansible.builtin.service_facts: {}
+
+- name: Validate the existing keytab is readable and non-empty
+  ansible.builtin.command: "klist -k -t /etc/krb5.keytab"
+  register: mrg_dual_auth_keytab_check
+  changed_when: false
+  failed_when: false
+  when: mrg_dual_auth_krb5_keytab_stat.stat.exists
+
+- name: Check AD domain online status via sssctl
+  ansible.builtin.command: "sssctl domain-status {{ mrg_dual_auth_domain }} -o"
+  register: mrg_dual_auth_domain_status
+  changed_when: false
+  failed_when: false
+  when: mrg_dual_auth_krb5_keytab_stat.stat.exists
+
+- name: Mark AD join as healthy when keytab valid, domain online, sssd running, and AUTHMETHOD set
+  ansible.builtin.set_fact:
+    mrg_dual_auth_healthy: true
+  when:
+    - mrg_dual_auth_krb5_keytab_stat.stat.exists
+    - mrg_dual_auth_keytab_check.rc == 0
+    - mrg_dual_auth_domain_status.rc == 0
+    - ansible_facts.services['sssd.service'].state | default('') == 'running'
+    - mrg_dual_auth_current_authmethod == mrg_dual_auth_target_authmethod
+
+- name: Report current AD join health
+  ansible.builtin.debug:
+    msg: "AD join healthy: {{ mrg_dual_auth_healthy }}"

@@ -1,0 +1,13 @@
+PLACEHOLDER - this is NOT a real keytab.
+Replace this file with the real one for the rnd environment's bind
+account (XAAMMRAS), generated via:
+
+  ktutil
+  addent -password -p XAAMMRAS@RND.PNCINT.NET -k <kvno> -e aes128-cts-hmac-sha1-96 -s "RND.PNCINT.NETXAAMMRAS"
+  addent -password -p XAAMMRAS@RND.PNCINT.NET -k <kvno> -e aes256-cts-hmac-sha1-96 -s "RND.PNCINT.NETXAAMMRAS"
+  wkt ad-bind-rnd.dat
+  quit
+
+Use the actual current kvno for XAAMMRAS (don't assume it matches another
+environment's account). Keep the filename ad-bind-rnd.dat (or update
+mrg_dual_auth_static_keytab_filename_map in vars/main.yml if you rename it).

@@ -1,0 +1,84 @@
+---
+# === Environment indicator -> environment name ===
+# Matches the legacy convention: 5th character of the short hostname.
+#   0 or 5 -> rnd      1 or 6 -> uat      2 or 7 -> qa      3 or 8 -> prod
+# mrg_dual_auth_target_env itself is intentionally NOT defaulted here - see tasks/facts.yml.
+# Pass -e mrg_dual_auth_target_env=<rnd|uat|qa|prod> to override hostname-based detection.
+mrg_dual_auth_env_digit_map:
+  "0": rnd
+  "5": rnd
+  "1": uat
+  "6": uat
+  "2": qa
+  "7": qa
+  "3": prod
+  "8": prod
+
+# === AD service account per environment ===
+# Confirmed correct (double "A", "...RAS" for rnd).
+mrg_dual_auth_service_account_map:
+  rnd: XAAMMRAS
+  uat: XAAMMUAS
+  qa: XAAMMQAS
+  prod: XAAMMPAS
+
+mrg_dual_auth_username: "{{ mrg_dual_auth_service_account_map[mrg_dual_auth_target_env] }}"
+
+# Four separate pre-built keytab files (one per environment), each
+# containing just that environment's single bind account. Deliberately not
+# named with a .keytab extension - some orgs' GitHub policies flag that
+# extension - but each IS a real keytab; rename locally to something
+# ending in .keytab if you need to run klist on one by hand.
+# tasks/stage_static_keytab.yml copies whichever one matches the current
+# host's environment to a tmpfs location at runtime and kinits with it.
+mrg_dual_auth_static_keytab_filename_map:
+  rnd: ad-bind-rnd.dat
+  uat: ad-bind-uat.dat
+  qa: ad-bind-qa.dat
+  prod: ad-bind-prod.dat
+
+mrg_dual_auth_static_keytab_filename: "{{ mrg_dual_auth_static_keytab_filename_map[mrg_dual_auth_target_env] }}"
+
+# === Domain / realm derived from mrg_dual_auth_target_env ===
+mrg_dual_auth_domain: "{{ mrg_dual_auth_target_env }}.pncint.net"
+mrg_dual_auth_realm: "{{ mrg_dual_auth_domain | upper }}"
+mrg_dual_auth_dc_ou: "DC={{ mrg_dual_auth_domain.split('.') | join(',DC=') }}"
+
+# Domain used for sudoers AD group references. Prod authenticates the sudoers
+# group lookups against pncbank.com; non-prod uses the env-specific realm.
+mrg_dual_auth_sudoers_domain: "{{ 'pncbank.com' if mrg_dual_auth_target_env == 'prod' else mrg_dual_auth_domain }}"
+
+# === Computer account OU (constant across environments) ===
+mrg_dual_auth_base_ou: "OU=OUs_UnixStandard,OU=OUc_UnixServers,OU=OUc_Computers"
+
+# === Known-good krb5.conf MD5 checksums, keyed by RHEL major version ===
+# A host whose /etc/krb5.conf does not match one of these (and is not OUD's
+# own already-managed default) is assumed to be hand-customized; the role
+# refuses to overwrite it.
+mrg_dual_auth_krb5_known_md5:
+  "8":
+    - c523bd80412c3f7aae8cfdcefd9a15d4
+    - c3496b2f79c911b1ddb1ca2b8eedf119
+  "9":
+    - 004cbdc2eadda9ee121af9f082f1af78
+    - c3496b2f79c911b1ddb1ca2b8eedf119
+  "10":
+    - 004cbdc2eadda9ee121af9f082f1af78
+    - c3496b2f79c911b1ddb1ca2b8eedf119
+
+# === Lifecycle / target state ===
+mrg_dual_auth_target_authmethod: "OUD+AD"
+mrg_dual_auth_provision_config_path: /boot/PNC_PROVISION_CONFIG
+
+# Force the disruptive bits (sssd stop/disable, cache wipe, restart) to run
+# even when the host already looks healthy. Normally leave this false and
+# rely on --tags rejoin / --tags leave_ad for the explicit disruptive paths.
+mrg_dual_auth_force_configure: false
+
+# === Filesystem locations ===
+mrg_dual_auth_auth_backup_dir: /var/pnc/pnc_auth_config
+mrg_dual_auth_rbin_dir: /usr/local/pnc/rbin
+
+# === Sudoers group names ===
+mrg_dual_auth_btgsudo_group: "GSLunxSU_{{ mrg_dual_auth_mnemonic | default('MNE') }}_AdminLogin"
+mrg_dual_auth_mrgeng_group: "GSLunxSU_MRG_AllServerAdmin"

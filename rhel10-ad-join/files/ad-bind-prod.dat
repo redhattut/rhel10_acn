@@ -1,0 +1,13 @@
+PLACEHOLDER - this is NOT a real keytab.
+Replace this file with the real one for the prod environment's bind
+account (XAAMMPAS), generated via:
+
+  ktutil
+  addent -password -p XAAMMPAS@PROD.PNCINT.NET -k <kvno> -e aes128-cts-hmac-sha1-96 -s "PROD.PNCINT.NETXAAMMPAS"
+  addent -password -p XAAMMPAS@PROD.PNCINT.NET -k <kvno> -e aes256-cts-hmac-sha1-96 -s "PROD.PNCINT.NETXAAMMPAS"
+  wkt ad-bind-prod.dat
+  quit
+
+Use the actual current kvno for XAAMMPAS (don't assume it matches another
+environment's account). Keep the filename ad-bind-prod.dat (or update
+mrg_dual_auth_static_keytab_filename_map in vars/main.yml if you rename it).

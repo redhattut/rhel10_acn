@@ -1,0 +1,10 @@
+{# NOT CURRENTLY USED, AND CONTENT BELOW IS A PLACEHOLDER ONLY.
+   The legacy RPM generates /etc/security/login-access.conf via an inline
+   heredoc in %post, but only under the pure-AD AUTHMETHOD path - which this
+   role intentionally does not manage (target AUTHMETHOD is always OUD+AD,
+   per defaults/main.yml). configure_auth.yml therefore never deploys this
+   template; the file is left exactly as OUD's own management already set
+   it. The heredoc's actual text was never shared in our conversation, so do
+   NOT treat the line below as real content - replace it with the genuine
+   text from the %post heredoc if this path is ever reintroduced. #}
+# PLACEHOLDER - real content not yet provided, do not deploy as-is.

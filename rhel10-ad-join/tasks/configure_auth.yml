@@ -1,0 +1,331 @@
+---
+# Equivalent of the pnc_auth_config RPM's %pre/%post. Safe to rerun: file
+# content is always reconciled, but the disruptive bits (sssd stop/disable,
+# cache wipe + restart) only run when the host is not already healthily
+# joined, to avoid an unnecessary outage on routine troubleshooting reruns.
+
+- name: Ensure backup directory exists
+  ansible.builtin.file:
+    path: "{{ mrg_dual_auth_auth_backup_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Check existence of files eligible for backup
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: mrg_dual_auth_backup_candidates
+  loop:
+    - /etc/nsswitch.conf
+    - /etc/disable.passwd
+    - /etc/sssd/sssd.conf
+    - /etc/krb5.conf
+    - /etc/security/login-access.conf
+  loop_control:
+    label: "{{ item }}"
+
+- name: Back up current configuration files before applying changes
+  ansible.builtin.copy:
+    src: "{{ item.item }}"
+    dest: "{{ mrg_dual_auth_auth_backup_dir }}/{{ item.item | basename }}.pnc_auth_config"
+    remote_src: true
+    owner: root
+    group: root
+    mode: preserve
+  loop: "{{ mrg_dual_auth_backup_candidates.results }}"
+  when:
+    - item.stat.exists
+    - not item.stat.islnk
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Verify existing sudoers syntax before making changes
+  ansible.builtin.command: /usr/sbin/visudo -c
+  register: mrg_dual_auth_visudo_pre
+  changed_when: false
+  failed_when: false
+
+- name: Warn if sudoers already contains pre-existing errors
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: sudoers configuration contains pre-existing errors that MUST
+      be fixed: {{ mrg_dual_auth_visudo_pre.stdout }} {{ mrg_dual_auth_visudo_pre.stderr }}
+  when: mrg_dual_auth_visudo_pre.rc != 0
+
+- name: Stop and disable sssd before reconfiguring (only when not already healthy)
+  ansible.builtin.systemd_service:
+    name: sssd.service
+    state: stopped
+    enabled: false
+  when: not mrg_dual_auth_healthy or mrg_dual_auth_force_configure
+
+- name: Deploy krb5.conf
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../files/krb5.conf.j2"
+    dest: /etc/krb5.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Remove default crypto-policies include for krb5 if present
+  ansible.builtin.file:
+    path: /etc/krb5.conf.d/crypto-policies
+    state: absent
+
+- name: Deploy 50-pncad.conf (full-FQDN AD domain definition, always installed)
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../files/50-pncad.conf.j2"
+    dest: /etc/sssd/conf.d/50-pncad.conf
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Deploy 40-pncbank.conf (prod-only - separate pncbank.com AD forest)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/40-pncbank.conf"
+    dest: /etc/sssd/conf.d/40-pncbank.conf
+    owner: root
+    group: root
+    mode: "0600"
+  when: mrg_dual_auth_target_env == 'prod'
+
+- name: Deploy 55-pncad.conf (non-prod - short-named <env> domain for OUD+AD coexistence)
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../files/55-pncad.conf.j2"
+    dest: /etc/sssd/conf.d/55-pncad.conf
+    owner: root
+    group: root
+    mode: "0600"
+  when: mrg_dual_auth_target_env != 'prod'
+
+- name: Deploy 60-pnc-OUD-AD.conf (OUD+AD coexistence domain list)
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../files/60-pnc-OUD-AD.conf.j2"
+    dest: /etc/sssd/conf.d/60-pnc-OUD-AD.conf
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Ensure localauth plugin include directory exists
+  ansible.builtin.file:
+    path: /var/lib/sss/pubconf/krb5.include.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy SSSD localauth Kerberos plugin config
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/localauth_plugin"
+    dest: /var/lib/sss/pubconf/krb5.include.d/localauth_plugin
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Deploy krb5.conf.d include pointing at the localauth plugin config
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/enable_sssd_conf_dir"
+    dest: /etc/krb5.conf.d/enable_sssd_conf_dir
+    owner: root
+    group: root
+    mode: "0644"
+
+# --- Best-effort reimplementation of the legacy
+# `sed -i 's/\/default\/\/OUD/g'` / `sed -i 's/ default/ OUD/g'` step.
+# NOT validated against a real pre-existing OUD-managed sssd.conf - please
+# confirm this is the right transform against a live host before trusting it.
+- name: Rename legacy [domain/default] stanza to [domain/OUD] if present
+  ansible.builtin.replace:
+    path: /etc/sssd/sssd.conf
+    regexp: '^\[domain/default\]'
+    replace: '[domain/OUD]'
+
+- name: Rename bare "default" domain references to "OUD" in sssd.conf domains list
+  ansible.builtin.replace:
+    path: /etc/sssd/sssd.conf
+    regexp: '(domains\s*=.*?)\bdefault\b'
+    replace: '\1OUD'
+
+- name: Deploy sssd logrotate configuration
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/logrotate-sssd"
+    dest: /etc/logrotate.d/sssd
+    owner: root
+    group: root
+    mode: "0644"
+
+# login-access.conf is only generated by the legacy pure-AD path upstream;
+# under OUD+AD coexistence it stays whatever OUD's own management already
+# set it to. We only re-run discovery if it already exists.
+- name: Check whether login-access.conf already exists
+  ansible.builtin.stat:
+    path: /etc/security/login-access.conf
+  register: mrg_dual_auth_login_access_stat
+
+- name: Re-run PNC access discovery if login-access.conf exists
+  ansible.builtin.command: "{{ mrg_dual_auth_rbin_dir }}/pnc-run-discovery"
+  register: mrg_dual_auth_discovery_run
+  changed_when: mrg_dual_auth_discovery_run.rc == 0
+  when: mrg_dual_auth_login_access_stat.stat.exists
+
+- name: Check whether /export already exists
+  ansible.builtin.stat:
+    path: /export
+  register: mrg_dual_auth_export_stat
+
+- name: Create /export symlink to / when it does not already exist as a directory
+  ansible.builtin.file:
+    src: /
+    dest: /export
+    state: link
+  when: (not mrg_dual_auth_export_stat.stat.exists) or mrg_dual_auth_export_stat.stat.islnk
+
+- name: Check for an existing disable.passwd file
+  ansible.builtin.stat:
+    path: /etc/disable.passwd
+  register: mrg_dual_auth_disable_passwd_stat
+
+- name: Deploy disable.passwd notice (only if not already present)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/disable.passwd"
+    dest: /etc/disable.passwd
+    owner: root
+    group: root
+    mode: "0644"
+  when: not mrg_dual_auth_disable_passwd_stat.stat.exists
+
+- name: Ensure rbin directory exists
+  ansible.builtin.file:
+    path: "{{ mrg_dual_auth_rbin_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Check for an existing amm-add-access script
+  ansible.builtin.stat:
+    path: "{{ mrg_dual_auth_rbin_dir }}/amm-add-access"
+  register: mrg_dual_auth_amm_add_access_stat
+
+- name: Deploy amm-add-access script (only if not already present)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/rbin/amm-add-access"
+    dest: "{{ mrg_dual_auth_rbin_dir }}/amm-add-access"
+    owner: root
+    group: root
+    mode: "0744"
+  when: not mrg_dual_auth_amm_add_access_stat.stat.exists
+
+- name: Deploy PNC access management scripts (always reconciled)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/rbin/{{ item.name }}"
+    dest: "{{ mrg_dual_auth_rbin_dir }}/{{ item.name }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - name: pnc-add-access
+      mode: "0750"
+    - name: pnc-discover-access
+      mode: "0755"
+    - name: pnc-access-report
+      mode: "0755"
+    - name: pnc-run-discovery
+      mode: "0750"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Ensure custom PNC authselect profile directory exists
+  ansible.builtin.file:
+    path: /etc/authselect/custom/PNC
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy custom PNC nsswitch.conf for the authselect profile
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/authselect/nsswitch.conf"
+    dest: /etc/authselect/custom/PNC/nsswitch.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Deploy authselect user-nsswitch.conf
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/authselect/user-nsswitch.conf"
+    dest: /etc/authselect/user-nsswitch.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Select the custom PNC authselect profile
+  ansible.builtin.command: /usr/bin/authselect select custom/PNC --force with-faillock
+  register: mrg_dual_auth_authselect_select
+  changed_when: "'is already selected' not in mrg_dual_auth_authselect_select.stdout"
+
+- name: Apply authselect changes
+  ansible.builtin.command: authselect apply-changes
+  changed_when: true
+
+- name: Deploy btgsudo sudoers fragment
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../files/btgsudo.j2"
+    dest: /etc/sudoers.d/btgsudo
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "visudo -cf %s"
+
+- name: Deploy mrgeng sudoers fragment
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../files/mrgeng.j2"
+    dest: /etc/sudoers.d/mrgeng
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "visudo -cf %s"
+
+- name: "Ensure #includedir is present in the main sudoers file"
+  ansible.builtin.lineinfile:
+    path: /etc/sudoers
+    line: "#includedir /etc/sudoers.d"
+    regexp: '^#includedir /etc/sudoers\.d'
+    validate: "visudo -cf %s"
+
+- name: Verify sudoers syntax after changes
+  ansible.builtin.command: /usr/sbin/visudo -c
+  register: mrg_dual_auth_visudo_post
+  changed_when: false
+  failed_when: false
+
+- name: Warn if sudoers contains errors after installation
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: sudoers configuration contains errors that MUST be addressed:
+      {{ mrg_dual_auth_visudo_post.stdout }} {{ mrg_dual_auth_visudo_post.stderr }}
+  when: mrg_dual_auth_visudo_post.rc != 0
+
+- name: Move OUD-provisioned home directories to the OUD-suffixed name
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      for i in $(ls /home/); do
+        uid=$(stat -c '%u' "/home/$i" 2>/dev/null || echo 0)
+        if [ "$uid" -gt 2000000 ] && [ "$uid" -lt 100000000 ]; then
+          if [ ! -d "/home/${i}OUD" ]; then
+            mv "/home/$i" "/home/${i}OUD"
+            echo "moved $i"
+          fi
+        fi
+      done
+  register: mrg_dual_auth_home_move
+  changed_when: "'moved' in mrg_dual_auth_home_move.stdout"
+  failed_when: false
+
+- name: Restart syslog-ng to pick up logging changes
+  ansible.builtin.systemd_service:
+    name: syslog-ng.service
+    state: restarted
+  when: not mrg_dual_auth_healthy or mrg_dual_auth_force_configure

@@ -1,0 +1,40 @@
+---
+# Orchestration only - logic lives in the individual task files below.
+#
+# Tag summary (see README.md for full detail):
+#   (no tags)   -> facts + preflight + health check + configure + join-if-needed
+#   configure   -> just reapply auth/sssd/krb5/sudoers config (safe, idempotent)
+#   join        -> just the AD join step (skipped automatically if already healthy)
+#   rejoin      -> never        -> explicit leave-then-rejoin (forced)
+#   leave_ad    -> never        -> full decommission (preun/postun equivalent)
+
+- name: Gather environment facts (mrg_dual_auth_target_env, domain, realm, RHEL major, OU)
+  ansible.builtin.import_tasks: facts.yml
+  tags: always
+
+- name: Run pre-flight validation checks
+  ansible.builtin.import_tasks: preflight.yml
+  tags: always
+
+- name: Evaluate current AD join health
+  ansible.builtin.import_tasks: health_check.yml
+  tags: always
+
+- name: Apply PNC auth configuration (sssd / krb5 / authselect / sudoers)
+  ansible.builtin.import_tasks: configure_auth.yml
+  tags:
+    - configure
+    - auth_config
+
+- name: Join server to Active Directory if not already healthily joined
+  ansible.builtin.import_tasks: join_ad.yml
+  tags: join
+  when: not (mrg_dual_auth_healthy | default(false)) or mrg_dual_auth_force_configure
+
+- name: Forced leave-and-rejoin (explicit opt-in only)
+  ansible.builtin.import_tasks: rejoin.yml
+  tags: [rejoin, never]
+
+- name: Full decommission - leave AD and restore pre-join state
+  ansible.builtin.import_tasks: leave_ad.yml
+  tags: [leave_ad, never]

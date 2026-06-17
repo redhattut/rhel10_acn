@@ -1,0 +1,26 @@
+---
+# Entry point for AAP: point the Job Template's "Playbook" field at this
+# file (playbooks/main.yml) directly - no roles/ directory needed anywhere.
+#
+# This deliberately does NOT use `roles: - role: mrg-dual-auth-keytab`.
+# Ansible only searches for a role named X in a directory literally called
+# roles/X - and only in a few fixed locations (a roles/ folder *adjacent to
+# this playbook file*, i.e. playbooks/roles/, plus the global
+# ~/.ansible/roles, /usr/share/ansible/roles, /etc/ansible/roles). It does
+# NOT check the project root, even though tasks/, vars/, and files/ live
+# there. Since this repo's layout deliberately keeps those as top-level
+# folders (not nested under playbooks/roles/mrg-dual-auth-keytab/), the
+# `roles:` keyword would fail with "role not found" when AAP runs this.
+#
+# Instead, we import vars/main.yml and tasks/main.yml directly, using the
+# `playbook_dir` magic variable (the absolute directory of *this* file,
+# stable for the whole run even as it imports task files from elsewhere) so
+# every reference resolves correctly regardless of AAP's working directory.
+- name: Configure PNC dual auth (OUD+AD) and join servers to Active Directory (static keytab variant)
+  hosts: all
+  become: true
+  vars_files:
+    - "{{ playbook_dir }}/../vars/main.yml"
+  tasks:
+    - name: Run mrg-dual-auth-keytab task logic
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../tasks/main.yml"

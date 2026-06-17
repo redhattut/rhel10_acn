@@ -1,0 +1,65 @@
+includedir /etc/krb5.conf.d/
+
+[logging]
+ default = FILE:/var/log/krb5libs.log
+ kdc = FILE:/var/log/krb5kdc.log
+ admin_server = FILE:/var/log/kadmind.log
+
+[libdefaults]
+ default_realm = {{ mrg_dual_auth_realm }}
+ dns_lookup_kdc = true
+ dns_lookup_realm = false
+ ticket_lifetime = 86400
+ renew_lifetime = 604800
+ forwardable = true
+ default_tgs_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96
+ default_tkt_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96
+ permitted_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96
+ udp_preference_limit = 0
+ kdc_timeout = 3000
+ rdns = false
+
+[realms]
+
+ {{ mrg_dual_auth_realm }} = {
+ kdc = {{ mrg_dual_auth_domain }}
+ admin_server = {{ mrg_dual_auth_domain }}
+ }
+{% if mrg_dual_auth_target_env == 'prod' %}
+ PNCBANK.COM = {
+ kdc = pncbank.com
+ admin_server = pncbank.com
+ }
+{% endif %}
+
+[domain_realm]
+{% if mrg_dual_auth_target_env != 'prod' %}
+.{{ mrg_dual_auth_domain }} = {{ mrg_dual_auth_realm }}
+{{ mrg_dual_auth_domain }} = {{ mrg_dual_auth_realm }}
+.{{ mrg_dual_auth_target_env | upper }}R.PNCINT.NET = {{ mrg_dual_auth_target_env | upper }}R.PNCINT.NET
+{{ mrg_dual_auth_target_env | upper }}R.PNCINT.NET = {{ mrg_dual_auth_target_env | upper }}R.PNCINT.NET
+{% endif %}
+{% if mrg_dual_auth_target_env == 'prod' %}
+
+[capaths]
+PNCBANK.COM = {
+  PROD.PNCINT.NET = FORESTROOT.COM
+  PROD.PNCINT.NET = PRODR.PNCINT.NET
+  FORESTROOT.COM = .
+}
+PRODR.PNCINT.COM = {
+  PROD.PNCINT.NET = .
+  FORESTROOT.COM = .
+  PNCBANK.COM = FORESTROOT.COM
+}
+FORESTROOT.COM = {
+  PRODR.PNCINT.NET = .
+  PNCBANK.COM = .
+  PROD.PNCINT.COM = PRODR.PNCINT.NET
+}
+PROD.PNCINT.NET = {
+  PNCBANK.COM = PRODR.PNCINT.NET
+  PNCBANK.COM = FORESTROOT.COM
+  PRODR.PNCINT.NET = .
+}
+{% endif %}

@@ -1,0 +1,13 @@
+PLACEHOLDER - this is NOT a real keytab.
+Replace this file with the real one for the uat environment's bind
+account (XAAMMUAS), generated via:
+
+  ktutil
+  addent -password -p XAAMMUAS@UAT.PNCINT.NET -k <kvno> -e aes128-cts-hmac-sha1-96 -s "UAT.PNCINT.NETXAAMMUAS"
+  addent -password -p XAAMMUAS@UAT.PNCINT.NET -k <kvno> -e aes256-cts-hmac-sha1-96 -s "UAT.PNCINT.NETXAAMMUAS"
+  wkt ad-bind-uat.dat
+  quit
+
+Use the actual current kvno for XAAMMUAS (don't assume it matches another
+environment's account). Keep the filename ad-bind-uat.dat (or update
+mrg_dual_auth_static_keytab_filename_map in vars/main.yml if you rename it).

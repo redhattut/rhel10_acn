@@ -1,0 +1,37 @@
+---
+- name: Derive mrg_dual_auth_target_env from hostname when not explicitly provided
+  ansible.builtin.set_fact:
+    mrg_dual_auth_target_env: "{{ mrg_dual_auth_env_digit_map[ansible_hostname[4]] | default('unresolved', true) }}"
+  when:
+    - mrg_dual_auth_target_env is not defined
+    - ansible_hostname | length >= 5
+
+- name: Fail if mrg_dual_auth_target_env could not be resolved
+  ansible.builtin.fail:
+    msg: >-
+      Unable to resolve mrg_dual_auth_target_env from hostname '{{ ansible_hostname }}'.
+      Pass -e mrg_dual_auth_target_env=<rnd|uat|qa|prod> explicitly.
+  when: mrg_dual_auth_target_env is not defined or mrg_dual_auth_target_env not in ['rnd', 'uat', 'qa', 'prod']
+
+- name: Extract team mnemonic from hostname (3 letters between 'l' and the env digit)
+  ansible.builtin.set_fact:
+    mrg_dual_auth_mnemonic: "{{ ansible_hostname | regex_replace('^l.?([A-Za-z]{3})[0-8].*$', '\\1') | upper }}"
+
+- name: Warn if mnemonic extraction did not change the hostname (pattern did not match)
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: could not extract a 3-letter team mnemonic from hostname
+      '{{ ansible_hostname }}'. mrg_dual_auth_btgsudo_group will fall back to the
+      literal 'MNE' placeholder - set mrg_dual_auth_mnemonic explicitly if needed.
+  when: mrg_dual_auth_mnemonic == (ansible_hostname | upper)
+
+- name: Resolve RHEL major release
+  ansible.builtin.set_fact:
+    mrg_dual_auth_rhel_major: "{{ ansible_distribution_major_version }}"
+
+- name: Show resolved environment context
+  ansible.builtin.debug:
+    msg: >-
+      mrg_dual_auth_target_env={{ mrg_dual_auth_target_env }} mrg_dual_auth_domain={{ mrg_dual_auth_domain }} mrg_dual_auth_realm={{ mrg_dual_auth_realm }}
+      mrg_dual_auth_username={{ mrg_dual_auth_username }} mnemonic={{ mrg_dual_auth_mnemonic }}
+      rhel_major={{ mrg_dual_auth_rhel_major }}

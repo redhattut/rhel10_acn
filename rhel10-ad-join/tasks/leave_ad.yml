@@ -1,0 +1,109 @@
+---
+# Only runs with an explicit `--tags leave_ad`. Mirrors the original RPMs'
+# %preun/%postun behaviour: leave AD, restore the pre-join backups, and put
+# the host back into an OUD-only state.
+
+- name: Stop and disable sssd before decommissioning AD join
+  ansible.builtin.systemd_service:
+    name: sssd.service
+    state: stopped
+    enabled: false
+
+- name: Stage the static AD bind-account keytab and obtain TGT for removal
+  ansible.builtin.import_tasks: stage_static_keytab.yml
+  when: mrg_dual_auth_krb5_keytab_stat.stat.exists | default(false)
+
+- name: Remove computer account from Active Directory
+  ansible.builtin.command: "adcli delete-computer -C --domain={{ mrg_dual_auth_domain }} {{ ansible_hostname }}"
+  register: mrg_dual_auth_adcli_delete
+  changed_when: true
+  failed_when: false
+  when: mrg_dual_auth_krb5_keytab_stat.stat.exists | default(false)
+
+- name: Clean up transient keytab and ticket cache after removal
+  ansible.builtin.import_tasks: destroy_transient_keytab.yml
+  when: mrg_dual_auth_krb5_keytab_stat.stat.exists | default(false)
+
+- name: Check existence of backup files to restore
+  ansible.builtin.stat:
+    path: "{{ mrg_dual_auth_auth_backup_dir }}/{{ item | basename }}.pnc_auth_config"
+  register: mrg_dual_auth_restore_candidates
+  loop:
+    - /etc/nsswitch.conf
+    - /etc/disable.passwd
+    - /etc/sssd/sssd.conf
+    - /etc/krb5.conf
+    - /etc/security/login-access.conf
+  loop_control:
+    label: "{{ item }}"
+
+- name: Restore backed-up configuration files
+  ansible.builtin.copy:
+    src: "{{ mrg_dual_auth_auth_backup_dir }}/{{ item.item | basename }}.pnc_auth_config"
+    dest: "{{ item.item }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: preserve
+  loop: "{{ mrg_dual_auth_restore_candidates.results }}"
+  when: item.stat.exists
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Remove the Kerberos keytab
+  ansible.builtin.file:
+    path: /etc/krb5.keytab
+    state: absent
+
+- name: Remove AD-specific sssd conf.d fragments
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/sssd/conf.d/60-pnc-OUD-AD.conf
+    - /etc/sssd/conf.d/50-pncad.conf
+    - /etc/sssd/conf.d/40-pncbank.conf
+    - /etc/sssd/conf.d/55-pncad.conf
+
+- name: Remove krb5 localauth plugin include
+  ansible.builtin.file:
+    path: /etc/krb5.conf.d/enable_sssd_conf_dir
+    state: absent
+
+- name: Clear sssd caches
+  ansible.builtin.shell:
+    cmd: >-
+      rm -rf /var/lib/sss/db/* /var/lib/sss/mc/* /var/lib/sss/pubconf/kdcinfo.*
+  changed_when: true
+
+- name: Refresh sss_cache
+  ansible.builtin.command: sss_cache -E
+  changed_when: true
+
+- name: Move OUD-suffixed home directories back to their original names
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      for d in /home/*OUD; do
+        [ -d "$d" ] || continue
+        base="${d%OUD}"
+        if [ ! -e "$base" ]; then
+          mv "$d" "$base"
+          echo "moved $d"
+        fi
+      done
+  register: mrg_dual_auth_home_restore
+  changed_when: "'moved' in mrg_dual_auth_home_restore.stdout"
+  failed_when: false
+
+- name: Remove AUTHMETHOD line from PNC provision config
+  ansible.builtin.lineinfile:
+    path: "{{ mrg_dual_auth_provision_config_path }}"
+    regexp: '^AUTHMETHOD='
+    state: absent
+
+- name: Re-enable and start sssd (post decommission, OUD-only)
+  ansible.builtin.systemd_service:
+    name: sssd.service
+    enabled: true
+    state: started

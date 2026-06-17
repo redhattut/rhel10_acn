@@ -1,0 +1,38 @@
+---
+# Stages this host's pre-built, single-environment keytab from files/ onto
+# a secure tmpfs location and obtains a TGT for the AD bind account. The
+# source file deliberately does NOT use a .keytab extension (some orgs'
+# GitHub policies flag that extension) - it's just a keytab with a
+# different name; rename it back if you need to inspect it with klist
+# locally.
+#
+# There are four separate files, one per environment (each containing just
+# that environment's single bind account: XAAMMRAS, XAAMMUAS, XAAMMQAS, or
+# XAAMMPAS), already built and ready to use - no ktutil step runs here.
+# mrg_dual_auth_static_keytab_filename (vars/main.yml) resolves to whichever
+# one matches the current host's environment. If files/{{
+# mrg_dual_auth_static_keytab_filename }} doesn't exist, the copy task
+# below will fail with a clear "could not find src" error.
+
+- name: Create a secure temporary directory for the staged keytab
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: mrg_dual_auth
+  register: mrg_dual_auth_keytab_tmpdir
+  changed_when: false
+
+- name: Set staged keytab path
+  ansible.builtin.set_fact:
+    mrg_dual_auth_tmp_keytab_path: "{{ mrg_dual_auth_keytab_tmpdir.path }}/{{ mrg_dual_auth_username }}.keytab"
+
+- name: Stage the static keytab file onto the target host
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/{{ mrg_dual_auth_static_keytab_filename }}"
+    dest: "{{ mrg_dual_auth_tmp_keytab_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Obtain and cache a TGT for the AD service account
+  ansible.builtin.command: "kinit -k -t {{ mrg_dual_auth_tmp_keytab_path }} {{ mrg_dual_auth_username }}@{{ mrg_dual_auth_realm }}"
+  changed_when: true
