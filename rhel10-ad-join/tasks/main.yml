@@ -24,8 +24,14 @@
 #
 # Allowed mrg_dual_auth_lifecycle_action values:
 #   configure  (default) -> facts + preflight + health check + configure + join-if-needed
-#   rejoin                -> all of the above, then forced leave-then-rejoin
-#   leave_ad               -> all of the above, then full decommission
+#   rejoin                -> facts + preflight + health check + configure, then forced
+#                            leave-then-rejoin (rejoin.yml does its own join_ad.yml import -
+#                            the standalone join task above is skipped to avoid joining
+#                            twice in the same run)
+#   leave_ad               -> facts + preflight + health check, then full decommission only
+#                            (configure/join are both skipped - there's no reason to
+#                            reapply config or attempt a fresh join right before tearing
+#                            it back down again)
 
 - name: Gather environment facts (mrg_dual_auth_target_env, domain, realm, RHEL major, OU)
   ansible.builtin.import_tasks: facts.yml
@@ -45,11 +51,14 @@
     - configure
     - auth_config
     - join
+  when: mrg_dual_auth_lifecycle_action != 'leave_ad'
 
 - name: Join server to Active Directory if not already healthily joined
   ansible.builtin.import_tasks: join_ad.yml
   tags: join
-  when: not (mrg_dual_auth_healthy | default(false)) or mrg_dual_auth_force_configure
+  when:
+    - mrg_dual_auth_lifecycle_action == 'configure'
+    - not (mrg_dual_auth_healthy | default(false)) or mrg_dual_auth_force_configure
 
 - name: Forced leave-and-rejoin
   ansible.builtin.import_tasks: rejoin.yml
