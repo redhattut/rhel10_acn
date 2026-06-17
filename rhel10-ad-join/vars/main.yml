@@ -72,8 +72,19 @@ mrg_dual_auth_provision_config_path: /boot/PNC_PROVISION_CONFIG
 
 # Force the disruptive bits (sssd stop/disable, cache wipe, restart) to run
 # even when the host already looks healthy. Normally leave this false and
-# rely on --tags rejoin / --tags leave_ad for the explicit disruptive paths.
+# rely on mrg_dual_auth_lifecycle_action: rejoin / leave_ad for the explicit
+# disruptive paths instead.
 mrg_dual_auth_force_configure: false
+
+# Primary control for which lifecycle path this run takes. This is a plain
+# extra_var deliberately, not an Ansible tag - AAP Survey questions always
+# become extra_vars (never the native Job Tags field), so this is what a
+# Survey multiple-choice question should set. See README.md for the AAP
+# Survey setup. Allowed values:
+#   configure (default) - facts + preflight + health check + configure + join-if-needed
+#   rejoin               - all of the above, then forced leave-then-rejoin
+#   leave_ad              - all of the above, then full decommission
+mrg_dual_auth_lifecycle_action: "configure"
 
 # === Filesystem locations ===
 mrg_dual_auth_auth_backup_dir: /var/pnc/pnc_auth_config
