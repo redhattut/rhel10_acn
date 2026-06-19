@@ -103,30 +103,35 @@ while IFS= read -r raw; do
         continue
     fi
 
-    # --- Route by tag ---------------------------------------------------------
-    case "$line" in
-        INV|*)
-            # Strip the "INV|" prefix and write the data portion
-            echo "${line#INV|}" >> "$INV_OUT"
+    # --- Route by tag --------------------------------------------------------
+    # NOTE: We cannot use "TAG|*" in a bash case statement because | is the
+    # case OR operator. Instead we extract the tag prefix explicitly and
+    # route with a case on the tag alone.
+    tag="${line%%|*}"       # everything before the first |
+    data="${line#*|}"       # everything after the first |
+
+    case "$tag" in
+        INV)
+            echo "$data" >> "$INV_OUT"
             (( count_inv++ ))
             ;;
-        ID|*)
-            echo "${line#ID|}" >> "$ID_OUT"
+        ID)
+            echo "$data" >> "$ID_OUT"
             (( count_id++ ))
             ;;
-        DB|*)
-            echo "${line#DB|}" >> "$DB_OUT"
+        DB)
+            echo "$data" >> "$DB_OUT"
             (( count_db++ ))
             ;;
-        PKG|*)
+        PKG)
             # Skip lines that start with "Inventory" — special case from
             # original filter (a few systems emit this as their first line)
-            [[ "${line#PKG|}" == Inventory* ]] && continue
-            echo "${line#PKG|}" >> "$PKG_OUT"
+            [[ "$data" == Inventory* ]] && continue
+            echo "$data" >> "$PKG_OUT"
             (( count_pkg++ ))
             ;;
         *)
-            # Unrecognised line — log it for diagnostics but don't discard
+            # Unrecognised tag or untagged line — log for diagnostics
             echo "$(date '+%Y-%m-%d %H:%M:%S') UNTAGGED: $raw" >> "$ERR_LOG"
             (( count_err++ ))
             ;;

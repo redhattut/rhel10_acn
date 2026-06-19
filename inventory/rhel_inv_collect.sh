@@ -224,27 +224,43 @@ log SECTION "Phase 4 — Rotate prior data files, promote temps"
 
 # Rotate the previous inventory data (keeps compressed history for discovery)
 log INFO "Rotating RHEL_INVENTORY.dat (keeping $ROTATE_INVENTORY copies)"
-rotate_compressed "$INVENTORYDATA" "$ROTATE_INVENTORY"
-mv "$INVENTORYTEMP" "$INVENTORYDATA"
+if [[ "${TEST_MODE:-0}" -eq 1 ]]; then
+    # Test mode — overwrite directly, no rotation, no wasted disk space
+    [[ -s "$INVENTORYTEMP" ]] && mv "$INVENTORYTEMP" "$INVENTORYDATA" || log WARN "INVENTORYTEMP empty — skipping promote"
+else
+    rotate_compressed "$INVENTORYDATA" "$ROTATE_INVENTORY"
+    [[ -s "$INVENTORYTEMP" ]] && mv "$INVENTORYTEMP" "$INVENTORYDATA" || log WARN "INVENTORYTEMP empty — skipping promote"
+fi
 log INFO "INVENTORYDATA updated"
 
 log INFO "Rotating RHEL_DBINVENTORY.dat (keeping $ROTATE_DBINVENTORY copies)"
-rotate_compressed "$DBINVENTORYDATA" "$ROTATE_DBINVENTORY"
-mv "$DBINVENTORYTEMP" "$DBINVENTORYDATA"
+if [[ "${TEST_MODE:-0}" -eq 1 ]]; then
+    [[ -s "$DBINVENTORYTEMP" ]] && mv "$DBINVENTORYTEMP" "$DBINVENTORYDATA" || log INFO "DBINVENTORYTEMP empty — skipping promote (normal if no Oracle hosts in test list)"
+else
+    rotate_compressed "$DBINVENTORYDATA" "$ROTATE_DBINVENTORY"
+    [[ -s "$DBINVENTORYTEMP" ]] && mv "$DBINVENTORYTEMP" "$DBINVENTORYDATA" || log INFO "DBINVENTORYTEMP empty — skipping promote"
+fi
 log INFO "DBINVENTORYDATA updated"
 
 # ID inventory: keep 3 compressed copies for the discovery process
 log INFO "Rotating RHEL_IDINVENTORY.dat (keeping $ROTATE_IDINVENTORY copies)"
-rotate_compressed "$IDINVENTORYDATA" "$ROTATE_IDINVENTORY"
-mv "$IDINVENTORYTEMP" "$IDINVENTORYDATA"
+if [[ "${TEST_MODE:-0}" -eq 1 ]]; then
+    [[ -s "$IDINVENTORYTEMP" ]] && mv "$IDINVENTORYTEMP" "$IDINVENTORYDATA" || log WARN "IDINVENTORYTEMP empty — skipping promote"
+else
+    rotate_compressed "$IDINVENTORYDATA" "$ROTATE_IDINVENTORY"
+    [[ -s "$IDINVENTORYTEMP" ]] && mv "$IDINVENTORYTEMP" "$IDINVENTORYDATA" || log WARN "IDINVENTORYTEMP empty — skipping promote"
+fi
 log INFO "IDINVENTORYDATA updated"
 
 # Package inventory: keep more copies since it's used for grep searches
 log INFO "Rotating RHEL_PACKAGES.csv (keeping $ROTATE_PACKAGES copies)"
-rotate_compressed "$PACKAGEDATA" "$ROTATE_PACKAGES"
-mv "$PACKAGETEMP" "$PACKAGEDATA"
-cp -p "$PACKAGEDATA" "$WEBDIR/"
-log INFO "PACKAGEDATA updated and published to $WEBDIR"
+if [[ "${TEST_MODE:-0}" -eq 1 ]]; then
+    [[ -s "$PACKAGETEMP" ]] && mv "$PACKAGETEMP" "$PACKAGEDATA" || log INFO "PACKAGETEMP empty — skipping promote (package scan runs separately from secondary jumpbox)"
+else
+    rotate_compressed "$PACKAGEDATA" "$ROTATE_PACKAGES"
+    [[ -s "$PACKAGETEMP" ]] && mv "$PACKAGETEMP" "$PACKAGEDATA" || log INFO "PACKAGETEMP empty — skipping promote"
+fi
+[[ -f "$PACKAGEDATA" ]] && cp -p "$PACKAGEDATA" "$WEBDIR/" && log INFO "PACKAGEDATA published to $WEBDIR"
 
 # =============================================================================
 log SECTION "Phase 5 — Collect UIDs and GIDs"
@@ -349,12 +365,17 @@ log SECTION "Phase 8 — Rotate historical CSV copies"
 mkdir -p "${WEBDIR}/historical_data"
 cp "${WEBDIR}/$INVENTDATACSV" \
     "${WEBDIR}/historical_data/${INVENTDATACSV}" 2>/dev/null
-rotate_plain "${WEBDIR}/historical_data/RHEL_INVENTORY" "$ROTATE_INVENTORY_CSV" -e ".csv" \
-    && log INFO "Historical CSV rotation complete (keeping $ROTATE_INVENTORY_CSV copies)"
-
-# Keep 3 compressed local copies for discovery scans
-rotate_compressed "${DATA_DIR}/$INVENTDATACSV" "$ROTATE_INVENTORY_CSV" \
-    && log INFO "Local CSV rotation complete (keeping $ROTATE_INVENTORY_CSV copies)"
+if [[ "${TEST_MODE:-0}" -eq 1 ]]; then
+    # Test mode — no rotation, files simply overwrite each run to save space
+    # RHEL_PACKAGES.csv can be 1.3GB — rotating compressed copies on every
+    # test run would exhaust disk space quickly
+    log INFO "TEST MODE — skipping CSV rotation (overwrite only)"
+else
+    rotate_plain "${WEBDIR}/historical_data/RHEL_INVENTORY" "$ROTATE_INVENTORY_CSV" -e ".csv" \
+        && log INFO "Historical CSV rotation complete (keeping $ROTATE_INVENTORY_CSV copies)"
+    rotate_compressed "${DATA_DIR}/$INVENTDATACSV" "$ROTATE_INVENTORY_CSV" \
+        && log INFO "Local CSV rotation complete (keeping $ROTATE_INVENTORY_CSV copies)"
+fi
 
 # =============================================================================
 log SECTION "Phase 9 — Inventory Consolidation (Midrange)"

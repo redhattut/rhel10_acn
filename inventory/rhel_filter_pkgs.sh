@@ -67,18 +67,19 @@ while IFS= read -r raw; do
     fi
 
     # Only pass PKG| lines through
-    case "$line" in
-        PKG|*)
-            # Strip the tag prefix
-            data="${line#PKG|}"
+    # Extract tag and data by splitting on first | character
+    tag="${line%%|*}"
+    data="${line#*|}"
 
+    case "$tag" in
+        PKG)
             # Skip the "Inventory..." special case lines
             [[ "$data" == Inventory* ]] && continue
 
             echo "$data"
             (( count_pkg++ ))
             ;;
-        INV|*|ID|*|DB|*)
+        INV|ID|DB)
             # Other tag types from rhel_remote_scan.sh — silently discard
             (( count_skip++ ))
             ;;

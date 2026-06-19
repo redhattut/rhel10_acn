@@ -431,7 +431,10 @@ RPT_Deployment_Annual() {
     echo "Last updated $(date)"
     echo "<br><br><br>"
     echo "<font size=5><pre>"
-    if [[ -x "${PGMDIR}/rhel_deploy_rpt_yearly.sh" ]]; then
+    if [[ ! -f "$DEPLOYMENTDATA" ]]; then
+        echo "<p>Deployment data not yet available — run initial seed step from README.</p>"
+        log WARN "DEPLOYMENTDATA not found: $DEPLOYMENTDATA — annual report will be empty"
+    elif [[ -x "${PGMDIR}/rhel_deploy_rpt_yearly.sh" ]]; then
         "${PGMDIR}/rhel_deploy_rpt_yearly.sh"
     else
         log WARN "rhel_deploy_rpt_yearly.sh not found — annual report body will be empty"
@@ -486,8 +489,11 @@ EOF
         local date_pattern="${year}-${month}"
 
         # Pull all deployment records for this month
-        local month_data
-        month_data=$(awk -v pattern="$date_pattern" '$1 ~ pattern {print $0}' "$DEPLOYMENTDATA")
+        # Guard against missing deployment file (not yet seeded on fresh install)
+        local month_data=""
+        if [[ -f "$DEPLOYMENTDATA" ]]; then
+            month_data=$(awk -v pattern="$date_pattern" '$1 ~ pattern {print $0}' "$DEPLOYMENTDATA")
+        fi
 
         [[ -z "$month_data" ]] && continue
 
