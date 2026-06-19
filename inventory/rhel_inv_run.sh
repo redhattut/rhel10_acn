@@ -273,4 +273,18 @@ fi
 
 ln -sf "$RUN_LOG" "$LATEST_LOG" 2>/dev/null
 
+# =============================================================================
+log SECTION "End-of-run Checklist"
+# =============================================================================
+
+if [[ -x "${BASE_DIR}/run_checklist.sh" ]]; then
+    if [[ $TEST_MODE -eq 1 ]]; then
+        "${BASE_DIR}/run_checklist.sh" test
+    else
+        "${BASE_DIR}/run_checklist.sh" production
+    fi
+else
+    log WARN "run_checklist.sh not found — skipping validation checklist"
+fi
+
 exit 0

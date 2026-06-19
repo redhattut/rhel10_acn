@@ -181,7 +181,7 @@ HW_SERIAL="${HW_SERIAL// /_}"
 HW_SERIAL="${HW_SERIAL:=n/a}"
 
 # =============================================================================
-# PNC_PROVISION_CONFIG — BUILDTYPE, DBTYPE, LOCATION, CIDEVICE, VCENTER
+# PNC_PROVISION_CONFIG — all fields sourced from here
 # =============================================================================
 
 # Source the file quietly; it exports variables we use directly
@@ -192,6 +192,18 @@ DBTYPE="${DBTYPE:-n/a}"
 LOCATION="${LOCATION:-n/a}"
 CIDEVICE="${CIDEVICE:-n/a}"
 VCENTER="${VCENTER:-n/a}"
+ENVIRONMENT="${ENVIRONMENT:-n/a}"
+
+# BuildDate — prefer PROVISIONDATE from config (modern SOE hosts)
+# Falls back to n/a; rhel_inv_collect.sh will fill from RHEL_DEPLOYMENTS.dat
+# for legacy hosts that predate this field
+BUILDDATE="${PROVISIONDATE:-n/a}"
+
+# AppCode — not in PNC_PROVISION_CONFIG, derived from hostname convention:
+# l<appcode><nn><site> e.g. lmrg10ia → mrg, lpay20tdz → pay
+# Strip leading single letter, take all lowercase letters before first digit
+APPCODE=$(echo "$HOST" | sed 's/^[a-z]//' | grep -o '^[a-z]*')
+APPCODE="${APPCODE:-n/a}"
 
 # =============================================================================
 # Syslog-ng service status
@@ -292,7 +304,16 @@ IPADDR="${IPADDR:-n/a}"
 #   VMWTOOLS VMTOOLSRUNNING LASTBACKUPDATE IPADDR LOCATION CIDEVICE VCENTER
 #   BUILDTYPE DBTYPE
 
-echo "INV|${HOST} ${PV} ${RELEASE} ${KERNEL} ${ARCH} ${MEMORY} ${CPU_SOCKETCOUNT} ${CPUCOUNT} ${CPU_THREADCOUNT} ${CPU_TYPE} ${CPU_SPEED} ${HW_MANUFACTURER} ${HW_MODEL} ${HW_SERIAL} ${SYSLOG} ${UPDAYS} ${VMWTOOLS} ${VMTOOLSRUNNING} ${LASTBACKUPDATE} ${IPADDR} ${LOCATION} ${CIDEVICE} ${VCENTER} ${BUILDTYPE} ${DBTYPE}"
+# INV| output — 28 space-delimited fields after the tag:
+# Host(1) Type(2) OS(3) Kernel(4) Arch(5) Memory(6) CPUSockets(7) CPUCores(8)
+# CPUThreads(9) CPUType(10) CPUSpeed(11) HWVendor(12) HWModel(13) Serial(14)
+# Syslog(15) Uptime(16) VMToolsVer(17) VMToolsRun(18) LastBackup(19) IP(20)
+# Location(21) CIDevice(22) vCenter(23) BuildType(24) DBType(25)
+# AppCode(26) Environment(27) BuildDate(28)
+#
+# AppCode, Environment, BuildDate are appended at the end so existing
+# field positions 1-25 remain identical to legacy for backward compatibility.
+echo "INV|${HOST} ${PV} ${RELEASE} ${KERNEL} ${ARCH} ${MEMORY} ${CPU_SOCKETCOUNT} ${CPUCOUNT} ${CPU_THREADCOUNT} ${CPU_TYPE} ${CPU_SPEED} ${HW_MANUFACTURER} ${HW_MODEL} ${HW_SERIAL} ${SYSLOG} ${UPDAYS} ${VMWTOOLS} ${VMTOOLSRUNNING} ${LASTBACKUPDATE} ${IPADDR} ${LOCATION} ${CIDEVICE} ${VCENTER} ${BUILDTYPE} ${DBTYPE} ${APPCODE} ${ENVIRONMENT} ${BUILDDATE}"
 
 # =============================================================================
 # OUTPUT — ID tag (users, groups, netgroups, AD groups)

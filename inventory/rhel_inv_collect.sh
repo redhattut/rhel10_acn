@@ -309,27 +309,77 @@ if [[ $CMDB_AVAILABLE -eq 1 ]]; then
     CMDB_MATCHED=0
     CMDB_MISSING=0
 
+    # Pre-load deployment data for BuildDate fallback
+    # Used only for legacy hosts where PROVISIONDATE was absent from
+    # PNC_PROVISION_CONFIG at build time (field 28 of .dat will be n/a)
+    declare -A DEPLOY_DATE
+    if [[ -f "$DEPLOYMENTDATA" ]]; then
+        while read -r bdate bhost bpv bos; do
+            [[ -n "$bhost" ]] && DEPLOY_DATE["$bhost"]="$bdate"
+        done < "$DEPLOYMENTDATA"
+        log INFO "Loaded ${#DEPLOY_DATE[@]} deployment records for BuildDate fallback"
+    else
+        log WARN "DEPLOYMENTDATA not found — BuildDate fallback unavailable for legacy hosts"
+    fi
+
     while read -r line; do
-        # Replace spaces with commas (inventory dat is space-delimited)
-        newline=$(echo "$line" | sed 's/ /,/g')
+        # .dat fields (space-delimited, 28 total from rhel_remote_scan.sh):
+        #  1=Host  2=Type  3=OS  4=Kernel  5=Arch  6=Memory  7=CPUSockets
+        #  8=CPUCores  9=CPUThreads  10=CPUType  11=CPUSpeed  12=HWVendor
+        #  13=HWModel  14=Serial  15=Syslog  16=Uptime  17=VMToolsVer
+        #  18=VMToolsRun  19=LastBackup  20=IP  21=Location  22=CIDevice
+        #  23=vCenter  24=BuildType  25=DBType  26=AppCode  27=Environment
+        #  28=BuildDate (PROVISIONDATE, n/a for pre-SOE hosts)
+        h=$(echo       "$line" | awk '{print $1}')
+        ftype=$(echo   "$line" | awk '{print $2}')
+        f3=$(echo      "$line" | awk '{print $3}')   # OS
+        f4=$(echo      "$line" | awk '{print $4}')   # Kernel
+        f5=$(echo      "$line" | awk '{print $5}')   # Arch
+        f6=$(echo      "$line" | awk '{print $6}')   # Memory
+        f7=$(echo      "$line" | awk '{print $7}')   # CPU Sockets
+        f8=$(echo      "$line" | awk '{print $8}')   # CPU Cores
+        f9=$(echo      "$line" | awk '{print $9}')   # CPU Threads
+        f10=$(echo     "$line" | awk '{print $10}')  # CPU Type
+        f11=$(echo     "$line" | awk '{print $11}')  # CPU Speed
+        f12=$(echo     "$line" | awk '{print $12}')  # HW Vendor
+        f13=$(echo     "$line" | awk '{print $13}')  # HW Model
+        f14=$(echo     "$line" | awk '{print $14}')  # Serial Num
+        f15=$(echo     "$line" | awk '{print $15}')  # Syslog-ng
+        f16=$(echo     "$line" | awk '{print $16}')  # Uptime
+        f17=$(echo     "$line" | awk '{print $17}')  # VMToolsVer
+        f18=$(echo     "$line" | awk '{print $18}')  # VMToolsRun
+        f19=$(echo     "$line" | awk '{print $19}')  # LastBackup
+        f20=$(echo     "$line" | awk '{print $20}')  # IP Address
+        location=$(echo "$line" | awk '{print $21}') # Location (from PNC_PROVISION_CONFIG)
+        f22=$(echo     "$line" | awk '{print $22}')  # CI Device
+        f23=$(echo     "$line" | awk '{print $23}')  # vCenter
+        f24=$(echo     "$line" | awk '{print $24}')  # BuildType
+        f25=$(echo     "$line" | awk '{print $25}')  # DBType
+        appcode=$(echo  "$line" | awk '{print $26}') # AppCode (from hostname)
+        env=$(echo      "$line" | awk '{print $27}') # Environment (from PNC_PROVISION_CONFIG)
+        builddate=$(echo "$line" | awk '{print $28}') # BuildDate (PROVISIONDATE)
 
-        # Extract hostname (first field)
-        h=$(echo "$line" | awk '{print $1}')
+        # BuildDate fallback — for legacy hosts where PROVISIONDATE was absent
+        if [[ "$builddate" == "n/a" || -z "$builddate" ]]; then
+            builddate="${DEPLOY_DATE[$h]:-n/a}"
+        fi
 
-        # Look up this host in the CMDB extract
-        # CMDB CSV format: col2=Support Group, col3=Install Status,
-        #                  col4=Desired Operational State, col5=Fed Enclave
+        # --- CMDB lookup ------------------------------------------------------
         CMDBinfo=$(grep "^${h}," "$CMDBDATAFILE" \
             | sed 's/\r$//' \
             | awk -F, '{print $2","$3","$4","$5}')
-
-        # Default all four fields to n/a if host not in CMDB
         CMDBinfo="${CMDBinfo:-n/a,n/a,n/a,n/a}"
 
         C1=$(echo "$CMDBinfo" | awk -F, '{print $1}'); C1="${C1:-n/a}"
         C2=$(echo "$CMDBinfo" | awk -F, '{print $2}'); C2="${C2:-n/a}"
         C3=$(echo "$CMDBinfo" | awk -F, '{print $3}'); C3="${C3:-n/a}"
         C4=$(echo "$CMDBinfo" | awk -F, '{print $4}'); C4="${C4:-n/a}"
+        # Convert IsFedEnclave True/False → Fed/Non-Fed
+        case "$C4" in
+            True|true|TRUE)    C4="Fed" ;;
+            False|false|FALSE) C4="Non-Fed" ;;
+            *)                 C4="${C4:-n/a}" ;;
+        esac
 
         if [[ "$CMDBinfo" == "n/a,n/a,n/a,n/a" ]]; then
             (( CMDB_MISSING++ ))
@@ -337,16 +387,59 @@ if [[ $CMDB_AVAILABLE -eq 1 ]]; then
             (( CMDB_MATCHED++ ))
         fi
 
-        echo "${newline},${C1},${C2},${C3},${C4}" >> "${DATA_DIR}/${INVENTDATACSV}.new"
+        # --- Assemble 32-column CSV row --------------------------------------
+        # Host,Type,Location,AppCode,Environment,BuildDate,OS,Kernel,Arch,
+        # Memory,CPUSockets,CPUCores,CPUThreads,CPUType,CPUSpeed,HWVendor,
+        # HWModel,Serial,Syslog,Uptime,VMToolsVer,VMToolsRun,LastBackup,IP,
+        # CIDevice,vCenter,BuildType,DBType,
+        # CMDBSupportGroup,CMDBInstallStatus,CMDBDesiredOpState,FedEnclave
+        echo "${h},${ftype},${location},${appcode},${env},${builddate},${f3},${f4},${f5},${f6},${f7},${f8},${f9},${f10},${f11},${f12},${f13},${f14},${f15},${f16},${f17},${f18},${f19},${f20},${f22},${f23},${f24},${f25},${C1},${C2},${C3},${C4}" >> "${DATA_DIR}/${INVENTDATACSV}.new"
     done < "$INVENTORYDATA"
 
     log INFO "CMDB enrichment complete — matched: $CMDB_MATCHED, not in CMDB: $CMDB_MISSING"
 else
     # No CMDB data — write CSV with n/a for all four CMDB columns
-    log WARN "Generating CSV without CMDB enrichment (n/a for all CMDB fields)"
+    # Location/AppCode/Environment/BuildDate still come from .dat fields 21-28
+    log WARN "Generating CSV without CMDB enrichment (n/a for CMDB fields)"
+
+    declare -A DEPLOY_DATE
+    if [[ -f "$DEPLOYMENTDATA" ]]; then
+        while read -r bdate bhost bpv bos; do
+            [[ -n "$bhost" ]] && DEPLOY_DATE["$bhost"]="$bdate"
+        done < "$DEPLOYMENTDATA"
+    fi
+
     while read -r line; do
-        newline=$(echo "$line" | sed 's/ /,/g')
-        echo "${newline},n/a,n/a,n/a,n/a" >> "${DATA_DIR}/${INVENTDATACSV}.new"
+        h=$(echo        "$line" | awk '{print $1}')
+        ftype=$(echo    "$line" | awk '{print $2}')
+        f3=$(echo       "$line" | awk '{print $3}')
+        f4=$(echo       "$line" | awk '{print $4}')
+        f5=$(echo       "$line" | awk '{print $5}')
+        f6=$(echo       "$line" | awk '{print $6}')
+        f7=$(echo       "$line" | awk '{print $7}')
+        f8=$(echo       "$line" | awk '{print $8}')
+        f9=$(echo       "$line" | awk '{print $9}')
+        f10=$(echo      "$line" | awk '{print $10}')
+        f11=$(echo      "$line" | awk '{print $11}')
+        f12=$(echo      "$line" | awk '{print $12}')
+        f13=$(echo      "$line" | awk '{print $13}')
+        f14=$(echo      "$line" | awk '{print $14}')
+        f15=$(echo      "$line" | awk '{print $15}')
+        f16=$(echo      "$line" | awk '{print $16}')
+        f17=$(echo      "$line" | awk '{print $17}')
+        f18=$(echo      "$line" | awk '{print $18}')
+        f19=$(echo      "$line" | awk '{print $19}')
+        f20=$(echo      "$line" | awk '{print $20}')
+        location=$(echo "$line" | awk '{print $21}'); location="${location:-n/a}"
+        f22=$(echo      "$line" | awk '{print $22}')
+        f23=$(echo      "$line" | awk '{print $23}')
+        f24=$(echo      "$line" | awk '{print $24}')
+        f25=$(echo      "$line" | awk '{print $25}')
+        appcode=$(echo  "$line" | awk '{print $26}'); appcode="${appcode:-n/a}"
+        env=$(echo      "$line" | awk '{print $27}'); env="${env:-n/a}"
+        builddate=$(echo "$line" | awk '{print $28}'); builddate="${builddate:-n/a}"
+        [[ "$builddate" == "n/a" ]] && builddate="${DEPLOY_DATE[$h]:-n/a}"
+        echo "${h},${ftype},${location},${appcode},${env},${builddate},${f3},${f4},${f5},${f6},${f7},${f8},${f9},${f10},${f11},${f12},${f13},${f14},${f15},${f16},${f17},${f18},${f19},${f20},${f22},${f23},${f24},${f25},n/a,n/a,n/a,n/a" >> "${DATA_DIR}/${INVENTDATACSV}.new"
     done < "$INVENTORYDATA"
 fi
 
