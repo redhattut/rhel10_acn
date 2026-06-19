@@ -351,6 +351,8 @@ if [[ $CMDB_AVAILABLE -eq 1 ]]; then
         f19=$(echo     "$line" | awk '{print $19}')  # LastBackup
         f20=$(echo     "$line" | awk '{print $20}')  # IP Address
         location=$(echo "$line" | awk '{print $21}') # Location (from PNC_PROVISION_CONFIG)
+        # Expand short location code to full name (GF0 → Greenfield-GF0 etc.)
+        location=$(expand_location "$location")
         f22=$(echo     "$line" | awk '{print $22}')  # CI Device
         f23=$(echo     "$line" | awk '{print $23}')  # vCenter
         f24=$(echo     "$line" | awk '{print $24}')  # BuildType
@@ -431,6 +433,8 @@ else
         f19=$(echo      "$line" | awk '{print $19}')
         f20=$(echo      "$line" | awk '{print $20}')
         location=$(echo "$line" | awk '{print $21}'); location="${location:-n/a}"
+        # Expand short location code to full name (GF0 → Greenfield-GF0 etc.)
+        location=$(expand_location "$location")
         f22=$(echo      "$line" | awk '{print $22}')
         f23=$(echo      "$line" | awk '{print $23}')
         f24=$(echo      "$line" | awk '{print $24}')

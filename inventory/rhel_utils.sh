@@ -192,3 +192,26 @@ require_bin() {
     fi
     return 0
 }
+
+# =============================================================================
+# expand_location <short_code>
+# =============================================================================
+# Maps short location codes from PNC_PROVISION_CONFIG to full datacenter names.
+# Prints the full name to stdout; prints the short code unchanged if not mapped.
+# Add new datacenters here as they come online.
+#
+# Example:
+#   full=$(expand_location "GF0")   # → "Greenfield-GF0"
+#   full=$(expand_location "GF9")   # → "GF9" (unmapped, returned as-is)
+# =============================================================================
+expand_location() {
+    local short="$1"
+    case "$short" in
+        GF0)    echo "Greenfield-GF0" ;;
+        GF1)    echo "Greenfield-GF1" ;;
+        GF2)    echo "Greenfield-GF2" ;;
+        CH)     echo "Chicago" ;;
+        PIT)    echo "Pittsburgh" ;;
+        *)      echo "$short" ;;   # return as-is if not mapped
+    esac
+}

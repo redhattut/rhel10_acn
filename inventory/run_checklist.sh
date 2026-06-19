@@ -132,9 +132,15 @@ else
 fi
 
 # 7. Deployment scan ran
-check_file "Deployment history .dat" "$_DEPDAT" 1
+# DEPLOYMENTDATA is shared — may not exist on fresh install until seeded
+if [[ -f "$_DEPDAT" ]]; then
+    DEPLINES=$(wc -l < "$_DEPDAT")
+    result PASS "Deployment history .dat" "$DEPLINES records — $_DEPDAT"
+else
+    result WARN "Deployment history .dat" "NOT FOUND: $_DEPDAT — seed from legacy per README (expected on fresh install)"
+fi
 if [[ "$RUN_MODE" == "test" ]]; then
-    result PASS "Deployment .dat write protection" "TEST MODE — no new records appended to $DEPDAT"
+    result PASS "Deployment .dat write protection" "TEST MODE — no new records appended"
 fi
 
 echo ""
@@ -175,9 +181,13 @@ fi
 # 12. Location field format — should be full name like Greenfield-GF0
 if [[ -f "$_INVCSV" && -s "$_INVCSV" ]]; then
     LOC_SAMPLE=$(grep -v "^#" "$_INVCSV" | head -1 | awk -F, '{print $3}')
-    [[ "$LOC_SAMPLE" == *"-"* || "$LOC_SAMPLE" == "n/a" ]] \
-        && result PASS "Location field format" "Sample: $LOC_SAMPLE" \
-        || result WARN "Location field format" "Sample: '$LOC_SAMPLE' — expected full name like Greenfield-GF0"
+    if [[ "$LOC_SAMPLE" == *"-"* || "$LOC_SAMPLE" == "n/a" ]]; then
+        result PASS "Location field format" "Sample: $LOC_SAMPLE"
+    elif [[ -n "$LOC_SAMPLE" ]]; then
+        result WARN "Location field format" "Short code: $LOC_SAMPLE — add mapping to LOCATION_MAP in rhel_inv.conf if needed"
+    else
+        result WARN "Location field format" "Location field is empty"
+    fi
 fi
 
 echo ""
@@ -209,16 +219,20 @@ echo "$(ts)  --- SECTION 4: Data integrity ---"
 
 # 17. No mixed data in inventory dat (should not contain ID| PKG| DB| tags)
 if [[ -f "$_INVDATA" && -s "$_INVDATA" ]]; then
-    MIXED=$(grep -c "^ID|\|^PKG|\|^DB|" "$_INVDATA" 2>/dev/null || echo 0)
-    [[ $MIXED -eq 0 ]] \
+    MIXED=0
+    [[ -f "$_INVDATA" ]] && MIXED=$(grep -cE "^(ID|PKG|DB)\|" "$_INVDATA" 2>/dev/null) || MIXED=0
+    MIXED=${MIXED:-0}
+    [[ "$MIXED" -eq 0 ]] \
         && result PASS "Inventory .dat data isolation" "No mixed stream data found" \
         || result FAIL "Inventory .dat data isolation" "$MIXED lines with ID/PKG/DB tags — filter routing bug"
 fi
 
 # 18. No mixed data in inventory CSV
 if [[ -f "$_INVCSV" && -s "$_INVCSV" ]]; then
-    MIXED_CSV=$(grep -c "^ID|\|^PKG|\|^DB|" "$_INVCSV" 2>/dev/null || echo 0)
-    [[ $MIXED_CSV -eq 0 ]] \
+    MIXED_CSV=0
+    [[ -f "$_INVCSV" ]] && MIXED_CSV=$(grep -cE "^(ID|PKG|DB)\|" "$_INVCSV" 2>/dev/null) || MIXED_CSV=0
+    MIXED_CSV=${MIXED_CSV:-0}
+    [[ "$MIXED_CSV" -eq 0 ]] \
         && result PASS "Inventory CSV data isolation" "No mixed stream data found" \
         || result FAIL "Inventory CSV data isolation" "$MIXED_CSV lines with ID/PKG/DB tags"
 fi
@@ -227,8 +241,10 @@ fi
 LOG_FILE="${BASE_DIR}/test/logs/test_rhel_inventory.log"
 [[ "$RUN_MODE" != "test" ]] && LOG_FILE="$MAIN_LOG"
 if [[ -f "$LOG_FILE" ]]; then
-    ERR_COUNT=$(grep -c '\[ERROR\]' "$LOG_FILE" 2>/dev/null || echo 0)
-    WARN_LOG=$(grep -c '\[WARN\]' "$LOG_FILE" 2>/dev/null || echo 0)
+    ERR_COUNT=$(grep -c "\[ERROR\]" "$LOG_FILE" 2>/dev/null || echo 0)
+    ERR_COUNT=${ERR_COUNT:-0}
+    WARN_LOG=$(grep -c "\[WARN\]" "$LOG_FILE" 2>/dev/null || echo 0)
+    WARN_LOG=${WARN_LOG:-0}
     [[ $ERR_COUNT -eq 0 ]] \
         && result PASS "Log errors" "0 ERROR lines in log" \
         || result FAIL "Log errors" "$ERR_COUNT ERROR lines — review $LOG_FILE"
