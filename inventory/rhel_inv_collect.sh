@@ -34,6 +34,14 @@ if [[ ! -f "$CONF" ]]; then
 fi
 . "$CONF"
 
+# --- Source utility library -------------------------------------------------
+UTILS="$(dirname "$0")/rhel_utils.sh"
+if [[ ! -f "$UTILS" ]]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S')  [ERROR]   rhel_utils.sh not found at ${UTILS}" >&2
+    exit 1
+fi
+. "$UTILS"
+
 # --- Logging (mirrors rhel_inv_run.sh log function) --------------------------
 log() {
     local level="$1"; shift
@@ -216,24 +224,24 @@ log SECTION "Phase 4 — Rotate prior data files, promote temps"
 
 # Rotate the previous inventory data (keeps compressed history for discovery)
 log INFO "Rotating RHEL_INVENTORY.dat (keeping $ROTATE_INVENTORY copies)"
-"$PGMDIR/rotate.sh" "$INVENTORYDATA" "$ROTATE_INVENTORY"
+rotate_compressed "$INVENTORYDATA" "$ROTATE_INVENTORY"
 mv "$INVENTORYTEMP" "$INVENTORYDATA"
 log INFO "INVENTORYDATA updated"
 
 log INFO "Rotating RHEL_DBINVENTORY.dat (keeping $ROTATE_DBINVENTORY copies)"
-"$PGMDIR/rotate.sh" "$DBINVENTORYDATA" "$ROTATE_DBINVENTORY"
+rotate_compressed "$DBINVENTORYDATA" "$ROTATE_DBINVENTORY"
 mv "$DBINVENTORYTEMP" "$DBINVENTORYDATA"
 log INFO "DBINVENTORYDATA updated"
 
 # ID inventory: keep 3 compressed copies for the discovery process
 log INFO "Rotating RHEL_IDINVENTORY.dat (keeping $ROTATE_IDINVENTORY copies)"
-"$PGMDIR/rotate.sh" "$IDINVENTORYDATA" "$ROTATE_IDINVENTORY"
+rotate_compressed "$IDINVENTORYDATA" "$ROTATE_IDINVENTORY"
 mv "$IDINVENTORYTEMP" "$IDINVENTORYDATA"
 log INFO "IDINVENTORYDATA updated"
 
 # Package inventory: keep more copies since it's used for grep searches
 log INFO "Rotating RHEL_PACKAGES.csv (keeping $ROTATE_PACKAGES copies)"
-"$PGMDIR/rotate.sh" "$PACKAGEDATA" "$ROTATE_PACKAGES"
+rotate_compressed "$PACKAGEDATA" "$ROTATE_PACKAGES"
 mv "$PACKAGETEMP" "$PACKAGEDATA"
 cp -p "$PACKAGEDATA" "$WEBDIR/"
 log INFO "PACKAGEDATA updated and published to $WEBDIR"
@@ -341,18 +349,12 @@ log SECTION "Phase 8 — Rotate historical CSV copies"
 mkdir -p "${WEBDIR}/historical_data"
 cp "${WEBDIR}/$INVENTDATACSV" \
     "${WEBDIR}/historical_data/${INVENTDATACSV}" 2>/dev/null
-"$PGMDIR/keep_history.sh" \
-    -m 14 \
-    -e csv \
-    "${WEBDIR}/historical_data/RHEL_INVENTORY" \
-    2>/dev/null \
-    && log INFO "Historical CSV rotation complete (keeping 14 copies)" \
-    || log WARN "keep_history.sh not found or failed — manual rotation may be needed"
+rotate_plain "${WEBDIR}/historical_data/RHEL_INVENTORY" "$ROTATE_INVENTORY_CSV" -e ".csv" \
+    && log INFO "Historical CSV rotation complete (keeping $ROTATE_INVENTORY_CSV copies)"
 
 # Keep 3 compressed local copies for discovery scans
-"$PGMDIR/rotate.sh" "${DATA_DIR}/$INVENTDATACSV" "$ROTATE_INVENTORY_CSV" \
-    && log INFO "Local CSV rotation complete (keeping $ROTATE_INVENTORY_CSV copies)" \
-    || log WARN "Local CSV rotation failed"
+rotate_compressed "${DATA_DIR}/$INVENTDATACSV" "$ROTATE_INVENTORY_CSV" \
+    && log INFO "Local CSV rotation complete (keeping $ROTATE_INVENTORY_CSV copies)"
 
 # =============================================================================
 log SECTION "Phase 9 — Inventory Consolidation (Midrange)"

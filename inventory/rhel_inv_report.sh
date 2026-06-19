@@ -29,6 +29,14 @@ if [[ ! -f "$CONF" ]]; then
 fi
 . "$CONF"
 
+# --- Source utility library -------------------------------------------------
+UTILS="$(dirname "$0")/rhel_utils.sh"
+if [[ ! -f "$UTILS" ]]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S')  [ERROR]   rhel_utils.sh not found at ${UTILS}" >&2
+    exit 1
+fi
+. "$UTILS"
+
 export LC_NUMERIC=en_US.ISO8859-1
 export LC_TIME=en_US.ISO8859-1
 

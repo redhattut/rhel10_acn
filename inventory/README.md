@@ -353,18 +353,63 @@ same append-only format.
 Once v2 has run successfully for at least one week and output has been validated:
 
 1. **Stop legacy cron** — comment out the `RHEL_update.sh` and
-   `RHEL_pkginventory_refresh.sh` crontab entries
-2. **Update `rhel_inv.conf`**:
+   `RHEL_pkginventory_refresh.sh` crontab entries on both jumpboxes
+
+2. **Seed the deployment history** — v2 already maintains its own copy of
+   `RHEL_DEPLOYMENTS.dat` under `data/` (seeded before first run per the
+   Initial Setup step below). Confirm it is current before cutover:
+   ```bash
+   wc -l /usr/local/pnc/bin/RHEL_Inventory_v2/data/RHEL_DEPLOYMENTS.dat
+   wc -l /usr/local/pnc/bin/RHEL_Inventory/data/RHEL_DEPLOYMENTS.dat
+   # counts should be equal or v2 slightly ahead (new hosts added by v2 runs)
+   ```
+
+3. **Update `rhel_inv.conf`**:
    - Set `BASE_DIR` to `/usr/local/pnc/bin/RHEL_Inventory`
    - Set `WEBDIR` to `/usr/local/midweb/RHEL`
-   - Remove `_v2` suffixes from all data file names
-   - Update `DEPLOYMENTDATA` to point at the local dat file
-3. **Copy data files** — copy any `_v2.dat` files you want to preserve as
-   the seed for the new location
-4. **Update crontab** — change the v2 cron entry back to 21:30 and remove
-   the legacy entries
-5. **Update web server config** if needed to serve from the new WEBDIR
-6. **Archive legacy scripts** — do not delete immediately; keep for 30 days
+   - Remove all `_v2` suffixes from data file name variables
+   - Remove `_v2` suffix from `DEPLOYDATACSV`
+
+4. **Update crontab on main jumpbox** — change the v2 cron entry back to
+   21:30 and remove the legacy `RHEL_update.sh` entry
+
+5. **Update crontab on secondary jumpbox** — swap `rhel_pkginventory_refresh.sh`
+   for `rhel_pkginventory.sh`, keep same schedule
+
+6. **Update web server config** if needed — point document root at the new
+   `WEBDIR` (`/usr/local/midweb/RHEL`) instead of `RHEL_v2`
+
+7. **Verify first production run** — check `logs/rhel_inventory_latest.log`
+   for any errors and confirm output files are updating in the correct locations
+
+8. **Archive legacy scripts** — do not delete immediately; keep for 30 days
+   ```bash
+   tar czf /usr/local/pnc/bin/RHEL_Inventory_legacy_$(date +%Y%m%d).tar.gz \
+       /usr/local/pnc/bin/RHEL_Inventory
+   ```
+
+### Initial Setup (before first v2 run)
+
+Run these steps once on the main jumpbox before starting the parallel validation period:
+
+```bash
+# Create the v2 directory and copy scripts
+mkdir -p /usr/local/pnc/bin/RHEL_Inventory_v2/data
+mkdir -p /usr/local/pnc/bin/RHEL_Inventory_v2/logs
+
+# Seed deployment history — preserves all records back to 2004
+cp /usr/local/pnc/bin/RHEL_Inventory/data/RHEL_DEPLOYMENTS.dat \
+   /usr/local/pnc/bin/RHEL_Inventory_v2/data/RHEL_DEPLOYMENTS.dat
+
+# Set permissions
+chmod 755 /usr/local/pnc/bin/RHEL_Inventory_v2/*.sh
+chmod 644 /usr/local/pnc/bin/RHEL_Inventory_v2/rhel_inv.conf
+
+# Verify deployment history seeded correctly
+wc -l /usr/local/pnc/bin/RHEL_Inventory_v2/data/RHEL_DEPLOYMENTS.dat
+head -3 /usr/local/pnc/bin/RHEL_Inventory_v2/data/RHEL_DEPLOYMENTS.dat
+tail -3 /usr/local/pnc/bin/RHEL_Inventory_v2/data/RHEL_DEPLOYMENTS.dat
+```
 
 ---
 

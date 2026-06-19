@@ -40,6 +40,14 @@ if [[ ! -f "$CONF" ]]; then
 fi
 . "$CONF"
 
+# --- Source utility library -------------------------------------------------
+UTILS="$(dirname "$0")/rhel_utils.sh"
+if [[ ! -f "$UTILS" ]]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S')  [ERROR]   rhel_utils.sh not found at ${UTILS}" >&2
+    exit 1
+fi
+. "$UTILS"
+
 log() {
     local level="$1"; shift
     printf '%s  [%-7s]  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$level" "$*"
@@ -163,7 +171,7 @@ log SECTION "Phase 3 — Rotate and promote"
 # =============================================================================
 
 log INFO "Rotating $PACKAGEDATA (keeping $ROTATE_PACKAGES copies)"
-"$PGMDIR/rotate.sh" "$PACKAGEDATA" "$ROTATE_PACKAGES"
+rotate_compressed "$PACKAGEDATA" "$ROTATE_PACKAGES"
 
 mv "$PACKAGETEMP" "$PACKAGEDATA"
 log INFO "Package data promoted: $PACKAGEDATA"
