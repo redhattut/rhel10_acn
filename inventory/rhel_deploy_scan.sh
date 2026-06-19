@@ -44,8 +44,11 @@ log() {
 SSH="ssh -q -o ConnectTimeout=5 -o StrictHostKeyChecking=no \
          -o UserKnownHostsFile=/dev/null -o BatchMode=yes"
 
-# Ensure data file exists
-touch "$DEPLOYMENTDATA"
+# Ensure data file exists (skip touch in test mode — file may not exist yet
+# and we never want to create/modify it during a test run)
+if [[ "${TEST_MODE:-0}" -eq 0 ]]; then
+    touch "$DEPLOYMENTDATA"
+fi
 
 # Build a quick lookup of already-known hosts to avoid grep-per-host
 KNOWN_HOSTS=$(awk '{print $2}' "$DEPLOYMENTDATA" 2>/dev/null)
@@ -181,8 +184,14 @@ while IFS= read -r h; do
     fi
 
     # --- Append to deployment file -------------------------------------------
-    echo "$BUILDDATE $h $PV $OSVER" >> "$DEPLOYMENTDATA"
-    log INFO "NEW HOST: $BUILDDATE $h $PV $OSVER"
+    # TEST_MODE: log the discovery but do not write to the deployment file.
+    # The file is read-only in test mode — history is never modified by a test run.
+    if [[ "${TEST_MODE:-0}" -eq 1 ]]; then
+        log INFO "NEW HOST (test mode — not appended): $BUILDDATE $h $PV $OSVER"
+    else
+        echo "$BUILDDATE $h $PV $OSVER" >> "$DEPLOYMENTDATA"
+        log INFO "NEW HOST: $BUILDDATE $h $PV $OSVER"
+    fi
     (( NEW_COUNT++ ))
 
 done <<< "$HOSTLIST"
