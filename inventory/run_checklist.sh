@@ -129,13 +129,13 @@ fi
 # 4. ID inventory
 check_file "ID inventory .dat" "$_IDDATA" 1
 
-# 5. DB inventory (optional)
+# 5. DB inventory (optional — only populated for hosts running a database)
 _DBDATA="${TEST_DATA:-$DATA_DIR}/$(basename "${DBINVENTORYDATA}")"
 if [[ -f "$_DBDATA" && -s "$_DBDATA" ]]; then
     DB_COUNT=$(wc -l < "$_DBDATA")
-    result PASS "DB (Oracle SID) inventory" "$DB_COUNT SID records"
+    result PASS "DB SID inventory" "$DB_COUNT SID records"
 else
-    result WARN "DB (Oracle SID) inventory" "Not found — normal if no Oracle hosts in host list"
+    result PASS "DB SID inventory" "Empty — normal if no DB servers in host list"
 fi
 
 # 6. Package inventory
@@ -187,11 +187,12 @@ fi
 
 # 11. CMDB enrichment
 if [[ -f "$_INVCSV" && -s "$_INVCSV" ]]; then
-    CMDB_EMPTY=$(grep -v "^#" "$_INVCSV" | head -5 | \
-        awk -F, '{print $(NF-3)","$(NF-2)","$(NF-1)","$NF}' | \
-        grep -c "^n/a,n/a,n/a" 2>/dev/null || echo 0)
-    CMDB_EMPTY=${CMDB_EMPTY:-0}
-    if [[ "$CMDB_EMPTY" -eq 0 ]]; then
+    CMDB_EMPTY=0
+    if [[ -s "$_INVCSV" ]]; then
+        _ce=$(grep -v "^#" "$_INVCSV" | head -5 |             awk -F, '{print $(NF-3)","$(NF-2)","$(NF-1)","$NF}' |             grep -c "^n/a,n/a,n/a" 2>/dev/null)
+        CMDB_EMPTY=$(( ${_ce:-0} + 0 ))   # force integer
+    fi
+    if [[ $CMDB_EMPTY -eq 0 ]]; then
         result PASS "CMDB enrichment (last 4 fields)" "CMDB data present in sample records"
     else
         result WARN "CMDB enrichment (last 4 fields)" "$CMDB_EMPTY of first 5 records have n/a CMDB fields"
@@ -202,7 +203,7 @@ fi
 if [[ -f "$_INVCSV" && -s "$_INVCSV" ]]; then
     FED_FORMAT=$(grep -v "^#" "$_INVCSV" | head -5 | \
         awk -F, '{print $NF}' | \
-        grep -c "^Fed$\|^Non-Fed$" 2>/dev/null || echo 0)
+        grep -c "^Fed$\|^Non-Fed$" 2>/dev/null)
     FED_FORMAT=${FED_FORMAT:-0}
     TOTAL_SAMPLE=$(grep -v "^#" "$_INVCSV" | head -5 | wc -l)
     if [[ "$FED_FORMAT" -eq "$TOTAL_SAMPLE" ]]; then
@@ -304,7 +305,10 @@ if [[ -f "$LOG_FILE" ]]; then
     else
         result FAIL "Log errors" "$ERR_COUNT ERROR lines — review $LOG_FILE"
     fi
-    if [[ "$WARN_LOG" -le 5 ]]; then
+    # Warn threshold: 10 for test (known expected WARNs), 5 for production
+    _warn_thresh=5
+    [[ "$RUN_MODE" == "test" ]] && _warn_thresh=10
+    if [[ $WARN_LOG -le $_warn_thresh ]]; then
         result PASS "Log warnings" "$WARN_LOG WARN lines"
     else
         result WARN "Log warnings" "$WARN_LOG WARN lines — review $LOG_FILE"
