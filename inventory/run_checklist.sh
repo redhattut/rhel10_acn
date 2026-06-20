@@ -143,7 +143,7 @@ if [[ -f "$_PKGCSV" && -s "$_PKGCSV" ]]; then
     PKG_COUNT=$(wc -l < "$_PKGCSV")
     result PASS "Package inventory CSV" "$PKG_COUNT lines — $_PKGCSV"
 else
-    result WARN "Package inventory CSV" "Not found or empty — runs separately from secondary jumpbox"
+    result WARN "Package inventory CSV" "Not found or empty — check pssh scan output or set RUN_PACKAGES_ON_MAIN=1 in rhel_inv.conf"
 fi
 
 # 7. Deployment history

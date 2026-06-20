@@ -94,6 +94,23 @@ log INFO "Error log dir: $ERRDIR"
 log SECTION "Phase 1 — Deployment scan (new host detection)"
 # =============================================================================
 
+# Auto-seed RHEL_DEPLOYMENTS.dat from legacy location if not present
+# This happens once on fresh install — after that v2 maintains its own copy.
+# In test mode we also auto-seed so deployment history is available for
+# BuildDate fallback lookups (we still never append to it in test mode).
+LEGACY_DEPLOY="/usr/local/pnc/bin/RHEL_Inventory/data/RHEL_DEPLOYMENTS.dat"
+if [[ ! -f "$DEPLOYMENTDATA" ]]; then
+    if [[ -f "$LEGACY_DEPLOY" ]]; then
+        mkdir -p "$(dirname "$DEPLOYMENTDATA")"
+        cp "$LEGACY_DEPLOY" "$DEPLOYMENTDATA"
+        DEPCOUNT=$(wc -l < "$DEPLOYMENTDATA")
+        log INFO "Auto-seeded RHEL_DEPLOYMENTS.dat from legacy ($DEPCOUNT records): $DEPLOYMENTDATA"
+    else
+        log WARN "DEPLOYMENTDATA not found and legacy source not available: $LEGACY_DEPLOY"
+        log WARN "BuildDate fallback for legacy hosts will be n/a until manually seeded"
+    fi
+fi
+
 if [[ -x "${PGMDIR}/rhel_deploy_scan.sh" ]]; then
     log INFO "Starting deployment scan"
     "${PGMDIR}/rhel_deploy_scan.sh"
