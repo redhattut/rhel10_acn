@@ -252,31 +252,44 @@ else
 fi
 log INFO "IDINVENTORYDATA updated"
 
-# Package inventory: keep more copies since it's used for grep searches
-log INFO "Rotating RHEL_PACKAGES.csv (keeping $ROTATE_PACKAGES copies)"
-if [[ "${TEST_MODE:-0}" -eq 1 ]]; then
-    [[ -s "$PACKAGETEMP" ]] && mv "$PACKAGETEMP" "$PACKAGEDATA" || log INFO "PACKAGETEMP empty — skipping promote (package scan runs separately from secondary jumpbox)"
+# Package inventory
+if [[ "${RUN_PACKAGES_ON_MAIN:-1}" -eq 1 ]]; then
+    log INFO "Rotating RHEL_PACKAGES.csv (keeping $ROTATE_PACKAGES copies)"
+    if [[ "${TEST_MODE:-0}" -eq 1 ]]; then
+        if [[ -s "$PACKAGETEMP" ]]; then
+            mv "$PACKAGETEMP" "$PACKAGEDATA"
+            cp -p "$PACKAGEDATA" "$WEBDIR/"
+            PKG_COUNT=$(wc -l < "$PACKAGEDATA")
+            log INFO "PACKAGEDATA updated — $PKG_COUNT package records published to $WEBDIR"
+        else
+            log WARN "PACKAGETEMP empty — package data not collected (check pssh scan)"
+        fi
+    else
+        rotate_compressed "$PACKAGEDATA" "$ROTATE_PACKAGES"
+        if [[ -s "$PACKAGETEMP" ]]; then
+            mv "$PACKAGETEMP" "$PACKAGEDATA"
+            cp -p "$PACKAGEDATA" "$WEBDIR/"
+            PKG_COUNT=$(wc -l < "$PACKAGEDATA")
+            log INFO "PACKAGEDATA updated — $PKG_COUNT package records published to $WEBDIR"
+        else
+            log WARN "PACKAGETEMP empty — package data not collected (check pssh scan)"
+        fi
+    fi
 else
-    rotate_compressed "$PACKAGEDATA" "$ROTATE_PACKAGES"
-    [[ -s "$PACKAGETEMP" ]] && mv "$PACKAGETEMP" "$PACKAGEDATA" || log INFO "PACKAGETEMP empty — skipping promote"
+    log INFO "RUN_PACKAGES_ON_MAIN=0 — package inventory handled by secondary jumpbox"
+    rm -f "$PACKAGETEMP"
 fi
-[[ -f "$PACKAGEDATA" ]] && cp -p "$PACKAGEDATA" "$WEBDIR/" && log INFO "PACKAGEDATA published to $WEBDIR"
 
 # =============================================================================
 log SECTION "Phase 5 — Collect UIDs and GIDs"
 # =============================================================================
 
-if [[ -x "${PGMDIR}/RHEL_ID_Collect_uids.sh" ]]; then
+if [[ -x "${PGMDIR}/rhel_id_collect.sh" ]]; then
     log INFO "Collecting UID/GID data"
-    "${PGMDIR}/RHEL_ID_Collect_uids.sh"
-    # Publish UID/GID data to web
-    cp -p data/RHEL_UIDINVENTORY.dat "$WEBDIR/RHEL_UIDINVENTORY.dat"
-    cp -p data/RHEL_GIDINVENTORY.dat "$WEBDIR/RHEL_GIDINVENTORY.dat"
-    # Publish ID inventory CSV for discovery
-    cp -p "$IDINVENTORYDATA" "$WEBDIR/RHEL_IDINVENTORY.csv"
-    log INFO "UID/GID data collected and published"
+    "${PGMDIR}/rhel_id_collect.sh"
+    log INFO "UID/GID collection complete"
 else
-    log WARN "RHEL_ID_Collect_uids.sh not found — skipping UID/GID collection"
+    log WARN "rhel_id_collect.sh not found — skipping UID/GID collection"
 fi
 
 # =============================================================================
@@ -286,13 +299,12 @@ log SECTION "Phase 6 — Convert inventory to text and HTML"
 cp -p "$INVENTORYDATA" "$WEBDIR/$INVENTDATATEXT"
 log INFO "Text copy published: $WEBDIR/$INVENTDATATEXT"
 
-if [[ -x "${PGMDIR}/convert_text_to_html_table.sh" ]]; then
+if [[ -x "${PGMDIR}/rhel_convert_html.sh" ]]; then
     cat "$INVENTORYDATA" \
-        | "${PGMDIR}/convert_text_to_html_table.sh" \
-        > "$WEBDIR/$INVENTDATAHTML"
+        | "${PGMDIR}/rhel_convert_html.sh" "$WEBDIR/$INVENTDATAHTML"
     log INFO "HTML table published: $WEBDIR/$INVENTDATAHTML"
 else
-    log WARN "convert_text_to_html_table.sh not found — skipping HTML conversion"
+    log WARN "rhel_convert_html.sh not found — skipping HTML conversion"
 fi
 
 # =============================================================================
