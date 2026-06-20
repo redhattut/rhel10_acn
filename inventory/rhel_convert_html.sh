@@ -37,10 +37,10 @@ if [[ -z "$OUT" ]]; then
 fi
 
 DATESTAMP=$(date)
-TOTAL=$(grep -v "^#" | wc -l)
 
-# Re-read stdin since we consumed it for TOTAL count above
-# Caller must pipe the file; we use process substitution in the awk call
+# Write stdin to temp file first — allows multiple reads
+TMPDAT=$(mktemp /tmp/rhel_inv_html.XXXXXX)
+cat > "$TMPDAT"
 
 cat > "$OUT" << 'HTMLEOF'
 <!DOCTYPE html>
@@ -100,9 +100,6 @@ HEADEREOF
 # write to a temp file first, then process it.
 # NOTE: this script is invoked as: cat $INVENTORYDATA | ./rhel_convert_html.sh $OUT
 # so stdin IS the inventory data. Read it all at once into a temp file.
-
-TMPDAT=$(mktemp /tmp/rhel_inv_html.XXXXXX)
-cat > "$TMPDAT"   # consume stdin into temp file
 
 TOTAL_HOSTS=$(grep -v "^#" "$TMPDAT" | wc -l)
 VIRT_COUNT=$(grep -v "^#" "$TMPDAT"  | awk '$2=="Virt"' | wc -l)

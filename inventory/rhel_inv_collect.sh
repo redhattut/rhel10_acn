@@ -152,6 +152,21 @@ log INFO "pssh timeout    : ${PSSH_TIMEOUT}s per host"
 log INFO "pssh error dir  : $ERRDIR"
 log INFO "Writing web data to: $WEBDIR"
 
+# Ensure style.css is present in WEBDIR — copy from live webdir if needed
+_LIVE_CSS="/usr/local/midweb/RHEL/style.css"
+_LIVE_CSS_V2="/usr/local/midweb/RHEL_v2/style.css"
+if [[ ! -f "$WEBDIR/style.css" ]]; then
+    if [[ -f "$_LIVE_CSS_V2" ]]; then
+        cp "$_LIVE_CSS_V2" "$WEBDIR/style.css"
+        log INFO "Copied style.css from $_LIVE_CSS_V2"
+    elif [[ -f "$_LIVE_CSS" ]]; then
+        cp "$_LIVE_CSS" "$WEBDIR/style.css"
+        log INFO "Copied style.css from $_LIVE_CSS"
+    else
+        log WARN "style.css not found — HTML pages will be unstyled. Copy style.css to $WEBDIR/"
+    fi
+fi
+
 # The remote script outputs tagged lines:
 #   INV|...   system inventory record
 #   PKG|...   one line per installed RPM
