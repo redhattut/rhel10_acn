@@ -1,17 +1,21 @@
 #!/bin/bash
 # =============================================================================
-# rhel_convert_html.sh — Convert RHEL_INVENTORY.dat to styled HTML table
+# rhel_convert_html.sh — Convert RHEL_INVENTORY CSV to styled HTML table
 # =============================================================================
-# Usage: cat "$INVENTORYDATA" | ./rhel_convert_html.sh "$WEBDIR/$INVENTDATAHTML"
+# Reads the enriched CSV (32 comma-separated fields) from stdin.
+# Writes a styled HTML table to the output file passed as $1.
 #
-# Column headers match the CSV first-line header exactly (from rhel_inv_collect.sh):
-#   Host, Type, Location, App Code, Environment, Build Date, OS, Kernel,
-#   Architecture, Memory(MB), CPU Sockets, CPU Cores, CPU Threads, CPU Type,
-#   CPU Speed, Server Vendor, Server Model, Serial Num, Syslog-ng,
-#   Uptime(days), VMToolsVer, VMToolsRun, LastBackupDate, IP Address,
-#   CI Device, vCenter server, BuildType, DBType,
-#   CMDB Support Group, CMDB Install Status, CMDB Desired Operational State,
-#   Fed Enclave
+# CSV column order (matches CSV_HEADER in rhel_inv_collect.sh):
+#  1=Host  2=Type  3=Location  4=App Code  5=Environment  6=Build Date
+#  7=OS  8=Kernel  9=Architecture  10=Memory(MB)  11=CPU Sockets
+#  12=CPU Cores  13=CPU Threads  14=CPU Type  15=CPU Speed
+#  16=Server Vendor  17=Server Model  18=Serial Num  19=Syslog-ng
+#  20=Uptime(days)  21=VMToolsVer  22=VMToolsRun  23=LastBackupDate
+#  24=IP Address  25=CI Device  26=vCenter server  27=BuildType  28=DBType
+#  29=CMDB Support Group  30=CMDB Install Status
+#  31=CMDB Desired Operational State  32=Fed Enclave
+#
+# Usage: cat "$INVENTDATACSV" | ./rhel_convert_html.sh "$WEBDIR/$INVENTDATAHTML"
 # =============================================================================
 
 OUT="$1"
@@ -23,14 +27,14 @@ fi
 DATESTAMP=$(date)
 
 # Write stdin to temp file — allows multiple reads
-TMPDAT=$(mktemp /tmp/rhel_inv_html.XXXXXX)
-cat > "$TMPDAT"
+TMPCSV=$(mktemp /tmp/rhel_inv_html.XXXXXX)
+cat > "$TMPCSV"
 
-TOTAL_HOSTS=$(grep -v "^#" "$TMPDAT" | wc -l)
-VIRT_COUNT=$(awk '!/^#/ && $2=="Virt"' "$TMPDAT" | wc -l)
-PHYS_COUNT=$(awk '!/^#/ && $2=="Phys"' "$TMPDAT" | wc -l)
-# SSHFAIL: hosts where type field is SSHFAIL or OS field contains SSHFAIL
-FAIL_COUNT=$(awk '!/^#/ && ($2=="SSHFAIL" || $3=="SSHFAIL")' "$TMPDAT" | wc -l)
+# Stats from CSV (skip comment/header line starting with #)
+TOTAL_HOSTS=$(grep -v "^#" "$TMPCSV" | wc -l)
+VIRT_COUNT=$(awk -F, '!/^#/ && $2=="Virt"' "$TMPCSV" | wc -l)
+PHYS_COUNT=$(awk -F, '!/^#/ && $2=="Phys"' "$TMPCSV" | wc -l)
+FAIL_COUNT=$(awk -F, '!/^#/ && ($2=="SSHFAIL" || $7=="SSHFAIL")' "$TMPCSV" | wc -l)
 FAIL_COUNT=$(( FAIL_COUNT + 0 ))
 
 cat > "$OUT" << HTMLEOF
@@ -42,7 +46,6 @@ cat > "$OUT" << HTMLEOF
   <title>Red Hat Linux Inventory — Host Table</title>
   <link rel="stylesheet" href="style.css">
   <style>
-    .page-wrap{width:100%}
     .stats-bar{display:flex;gap:1.5rem;margin-bottom:1.25rem;flex-wrap:wrap}
     .stats-bar .stat{font-size:.875rem;color:var(--text-secondary)}
     .stats-bar .stat strong{color:var(--text-primary);font-weight:600}
@@ -74,8 +77,7 @@ cat > "$OUT" << HTMLEOF
   </style>
 </head>
 <body>
-<div class="page-wrap">
-  <header>
+  <header style="border-radius:0;margin-bottom:0">
     <h1>Red Hat Linux Inventory and Deployment Reports</h1>
     <p>Last updated: ${DATESTAMP} &nbsp;&middot;&nbsp; <a href="index.html" style="color:#93c5fd;text-decoration:none">&#8592; Dashboard</a></p>
   </header>
@@ -153,8 +155,9 @@ cat > "$OUT" << HTMLEOF
           <tbody id="tb">
 HTMLEOF
 
-# Generate table rows from dat file
-grep -v "^#" "$TMPDAT" | awk '
+# Generate rows from CSV — comma-delimited, 32 fields
+# Skip header line (starts with #)
+grep -v "^#" "$TMPCSV" | awk -F, '
 function pill_type(v) {
     if (v=="Virt") return "<span class=\"pill pv\">Virt</span>"
     if (v=="Phys") return "<span class=\"pill pp\">Phys</span>"
@@ -179,52 +182,44 @@ function sl(v) {
     return "sl_unk"
 }
 {
-    # .dat fields 1-28 space-delimited
-    # CSV enrichment adds fields 29-32 comma-separated on the same line
-    # Read $1-$28 normally; fields 29+ extracted via split on comma from remainder
-    host=$1;typ=$2;os=$3;kernel=$4;arch=$5;mem=$6
-    skt=$7;cores=$8;thr=$9;cputype=$10;cpuspd=$11
-    vendor=$12;model=$13;serial=$14;syslog=$15;uptime=$16
-    vmtools=$17;vmrun=$18;lastbkp=$19;ip=$20;loc=$21
-    cidev=$22;vcenter=$23;buildtype=$24;dbtype=$25
-    appcode=$26;env=$27;builddate=$28
-    # CMDB fields if present
-    cmdb_sg=$29; inst=$30; opstate=$31; fed=$32
-    if (cmdb_sg=="") cmdb_sg="n/a"
-    if (inst=="")    inst="n/a"
-    if (opstate=="") opstate="n/a"
-    if (fed=="")     fed="n/a"
+    # CSV fields 1-32 (comma-separated, -F, already handles this)
+    host=$1; typ=$2;  loc=$3;  app=$4;  env=$5;  bdate=$6
+    os=$7;   ker=$8;  arch=$9; mem=$10; skt=$11; cores=$12
+    thr=$13; cput=$14; cpus=$15; vend=$16; model=$17; serial=$18
+    syslog=$19; uptime=$20; vmtver=$21; vmtrun=$22; lastbkp=$23
+    ip=$24; cidev=$25; vcenter=$26; btype=$27; dbtype=$28
+    cmdbsg=$29; inst=$30; opstate=$31; fed=$32
 
     printf "<tr>"
     printf "<td>%s</td>", host
     printf "<td>%s</td>", pill_type(typ)
     printf "<td>%s</td>", loc
-    printf "<td>%s</td>", appcode
+    printf "<td>%s</td>", app
     printf "<td>%s</td>", pill_env(env)
-    printf "<td>%s</td>", builddate
+    printf "<td>%s</td>", bdate
     printf "<td>%s</td>", os
-    printf "<td class=\"muted\">%s</td>", kernel
+    printf "<td class=\"muted\">%s</td>", ker
     printf "<td>%s</td>", arch
     printf "<td>%s</td>", mem
     printf "<td>%s</td>", skt
     printf "<td>%s</td>", cores
     printf "<td>%s</td>", thr
-    printf "<td class=\"muted\">%s</td>", cputype
-    printf "<td>%s</td>", cpuspd
-    printf "<td>%s</td>", vendor
+    printf "<td class=\"muted\">%s</td>", cput
+    printf "<td>%s</td>", cpus
+    printf "<td>%s</td>", vend
     printf "<td class=\"muted\">%s</td>", model
     printf "<td class=\"muted\">%s</td>", serial
     printf "<td class=\"%s\">%s</td>", sl(syslog), syslog
     printf "<td>%s</td>", uptime
-    printf "<td>%s</td>", vmtools
-    printf "<td>%s</td>", vmrun
+    printf "<td>%s</td>", vmtver
+    printf "<td>%s</td>", vmtrun
     printf "<td>%s</td>", lastbkp
     printf "<td>%s</td>", ip
     printf "<td>%s</td>", cidev
     printf "<td class=\"muted\">%s</td>", vcenter
-    printf "<td>%s</td>", buildtype
+    printf "<td>%s</td>", btype
     printf "<td>%s</td>", dbtype
-    printf "<td>%s</td>", cmdb_sg
+    printf "<td>%s</td>", cmdbsg
     printf "<td>%s</td>", inst
     printf "<td>%s</td>", opstate
     printf "<td>%s</td>", pill_fed(fed)
@@ -239,7 +234,6 @@ cat >> "$OUT" << 'FOOTEREOF'
 
     <footer><p>&copy; 2026 PNC. OS Engineering.</p></footer>
   </div>
-</div>
 
 <script>
   const rows=Array.from(document.querySelectorAll('#tb tr'));
@@ -283,5 +277,4 @@ cat >> "$OUT" << 'FOOTEREOF'
 </html>
 FOOTEREOF
 
-rm -f "$TMPDAT"
-echo "HTML table written to: $OUT"
+rm -f "$TMPCSV"

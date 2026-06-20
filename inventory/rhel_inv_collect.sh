@@ -354,7 +354,9 @@ cp -p "$INVENTORYDATA" "$WEBDIR/$INVENTDATATEXT"
 log INFO "Text copy published: $WEBDIR/$INVENTDATATEXT"
 
 if [[ -x "${PGMDIR}/rhel_convert_html.sh" ]]; then
-    cat "$INVENTORYDATA" \
+    # Feed the CSV (not .dat) so CMDB fields 29-32 are populated
+    # CSV is already written to WEBDIR at this point
+    cat "${DATA_DIR}/${INVENTDATACSV}" \
         | "${PGMDIR}/rhel_convert_html.sh" "$WEBDIR/$INVENTDATAHTML"
     log INFO "HTML table published: $WEBDIR/$INVENTDATAHTML"
 else

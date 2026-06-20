@@ -137,8 +137,8 @@ html_header() {
     local subtitle="$1"
     local ts; ts=$(date)
     cat << EOF
-<div class="page-wrap">
-  <header>
+
+  <header style="border-radius:0;margin-bottom:0">
     <h1>Red Hat Linux Inventory and Deployment Reports</h1>
     <p>${subtitle} &nbsp;&middot;&nbsp; Last updated: ${ts} &nbsp;&middot;&nbsp; <a href="index.html" style="color:#93c5fd;text-decoration:none">&#8592; Dashboard</a></p>
   </header>
@@ -150,7 +150,6 @@ html_foot() {
     cat << EOF
     <footer><p>&copy; ${YEAR} PNC. OS Engineering.</p></footer>
   </div>
-</div>
 </body>
 </html>
 EOF
@@ -166,8 +165,8 @@ RPT_Main() {
 
     local ts; ts=$(date)
     cat << EOF
-<div class="page-wrap">
-  <header>
+
+  <header style="border-radius:0;margin-bottom:0">
     <h1>Red Hat Linux Inventory and Deployment Reports</h1>
     <p>Last updated: ${ts}</p>
   </header>
@@ -272,7 +271,6 @@ EOF
 
     <footer><p>&copy; ${YEAR} PNC. OS Engineering.</p></footer>
   </div>
-</div>
 </body>
 </html>
 EOF
@@ -357,11 +355,8 @@ RPT_by_Location() {
     echo '    </div>'
     html_foot
 }
-
 # =============================================================================
 # RPT_by_Mnemonic — Application.html
-# Fix 7: "RHEL 9.7×2" → proper table columns (OS | Count) per app row
-# Fix header width (via html_header)
 # =============================================================================
 RPT_by_Mnemonic() {
     local GRAND
@@ -373,21 +368,19 @@ RPT_by_Mnemonic() {
     cat << 'APPSTART'
     <div class="card">
       <h2>Inventory by application code</h2>
-      <div style="margin-bottom:1rem">
+      <div style="margin-bottom:1rem;display:flex;align-items:center;gap:12px">
+        <input type="text" id="appSearch" placeholder="Filter by app code..."
+               oninput="filterApp()"
+               style="padding:6px 10px;font-size:.875rem;border:1px solid var(--border-color);border-radius:.5rem;background:var(--card-bg);color:var(--text-primary);font-family:inherit;outline:none;width:220px">
         <span id="appCount" style="font-size:.8rem;color:var(--text-secondary)"></span>
       </div>
       <table style="width:100%;border-collapse:collapse;font-size:.875rem" id="appTable">
         <thead><tr style="border-bottom:1px solid var(--border-color)">
-          <th style="text-align:left;padding:8px 12px;font-size:.75rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase;cursor:pointer" onclick="sortTable(0)">App Code &#8597;</th>
-          <th style="text-align:right;padding:8px 12px;font-size:.75rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase;cursor:pointer" onclick="sortTable(1)">Total &#8597;</th>
+          <th style="text-align:left;padding:8px 12px;font-size:.75rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase;cursor:pointer" onclick="sortApp(0)">App Code &#8597;</th>
+          <th style="text-align:right;padding:8px 12px;font-size:.75rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase;cursor:pointer" onclick="sortApp(1)">Total &#8597;</th>
           <th style="text-align:right;padding:8px 12px;font-size:.75rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase">Virt</th>
           <th style="text-align:right;padding:8px 12px;font-size:.75rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase">Phys</th>
-          <th style="text-align:left;padding:8px 12px;font-size:.75rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase">Top OS Version</th>
-          <th style="text-align:right;padding:8px 12px;font-size:.75rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase">Count</th>
-          <th style="text-align:left;padding:8px 12px;font-size:.75rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase">2nd OS Version</th>
-          <th style="text-align:right;padding:8px 12px;font-size:.75rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase">Count</th>
-          <th style="text-align:left;padding:8px 12px;font-size:.75rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase">3rd OS Version</th>
-          <th style="text-align:right;padding:8px 12px;font-size:.75rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase">Count</th>
+          <th style="text-align:left;padding:8px 12px;font-size:.75rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase">OS Versions</th>
         </tr></thead>
         <tbody id="appBody">
 APPSTART
@@ -401,27 +394,17 @@ APPSTART
         PHYS=$(grep "^$APP " "$APPDATAPLAT" | awk '$2=="Phys"' | wc -l)
         APPLO=$(echo "$APP" | tr '[:upper:]' '[:lower:]')
 
-        # Top 3 OS versions as separate columns
-        mapfile -t TOP3 < <(grep "^$APP " "$APPDATAREL" | awk '{print $2}' \
-            | sort | uniq -c | sort -rn | head -3 \
-            | awk '{print $2 ":" $1}')
-
-        OS1=""; CNT1=""; OS2=""; CNT2=""; OS3=""; CNT3=""
-        [[ -n "${TOP3[0]}" ]] && OS1="${TOP3[0]%%:*}" && CNT1="${TOP3[0]##*:}"
-        [[ -n "${TOP3[1]}" ]] && OS2="${TOP3[1]%%:*}" && CNT2="${TOP3[1]##*:}"
-        [[ -n "${TOP3[2]}" ]] && OS3="${TOP3[2]%%:*}" && CNT3="${TOP3[2]##*:}"
+        # Format: "RHEL 9.7 [2], RHEL 8.10 [1]" — readable inline list
+        OS_LIST=$(grep "^$APP " "$APPDATAREL" | awk '{print $2}' \
+            | sort | uniq -c | sort -rn | head -5 \
+            | awk 'BEGIN{sep=""} {printf "%sRHEL %s [%s]", sep, $2, $1; sep=", "}')
 
         echo "          <tr style=\"border-bottom:1px solid #f1f5f9\" data-app=\"$APPLO\" data-total=\"$STOTAL\">"
         echo "            <td style=\"padding:8px 12px;font-weight:500\">$APP</td>"
         echo "            <td style=\"padding:8px 12px;text-align:right;font-weight:600\">$STOTAL</td>"
         echo "            <td style=\"padding:8px 12px;text-align:right;color:var(--text-secondary)\">$VIRT</td>"
         echo "            <td style=\"padding:8px 12px;text-align:right;color:var(--text-secondary)\">$PHYS</td>"
-        echo "            <td style=\"padding:8px 12px\">${OS1:+RHEL $OS1}</td>"
-        echo "            <td style=\"padding:8px 12px;text-align:right;color:var(--text-secondary)\">$CNT1</td>"
-        echo "            <td style=\"padding:8px 12px\">${OS2:+RHEL $OS2}</td>"
-        echo "            <td style=\"padding:8px 12px;text-align:right;color:var(--text-secondary)\">$CNT2</td>"
-        echo "            <td style=\"padding:8px 12px\">${OS3:+RHEL $OS3}</td>"
-        echo "            <td style=\"padding:8px 12px;text-align:right;color:var(--text-secondary)\">$CNT3</td>"
+        echo "            <td style=\"padding:8px 12px;font-size:.8rem;color:var(--text-secondary)\">$OS_LIST</td>"
         echo "          </tr>"
     done
 
@@ -429,7 +412,7 @@ APPSTART
           <tr style="border-top:2px solid var(--border-color);background:var(--primary-bg)">
             <td style="padding:8px 12px;font-weight:600">Grand Total</td>
             <td style="padding:8px 12px;text-align:right;font-weight:600">$GRAND</td>
-            <td colspan="8"></td>
+            <td colspan="3"></td>
           </tr>
         </tbody></table>
     </div>
@@ -437,23 +420,27 @@ APPSTART
       const appRows=Array.from(document.querySelectorAll('#appBody tr[data-app]'));
       document.getElementById('appCount').textContent=appRows.length+' application codes';
       let sortDir=1;
-      function sortTable(col){
+      function sortApp(col){
         sortDir*=-1;
         appRows.sort((a,b)=>{
           const va=a.querySelectorAll('td')[col].textContent.trim();
           const vb=b.querySelectorAll('td')[col].textContent.trim();
-          return col===0 ? va.localeCompare(vb)*sortDir
-                         : (parseInt(vb)||0-(parseInt(va)||0))*sortDir;
+          return col===0?va.localeCompare(vb)*sortDir:(parseInt(vb)-parseInt(va))*sortDir;
         });
-        const tbody=document.getElementById('appBody');
-        appRows.forEach(r=>tbody.insertBefore(r,tbody.lastElementChild));
+        const tb=document.getElementById('appBody');
+        appRows.forEach(r=>tb.insertBefore(r,tb.lastElementChild));
+      }
+      function filterApp(){
+        const q=document.getElementById('appSearch').value.toLowerCase();
+        let v=0;
+        appRows.forEach(r=>{const s=!q||r.dataset.app.includes(q);r.style.display=s?'':'none';if(s)v++;});
+        document.getElementById('appCount').textContent=v+' of '+appRows.length+' application codes';
       }
     </script>
 EOF
     html_foot
 }
 
-# =============================================================================
 # _render_deploy_card — shared helper for monthly and annual cards
 # Fix 8: one card per month/year, deployment count on right, proper layout
 # =============================================================================
