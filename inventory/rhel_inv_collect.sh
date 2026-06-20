@@ -162,6 +162,10 @@ log INFO "Writing web data to: $WEBDIR"
 # the four temp files.
 
 log INFO "Launching pssh scan..."
+log INFO "INV temp  : $INVENTORYTEMP"
+log INFO "ID temp   : $IDINVENTORYTEMP"
+log INFO "DB temp   : $DBINVENTORYTEMP"
+log INFO "PKG temp  : $PACKAGETEMP"
 
 cat "${PGMDIR}/rhel_remote_scan.sh" \
     | "$PSSH_BIN" $PSSH_OPTS \
@@ -189,7 +193,7 @@ fi
 log INFO "Scan complete"
 
 # Validate we actually got output
-for tmpfile in "$INVENTORYTEMP" "$IDINVENTORYTEMP" "$DBINVENTORYTEMP" "$PACKAGETEMP"; do
+for tmpfile in "$INVENTORYTEMP" "$IDINVENTORYTEMP"; do
     if [[ ! -s "$tmpfile" ]]; then
         log WARN "Output file is empty or missing: $tmpfile"
     else
@@ -197,6 +201,24 @@ for tmpfile in "$INVENTORYTEMP" "$IDINVENTORYTEMP" "$DBINVENTORYTEMP" "$PACKAGET
         log INFO "$(basename "$tmpfile"): $COUNT lines collected"
     fi
 done
+# DB is optional — empty is normal when no database hosts are in the scan list
+if [[ -s "$DBINVENTORYTEMP" ]]; then
+    COUNT=$(wc -l < "$DBINVENTORYTEMP")
+    log INFO "$(basename "$DBINVENTORYTEMP"): $COUNT lines collected"
+else
+    log INFO "$(basename "$DBINVENTORYTEMP"): empty — normal if no DB hosts in host list"
+fi
+# Package temp — only warn if RUN_PACKAGES_ON_MAIN=1 and it is empty
+if [[ "${RUN_PACKAGES_ON_MAIN:-1}" -eq 1 ]]; then
+    if [[ -s "$PACKAGETEMP" ]]; then
+        COUNT=$(wc -l < "$PACKAGETEMP")
+        log INFO "$(basename "$PACKAGETEMP"): $COUNT lines collected"
+    else
+        log WARN "$(basename "$PACKAGETEMP"): empty — package scan may have failed (check pssh errors)"
+    fi
+else
+    log INFO "$(basename "$PACKAGETEMP"): package scan runs from secondary jumpbox (RUN_PACKAGES_ON_MAIN=0)"
+fi
 
 # --- Delta check — compare new inventory count against prior run -------------
 # Warns if the number of responding hosts drops by more than INV_DELTA_WARN_PCT

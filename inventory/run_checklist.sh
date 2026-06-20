@@ -287,11 +287,14 @@ if [[ -f "$_INVCSV" && -s "$_INVCSV" ]]; then
     fi
 fi
 
-# 19. Log errors and warnings
+# 19. Log errors and warnings — check current run log only (not master append log)
+# The symlink always points at the current run's log file
 if [[ "$RUN_MODE" == "test" ]]; then
-    LOG_FILE="${BASE_DIR}/test/logs/test_rhel_inventory.log"
+    LOG_FILE=$(readlink -f "${BASE_DIR}/test/logs/test_rhel_inventory_latest.log" 2>/dev/null)
+    [[ -z "$LOG_FILE" || ! -f "$LOG_FILE" ]] && LOG_FILE="${BASE_DIR}/test/logs/test_rhel_inventory.log"
 else
-    LOG_FILE="$MAIN_LOG"
+    LOG_FILE=$(readlink -f "${LOGS_DIR}/rhel_inventory_v2_latest.log" 2>/dev/null)
+    [[ -z "$LOG_FILE" || ! -f "$LOG_FILE" ]] && LOG_FILE="$MAIN_LOG"
 fi
 if [[ -f "$LOG_FILE" ]]; then
     ERR_COUNT=0

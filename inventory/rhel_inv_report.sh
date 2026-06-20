@@ -511,9 +511,10 @@ RPT_Deployment_Monthly() {
             <ul class="version-list">
 MCARD
 
-        [[ $virt  -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Virtual</span><span class=\"version-count\">${virt}</span></li>"
-        [[ $phys  -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Physical</span><span class=\"version-count\">${phys}</span></li>"
-        [[ $cloud -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Cloud</span><span class=\"version-count\">${cloud}</span></li>"
+        _virt=$(( ${virt:-0} + 0 )); _phys=$(( ${phys:-0} + 0 )); _cloud=$(( ${cloud:-0} + 0 ))
+        [[ $_virt  -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Virtual</span><span class=\"version-count\">${_virt}</span></li>"
+        [[ $_phys  -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Physical</span><span class=\"version-count\">${_phys}</span></li>"
+        [[ $_cloud -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Cloud</span><span class=\"version-count\">${_cloud}</span></li>"
 
         cat <<MVERS
             </ul>
@@ -586,9 +587,10 @@ RPT_Deployment_Annual() {
             <ul class="version-list">
 YCARD
 
-            [[ $virt  -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Virtual</span><span class=\"version-count\">${virt}</span></li>"
-            [[ $phys  -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Physical</span><span class=\"version-count\">${phys}</span></li>"
-            [[ $cloud -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Cloud</span><span class=\"version-count\">${cloud}</span></li>"
+            _virt=$(( ${virt:-0} + 0 )); _phys=$(( ${phys:-0} + 0 )); _cloud=$(( ${cloud:-0} + 0 ))
+            [[ $_virt  -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Virtual</span><span class=\"version-count\">${_virt}</span></li>"
+            [[ $_phys  -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Physical</span><span class=\"version-count\">${_phys}</span></li>"
+            [[ $_cloud -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Cloud</span><span class=\"version-count\">${_cloud}</span></li>"
 
             cat <<YVERS
             </ul>
