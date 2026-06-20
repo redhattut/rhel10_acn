@@ -489,15 +489,23 @@ RPT_Deployment_Monthly() {
         month_name=$(date -d "${year}-${month}-01" '+%B' 2>/dev/null || echo "Month $month")
         local date_pattern="${year}-${month}"
 
-        local month_data
-        month_data=$(awk -v p="$date_pattern" '$1 ~ p {print $0}' "$DEPLOYMENTDATA")
-        [[ -z "$month_data" ]] && continue
+        # Write month data to temp file — avoids subshell variable scope issues
+        local _mdtmp
+        _mdtmp=$(mktemp /tmp/rhel_mdata.XXXXXX)
+        awk -v p="$date_pattern" '$1 ~ p {print $0}' "$DEPLOYMENTDATA" > "$_mdtmp"
+        if [[ ! -s "$_mdtmp" ]]; then rm -f "$_mdtmp"; continue; fi
 
-        local total virt phys cloud
-        total=$(echo "$month_data" | wc -l)
-        cloud=$(echo "$month_data" | grep -c "Microsoft_Corporation" || echo 0)
-        virt=$(echo "$month_data"  | grep -v "Microsoft_Corporation" | awk '$3=="Virt"' | wc -l)
-        phys=$(echo "$month_data"  | grep -v "Microsoft_Corporation" | awk '$3=="Phys"' | wc -l)
+        local total=0 virt=0 phys=0 cloud=0
+        total=$(wc -l < "$_mdtmp"); total=$(( total + 0 ))
+        while IFS= read -r dline; do
+            if echo "$dline" | grep -qi "Microsoft_Corporation"; then
+                cloud=$(( cloud + 1 ))
+            elif echo "$dline" | awk '{print $3}' | grep -q "^Virt$"; then
+                virt=$(( virt + 1 ))
+            elif echo "$dline" | awk '{print $3}' | grep -q "^Phys$"; then
+                phys=$(( phys + 1 ))
+            fi
+        done < "$_mdtmp"
 
         cat <<MCARD
       <div class="month-card">
@@ -511,10 +519,9 @@ RPT_Deployment_Monthly() {
             <ul class="version-list">
 MCARD
 
-        _virt=$(( ${virt:-0} + 0 )); _phys=$(( ${phys:-0} + 0 )); _cloud=$(( ${cloud:-0} + 0 ))
-        [[ $_virt  -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Virtual</span><span class=\"version-count\">${_virt}</span></li>"
-        [[ $_phys  -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Physical</span><span class=\"version-count\">${_phys}</span></li>"
-        [[ $_cloud -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Cloud</span><span class=\"version-count\">${_cloud}</span></li>"
+        [[ $virt  -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Virtual</span><span class=\"version-count\">${virt}</span></li>"
+        [[ $phys  -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Physical</span><span class=\"version-count\">${phys}</span></li>"
+        [[ $cloud -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Cloud</span><span class=\"version-count\">${cloud}</span></li>"
 
         cat <<MVERS
             </ul>
@@ -524,11 +531,12 @@ MCARD
             <ul class="version-list">
 MVERS
 
-        echo "$month_data" | awk '{print $4}' | sort | uniq -c | sort -rn \
+        awk '{print $4}' "$_mdtmp" | sort | uniq -c | sort -rn \
         | while read -r count version; do
             [[ -z "$count" || -z "$version" ]] && continue
             echo "              <li class=\"version-item\"><span class=\"version-name\">RHEL ${version}</span><span class=\"version-count\">${count}</span></li>"
         done
+        rm -f "$_mdtmp"
 
         cat <<MEND
             </ul>
@@ -560,22 +568,32 @@ RPT_Deployment_Annual() {
 
     echo '    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem">'
 
-    # Get unique years from deployment data, newest first
-    awk -F- '{print $1}' "$DEPLOYMENTDATA" \
-        | grep "^[0-9]\{4\}$" \
-        | sort -ru \
-        | while read -r year; do
-            local year_data
-            year_data=$(grep "^${year}-" "$DEPLOYMENTDATA")
-            [[ -z "$year_data" ]] && continue
+    # Get unique years — write to temp file to avoid pipeline subshell scope issues
+    local _ytmp
+    _ytmp=$(mktemp /tmp/rhel_years.XXXXXX)
+    awk -F- '{print $1}' "$DEPLOYMENTDATA" | grep "^[0-9]\{4\}$" | sort -ru > "$_ytmp"
 
-            local total virt phys cloud
-            total=$(echo "$year_data" | wc -l)
-            cloud=$(echo "$year_data" | grep -c "Microsoft_Corporation" || echo 0)
-            virt=$(echo "$year_data"  | grep -v "Microsoft_Corporation" | awk '$3=="Virt"' | wc -l)
-            phys=$(echo "$year_data"  | grep -v "Microsoft_Corporation" | awk '$3=="Phys"' | wc -l)
+    while read -r year; do
+        # Write year data to temp file — avoids nested subshell variable issues
+        local _ydtmp
+        _ydtmp=$(mktemp /tmp/rhel_ydata.XXXXXX)
+        grep "^${year}-" "$DEPLOYMENTDATA" > "$_ydtmp"
+        [[ ! -s "$_ydtmp" ]] && rm -f "$_ydtmp" && continue
 
-            cat <<YCARD
+        local total=0 virt=0 phys=0 cloud=0
+        total=$(wc -l < "$_ydtmp")
+        total=$(( total + 0 ))
+        while read -r dline; do
+            if echo "$dline" | grep -qi "Microsoft_Corporation"; then
+                cloud=$(( cloud + 1 ))
+            elif echo "$dline" | awk '{print $3}' | grep -q "^Virt$"; then
+                virt=$(( virt + 1 ))
+            elif echo "$dline" | awk '{print $3}' | grep -q "^Phys$"; then
+                phys=$(( phys + 1 ))
+            fi
+        done < "$_ydtmp"
+
+        cat <<YCARD
       <div class="month-card">
         <div class="month-header">
           <h2>${year}</h2>
@@ -587,12 +605,11 @@ RPT_Deployment_Annual() {
             <ul class="version-list">
 YCARD
 
-            _virt=$(( ${virt:-0} + 0 )); _phys=$(( ${phys:-0} + 0 )); _cloud=$(( ${cloud:-0} + 0 ))
-            [[ $_virt  -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Virtual</span><span class=\"version-count\">${_virt}</span></li>"
-            [[ $_phys  -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Physical</span><span class=\"version-count\">${_phys}</span></li>"
-            [[ $_cloud -gt 0 ]] && echo "              <li class=\"version-item\"><span class=\"version-name\">Cloud</span><span class=\"version-count\">${_cloud}</span></li>"
+        [[ $virt  -gt 0 ]] && echo "              <li class="version-item"><span class="version-name">Virtual</span><span class="version-count">${virt}</span></li>"
+        [[ $phys  -gt 0 ]] && echo "              <li class="version-item"><span class="version-name">Physical</span><span class="version-count">${phys}</span></li>"
+        [[ $cloud -gt 0 ]] && echo "              <li class="version-item"><span class="version-name">Cloud</span><span class="version-count">${cloud}</span></li>"
 
-            cat <<YVERS
+        cat <<YVERS
             </ul>
           </div>
           <div class="deployment-section">
@@ -600,19 +617,20 @@ YCARD
             <ul class="version-list">
 YVERS
 
-            echo "$year_data" | awk '{print $4}' | sort | uniq -c | sort -rn \
-            | while read -r count version; do
-                [[ -z "$count" || -z "$version" ]] && continue
-                echo "              <li class=\"version-item\"><span class=\"version-name\">RHEL ${version}</span><span class=\"version-count\">${count}</span></li>"
-            done
+        awk '{print $4}' "$_ydtmp" | sort | uniq -c | sort -rn         | while read -r count version; do
+            [[ -z "$count" || -z "$version" ]] && continue
+            echo "              <li class="version-item"><span class="version-name">RHEL ${version}</span><span class="version-count">${count}</span></li>"
+        done
 
-            cat <<YEND
+        cat <<YEND
             </ul>
           </div>
         </div>
       </div>
 YEND
-        done
+        rm -f "$_ydtmp"
+    done < "$_ytmp"
+    rm -f "$_ytmp"
 
     echo '    </div>'
     html_foot
