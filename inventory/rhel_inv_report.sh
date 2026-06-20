@@ -489,23 +489,23 @@ RPT_Deployment_Monthly() {
         month_name=$(date -d "${year}-${month}-01" '+%B' 2>/dev/null || echo "Month $month")
         local date_pattern="${year}-${month}"
 
-        # Write month data to temp file — avoids subshell variable scope issues
+        # Write month data to temp file
         local _mdtmp
         _mdtmp=$(mktemp /tmp/rhel_mdata.XXXXXX)
         awk -v p="$date_pattern" '$1 ~ p {print $0}' "$DEPLOYMENTDATA" > "$_mdtmp"
         if [[ ! -s "$_mdtmp" ]]; then rm -f "$_mdtmp"; continue; fi
 
+        # Count with single awk pass — fast even on large deployment files
         local total=0 virt=0 phys=0 cloud=0
-        total=$(wc -l < "$_mdtmp"); total=$(( total + 0 ))
-        while IFS= read -r dline; do
-            if echo "$dline" | grep -qi "Microsoft_Corporation"; then
-                cloud=$(( cloud + 1 ))
-            elif echo "$dline" | awk '{print $3}' | grep -q "^Virt$"; then
-                virt=$(( virt + 1 ))
-            elif echo "$dline" | awk '{print $3}' | grep -q "^Phys$"; then
-                phys=$(( phys + 1 ))
-            fi
-        done < "$_mdtmp"
+        eval "$(awk '
+            BEGIN { total=0; virt=0; phys=0; cloud=0 }
+            /Microsoft_Corporation/ { cloud++; total++; next }
+            $3=="Virt" { virt++; total++; next }
+            $3=="Phys" { phys++; total++; next }
+            { total++ }
+            END { printf "total=%d virt=%d phys=%d cloud=%d
+", total, virt, phys, cloud }
+        ' "$_mdtmp")"
 
         cat <<MCARD
       <div class="month-card">
@@ -574,24 +574,23 @@ RPT_Deployment_Annual() {
     awk -F- '{print $1}' "$DEPLOYMENTDATA" | grep "^[0-9]\{4\}$" | sort -ru > "$_ytmp"
 
     while read -r year; do
-        # Write year data to temp file — avoids nested subshell variable issues
+        # Write year data to temp file
         local _ydtmp
         _ydtmp=$(mktemp /tmp/rhel_ydata.XXXXXX)
         grep "^${year}-" "$DEPLOYMENTDATA" > "$_ydtmp"
         [[ ! -s "$_ydtmp" ]] && rm -f "$_ydtmp" && continue
 
+        # Count with single awk pass — fast even on large deployment files
         local total=0 virt=0 phys=0 cloud=0
-        total=$(wc -l < "$_ydtmp")
-        total=$(( total + 0 ))
-        while read -r dline; do
-            if echo "$dline" | grep -qi "Microsoft_Corporation"; then
-                cloud=$(( cloud + 1 ))
-            elif echo "$dline" | awk '{print $3}' | grep -q "^Virt$"; then
-                virt=$(( virt + 1 ))
-            elif echo "$dline" | awk '{print $3}' | grep -q "^Phys$"; then
-                phys=$(( phys + 1 ))
-            fi
-        done < "$_ydtmp"
+        eval "$(awk '
+            BEGIN { total=0; virt=0; phys=0; cloud=0 }
+            /Microsoft_Corporation/ { cloud++; total++; next }
+            $3=="Virt" { virt++; total++; next }
+            $3=="Phys" { phys++; total++; next }
+            { total++ }
+            END { printf "total=%d virt=%d phys=%d cloud=%d
+", total, virt, phys, cloud }
+        ' "$_ydtmp")"
 
         cat <<YCARD
       <div class="month-card">
@@ -653,10 +652,14 @@ log INFO "Application.html done"
 RPT_Release_detail > "$WEBDIR/Releases.html"
 log INFO "Releases.html done"
 
+set -x  # DEBUG — trace deployment report generation
 RPT_Deployment_Annual  > "$WEBDIR/Annual_Redhat_Linux_Depoloyment_Report.html"
+set +x
 log INFO "Annual deployment report done"
 
+set -x
 RPT_Deployment_Monthly > "$WEBDIR/Monthly_Redhat_Linux_Depoloyment_Report.html"
+set +x
 log INFO "Monthly deployment report done"
 
 # Non-responsive host list
