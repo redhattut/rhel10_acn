@@ -108,7 +108,7 @@ cat > "$OUT" << HTMLEOF
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
-  <title>RHEL Operations — Host Inventory</title>
+  <title>RHEL Operations — RHEL Host Inventory</title>
   <link rel="stylesheet" href="style.css">
   <script src="config.js" defer></script>
   <script src="app.js" defer></script>
@@ -195,7 +195,7 @@ cat > "$OUT" << HTMLEOF
 <main class="page">
 
   <div class="page-head">
-    <h1>Host inventory</h1>
+    <h1>RHEL Host Inventory</h1>
     <p>Per-host configuration and CMDB state. Search, filter, or download the latest inventory extract.</p>
   </div>
 
@@ -256,16 +256,38 @@ cat >> "$OUT" << HTMLEOF3
     <div class="tbl-wrap">
       <table id="t" style="min-width:2300px">
         <thead><tr>
-          <th>Host</th><th>Type</th><th>Location</th><th>App Code</th>
-          <th>Environment</th><th>Build Date</th><th>OS</th><th>Kernel</th>
-          <th>Architecture</th><th>Memory&nbsp;(MB)</th><th>CPU&nbsp;Sockets</th>
-          <th>CPU&nbsp;Cores</th><th>CPU&nbsp;Threads</th><th>CPU Type</th>
-          <th>CPU&nbsp;Speed</th><th>Server Vendor</th><th>Server Model</th>
-          <th>Serial Num</th><th>Syslog-ng</th><th>Uptime&nbsp;(days)</th>
-          <th>VMTools Ver</th><th>VMTools Run</th><th>Last Backup</th>
-          <th>IP Address</th><th>CI Device</th><th>vCenter</th>
-          <th>Build Type</th><th>DB Type</th><th>CMDB Support Group</th>
-          <th>Install Status</th><th>Op State</th><th>Fed Enclave</th>
+          <th onclick="sortBy(0)"  class="sortable">Host</th>
+          <th onclick="sortBy(1)"  class="sortable">Type</th>
+          <th onclick="sortBy(2)"  class="sortable">Location</th>
+          <th onclick="sortBy(3)"  class="sortable">App Code</th>
+          <th onclick="sortBy(4)"  class="sortable">Environment</th>
+          <th onclick="sortBy(5)"  class="sortable">Build Date</th>
+          <th onclick="sortBy(6)"  class="sortable">OS</th>
+          <th onclick="sortBy(7)"  class="sortable">Kernel</th>
+          <th onclick="sortBy(8)"  class="sortable">Architecture</th>
+          <th onclick="sortBy(9)"  class="sortable">Memory&nbsp;(MB)</th>
+          <th onclick="sortBy(10)" class="sortable">CPU&nbsp;Sockets</th>
+          <th onclick="sortBy(11)" class="sortable">CPU&nbsp;Cores</th>
+          <th onclick="sortBy(12)" class="sortable">CPU&nbsp;Threads</th>
+          <th onclick="sortBy(13)" class="sortable">CPU Type</th>
+          <th onclick="sortBy(14)" class="sortable">CPU&nbsp;Speed</th>
+          <th onclick="sortBy(15)" class="sortable">Server Vendor</th>
+          <th onclick="sortBy(16)" class="sortable">Server Model</th>
+          <th onclick="sortBy(17)" class="sortable">Serial Num</th>
+          <th onclick="sortBy(18)" class="sortable">Syslog-ng</th>
+          <th onclick="sortBy(19)" class="sortable">Uptime&nbsp;(days)</th>
+          <th onclick="sortBy(20)" class="sortable">VMTools Ver</th>
+          <th onclick="sortBy(21)" class="sortable">VMTools Run</th>
+          <th onclick="sortBy(22)" class="sortable">Last Backup</th>
+          <th onclick="sortBy(23)" class="sortable">IP Address</th>
+          <th onclick="sortBy(24)" class="sortable">CI Device</th>
+          <th onclick="sortBy(25)" class="sortable">vCenter</th>
+          <th onclick="sortBy(26)" class="sortable">Build Type</th>
+          <th onclick="sortBy(27)" class="sortable">DB Type</th>
+          <th onclick="sortBy(28)" class="sortable">CMDB Support Group</th>
+          <th onclick="sortBy(29)" class="sortable">Install Status</th>
+          <th onclick="sortBy(30)" class="sortable">Op State</th>
+          <th onclick="sortBy(31)" class="sortable">Fed Enclave</th>
         </tr></thead>
         <tbody id="tb"></tbody>
       </table>
@@ -290,7 +312,9 @@ cat >> "$OUT" << HTMLEOF3
 </div><!-- /content-shell -->
 </div><!-- /app-shell -->
 
+
 <style>
+/* Pagination bar */
 .pg-bar{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;padding:.85rem 0 .25rem;font-size:.82rem;color:var(--muted)}
 .pg-nav{display:flex;align-items:center;gap:.3rem;margin-left:auto}
 .pg-btn{display:inline-flex;align-items:center;justify-content:center;min-width:34px;height:34px;padding:0 .5rem;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--text);font-size:.82rem;font-weight:600;cursor:pointer;text-decoration:none;transition:background .12s,border-color .12s,color .12s}
@@ -300,17 +324,22 @@ cat >> "$OUT" << HTMLEOF3
 .pg-ellipsis{padding:0 .35rem;color:var(--muted)}
 .pg-size-wrap{display:flex;align-items:center;gap:.4rem}
 .pg-size-wrap select{padding:.3rem .5rem;border:1px solid var(--line);border-radius:7px;background:var(--card);color:var(--ink);font-size:.8rem}
+/* Sortable column headers */
+thead th.sortable{cursor:pointer;user-select:none;white-space:nowrap}
+thead th.sortable:hover{background:#edf2fc;color:var(--blue)}
+thead th.sortable::after{content:' \2195';font-size:.65rem;opacity:.4;margin-left:2px}
+thead th.sort-asc::after{content:' \2191';opacity:.9;color:var(--blue)}
+thead th.sort-desc::after{content:' \2193';opacity:.9;color:var(--blue)}
 </style>
 
 <script>
 // =============================================================================
-// Inventory table — data-driven, DOM-minimal pagination
-// All row data lives in RHEL_INV_DATA (loaded from .data.js).
-// Only the current page's rows ever exist in the DOM.
+// RHEL Host Inventory — data-driven pagination, filtering, and sorting
+// All 22k+ rows live in window.RHEL_INV_DATA (loaded from .data.js).
+// Only the current page's 50 rows ever exist in the DOM at once.
 // =============================================================================
 (function () {
 
-  // CSS class helpers for pill/badge rendering
   function pillType(v) {
     if (v === 'Virt')  return '<span class="pill pill-virt">Virt</span>';
     if (v === 'Phys')  return '<span class="pill pill-phys">Phys</span>';
@@ -346,148 +375,166 @@ cat >> "$OUT" << HTMLEOF3
   function sub(s) { return '<span class="sub">' + esc(s) + '</span>'; }
 
   function buildRow(r) {
-    // r is a 32-element array from RHEL_INV_DATA
     return '<tr>'
-      + '<td>'          + esc(r[0])     + '</td>'   // Host
-      + '<td>'          + pillType(r[1])+ '</td>'   // Type
-      + '<td>'          + esc(r[2])     + '</td>'   // Location
-      + '<td>'          + esc(r[3])     + '</td>'   // App Code
-      + '<td>'          + pillEnv(r[4]) + '</td>'   // Environment
-      + '<td>'          + esc(r[5])     + '</td>'   // Build Date
-      + '<td>'          + osb(r[6])     + '</td>'   // OS
-      + '<td>'          + sub(r[7])     + '</td>'   // Kernel
-      + '<td>'          + esc(r[8])     + '</td>'   // Architecture
-      + '<td>'          + esc(r[9])     + '</td>'   // Memory
-      + '<td>'          + esc(r[10])    + '</td>'   // CPU Sockets
-      + '<td>'          + esc(r[11])    + '</td>'   // CPU Cores
-      + '<td>'          + esc(r[12])    + '</td>'   // CPU Threads
-      + '<td>'          + sub(r[13])    + '</td>'   // CPU Type
-      + '<td>'          + esc(r[14])    + '</td>'   // CPU Speed
-      + '<td>'          + esc(r[15])    + '</td>'   // Server Vendor
-      + '<td>'          + sub(r[16])    + '</td>'   // Server Model
-      + '<td>'          + sub(r[17])    + '</td>'   // Serial Num
-      + '<td>'          + syslogSt(r[18])+'</td>'   // Syslog-ng
-      + '<td>'          + esc(r[19])    + '</td>'   // Uptime
-      + '<td>'          + esc(r[20])    + '</td>'   // VMTools Ver
-      + '<td>'          + esc(r[21])    + '</td>'   // VMTools Run
-      + '<td>'          + sub(r[22])    + '</td>'   // Last Backup
-      + '<td>'          + esc(r[23])    + '</td>'   // IP Address
-      + '<td>'          + esc(r[24])    + '</td>'   // CI Device
-      + '<td>'          + sub(r[25])    + '</td>'   // vCenter
-      + '<td>'          + esc(r[26])    + '</td>'   // Build Type
-      + '<td>'          + sub(r[27])    + '</td>'   // DB Type
-      + '<td>'          + esc(r[28])    + '</td>'   // CMDB Support Group
-      + '<td>'          + esc(r[29])    + '</td>'   // Install Status
-      + '<td>'          + esc(r[30])    + '</td>'   // Op State
-      + '<td>'          + pillFed(r[31])+ '</td>'   // Fed Enclave
+      + '<td>' + esc(r[0])       + '</td>'
+      + '<td>' + pillType(r[1])  + '</td>'
+      + '<td>' + esc(r[2])       + '</td>'
+      + '<td>' + esc(r[3])       + '</td>'
+      + '<td>' + pillEnv(r[4])   + '</td>'
+      + '<td>' + esc(r[5])       + '</td>'
+      + '<td>' + osb(r[6])       + '</td>'
+      + '<td>' + sub(r[7])       + '</td>'
+      + '<td>' + esc(r[8])       + '</td>'
+      + '<td>' + esc(r[9])       + '</td>'
+      + '<td>' + esc(r[10])      + '</td>'
+      + '<td>' + esc(r[11])      + '</td>'
+      + '<td>' + esc(r[12])      + '</td>'
+      + '<td>' + sub(r[13])      + '</td>'
+      + '<td>' + esc(r[14])      + '</td>'
+      + '<td>' + esc(r[15])      + '</td>'
+      + '<td>' + sub(r[16])      + '</td>'
+      + '<td>' + sub(r[17])      + '</td>'
+      + '<td>' + syslogSt(r[18]) + '</td>'
+      + '<td>' + esc(r[19])      + '</td>'
+      + '<td>' + esc(r[20])      + '</td>'
+      + '<td>' + esc(r[21])      + '</td>'
+      + '<td>' + sub(r[22])      + '</td>'
+      + '<td>' + esc(r[23])      + '</td>'
+      + '<td>' + esc(r[24])      + '</td>'
+      + '<td>' + sub(r[25])      + '</td>'
+      + '<td>' + esc(r[26])      + '</td>'
+      + '<td>' + sub(r[27])      + '</td>'
+      + '<td>' + esc(r[28])      + '</td>'
+      + '<td>' + esc(r[29])      + '</td>'
+      + '<td>' + esc(r[30])      + '</td>'
+      + '<td>' + pillFed(r[31])  + '</td>'
       + '</tr>';
   }
 
-  var PAGE_SIZE = 50;
+  // ---- State ---------------------------------------------------------------
+  var PAGE_SIZE   = 50;
   var currentPage = 1;
-  var filtered = [];
+  var filtered    = [];
+  var sortCol     = 0;   // default: hostname
+  var sortDir     = 1;   // 1=asc, -1=desc
 
-  var tb     = document.getElementById('tb');
-  var cb     = document.getElementById('cb');
-  var pgNav  = document.getElementById('pgNav');
-  var pgSz   = document.getElementById('pgSize');
+  var tb    = document.getElementById('tb');
+  var cb    = document.getElementById('cb');
+  var pgNav = document.getElementById('pgNav');
+  var pgSz  = document.getElementById('pgSize');
 
-  // ---- Filter ---------------------------------------------------------------
+  // Numeric columns (sort as numbers not strings)
+  var numCols = {9:1,10:1,11:1,12:1,14:1,19:1};
+
+  // ---- Sort ----------------------------------------------------------------
+  function applySort(arr) {
+    var col = sortCol, dir = sortDir, isNum = numCols[col];
+    arr.sort(function(a, b) {
+      var av = isNum ? parseFloat(a[col])||0 : String(a[col]).toLowerCase();
+      var bv = isNum ? parseFloat(b[col])||0 : String(b[col]).toLowerCase();
+      return av < bv ? -dir : av > bv ? dir : 0;
+    });
+  }
+
+  function updateSortHeaders() {
+    document.querySelectorAll('thead th.sortable').forEach(function(th, i) {
+      th.classList.remove('sort-asc','sort-desc');
+      if (i === sortCol) th.classList.add(sortDir === 1 ? 'sort-asc' : 'sort-desc');
+    });
+  }
+
+  window.sortBy = function(col) {
+    sortDir = (sortCol === col) ? -sortDir : 1;
+    sortCol = col;
+    applySort(filtered);
+    currentPage = 1;
+    render();
+    updateSortHeaders();
+  };
+
+  // ---- Filter --------------------------------------------------------------
+  // Called by oninput/onchange on all filter controls.
+  // Works against the full RHEL_INV_DATA array (not DOM rows).
   window.ft = function () {
-    var q   = (document.getElementById('search').value  || '').trim().toLowerCase();
-    var env = (document.getElementById('envF').value    || '').toLowerCase();
-    var typ = (document.getElementById('typF').value    || '').toLowerCase();
-    var os  = (document.getElementById('osF').value     || '').toLowerCase();
-    var loc = (document.getElementById('locF').value    || '').toLowerCase();
+    if (typeof window.RHEL_INV_DATA === 'undefined') return;
+    var q   = (document.getElementById('search').value || '').trim().toLowerCase();
+    var env = (document.getElementById('envF').value   || '').toLowerCase();
+    var typ = (document.getElementById('typF').value   || '').toLowerCase();
+    var os  = (document.getElementById('osF').value    || '').toLowerCase();
+    var loc = (document.getElementById('locF').value   || '').toLowerCase();
 
     filtered = window.RHEL_INV_DATA.filter(function(r) {
-      if (env && r[4].toLowerCase()  !== env) return false;
-      if (typ && r[1].toLowerCase()  !== typ) return false;
-      if (os  && r[6].toLowerCase()  !== os)  return false;
-      if (loc && r[2].toLowerCase()  !== loc) return false;
-      if (q) {
-        // Search across all 32 fields joined — fast single-pass
-        return r.join('\x00').toLowerCase().indexOf(q) !== -1;
-      }
+      if (env && r[4].toLowerCase() !== env) return false;
+      if (typ && r[1].toLowerCase() !== typ) return false;
+      if (os  && r[6].toLowerCase() !== os)  return false;
+      if (loc && r[2].toLowerCase() !== loc) return false;
+      if (q   && r.join('\x00').toLowerCase().indexOf(q) === -1) return false;
       return true;
     });
-
+    applySort(filtered);
     currentPage = 1;
     render();
   };
 
-  // ---- Page size change -----------------------------------------------------
+  // ---- Page size -----------------------------------------------------------
   window.pgResize = function () {
     PAGE_SIZE = parseInt(pgSz.value, 10) || 50;
     currentPage = 1;
     render();
   };
 
-  // ---- Render current page --------------------------------------------------
+  // ---- Render --------------------------------------------------------------
   function render() {
-    var total  = filtered.length;
-    var pages  = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    var total = filtered.length;
+    var pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (currentPage > pages) currentPage = pages;
-
-    var start  = (currentPage - 1) * PAGE_SIZE;
-    var end    = Math.min(start + PAGE_SIZE, total);
-    var slice  = filtered.slice(start, end);
-
-    // Build all row HTML in one string — single innerHTML write, much faster
-    // than appending individual rows
-    tb.innerHTML = slice.map(buildRow).join('');
-
-    // Count badge
-    cb.innerHTML = 'Showing <b>' + (total === 0 ? 0 : start + 1)
-                 + '&ndash;' + end + '</b> of <b>'
-                 + total.toLocaleString('en-US') + '</b> hosts';
-
+    var start = (currentPage - 1) * PAGE_SIZE;
+    var end   = Math.min(start + PAGE_SIZE, total);
+    tb.innerHTML = filtered.slice(start, end).map(buildRow).join('');
+    cb.innerHTML = 'Showing <b>' + (total ? start+1 : 0) + '&ndash;' + end
+                 + '</b> of <b>' + total.toLocaleString('en-US') + '</b> hosts';
     renderPager(pages);
   }
 
-  // ---- Pager ----------------------------------------------------------------
+  // ---- Pager ---------------------------------------------------------------
   function renderPager(pages) {
-    var cur  = currentPage;
-    var show = {};
-    [1, pages, cur - 1, cur, cur + 1].forEach(function(p) {
-      if (p >= 1 && p <= pages) show[p] = true;
-    });
+    var cur = currentPage, show = {}, prev = 0, html = '';
+    [1, pages, cur-1, cur, cur+1].forEach(function(p){if(p>=1&&p<=pages)show[p]=true;});
     var nums = Object.keys(show).map(Number).sort(function(a,b){return a-b;});
-
-    var html = '<button class="pg-btn' + (cur <= 1 ? ' disabled' : '')
-             + '" onclick="pgGo(' + (cur-1) + ')">&#8249;</button>';
-    var prev = 0;
-    nums.forEach(function(n) {
-      if (n - prev > 1) html += '<span class="pg-ellipsis">&hellip;</span>';
-      html += '<button class="pg-btn' + (n === cur ? ' active' : '')
-            + '" onclick="pgGo(' + n + ')">' + n + '</button>';
-      prev = n;
+    html += '<button class="pg-btn'+(cur<=1?' disabled':'')+'" onclick="pgGo('+(cur-1)+')">&#8249;</button>';
+    nums.forEach(function(n){
+      if(n-prev>1) html+='<span class="pg-ellipsis">&hellip;</span>';
+      html+='<button class="pg-btn'+(n===cur?' active':'')+'" onclick="pgGo('+n+')">'+n+'</button>';
+      prev=n;
     });
-    html += '<button class="pg-btn' + (cur >= pages ? ' disabled' : '')
-          + '" onclick="pgGo(' + (cur+1) + ')">&#8250;</button>';
-
+    html+='<button class="pg-btn'+(cur>=pages?' disabled':'')+'" onclick="pgGo('+(cur+1)+')">&#8250;</button>';
     pgNav.innerHTML = html;
   }
 
-  // ---- Go to page -----------------------------------------------------------
+  // ---- Go to page ----------------------------------------------------------
   window.pgGo = function(n) {
     var pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
     currentPage = Math.max(1, Math.min(n, pages));
     render();
     var tbl = document.querySelector('.tbl-card');
-    if (tbl) tbl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (tbl) tbl.scrollIntoView({behavior:'smooth',block:'start'});
   };
 
-  // Kick off initial render
+  // ---- Init ----------------------------------------------------------------
+  // data.js has no defer — RHEL_INV_DATA is defined by the time we get here.
   if (typeof window.RHEL_INV_DATA !== 'undefined') {
+    applySort(window.RHEL_INV_DATA);  // sort master array in place
     ft();
+    updateSortHeaders();
   } else {
-    if (cb) cb.textContent = 'No data — check ' + '${DATA_JS_BASE}';
+    if (cb) cb.textContent = 'No data — check data.js';
   }
+
 })();
 </script>
 </body>
 </html>
+
 HTMLEOF3
 
 rm -f "$TMPCSV"

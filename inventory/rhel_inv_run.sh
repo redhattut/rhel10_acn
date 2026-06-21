@@ -734,60 +734,10 @@ cat > "${WEBDIR}/app.js" << 'APPJS_EOF'
       <tr><td>${i === 0 ? '<span class="latest-tag">Latest</span>' : ''}</td><td class="filename">${f.filename}</td><td>${f.timestamp}</td><td>${f.size}</td><td><a class="download-link" href="${f.href}" download>Download CSV</a></td></tr>`).join('');
   }
 
-  // Host inventory search and filters.
-  const inventoryBody = document.getElementById('tb');
-  if (inventoryBody) {
-    const rows = Array.from(inventoryBody.querySelectorAll('tr')).filter(row => row.querySelectorAll('td').length > 0);
-    const locSel = document.getElementById('locF');
-    const countBadge = document.getElementById('cb');
-
-    if (locSel) {
-      const locations = [...new Set(rows.map(row => {
-        const cell = row.querySelectorAll('td')[2];
-        return cell ? cell.textContent.trim() : '';
-      }).filter(Boolean))].sort();
-      locations.forEach(location => {
-        const option = document.createElement('option');
-        option.value = location;
-        option.textContent = location;
-        locSel.appendChild(option);
-      });
-    }
-
-    const updateCount = visible => {
-      if (countBadge) countBadge.innerHTML = `Showing <b>${visible}</b> of <b>${rows.length}</b> hosts`;
-    };
-
-    window.ft = function () {
-      const q = (document.getElementById('search')?.value || '').trim().toLowerCase();
-      const env = (document.getElementById('envF')?.value || '').toLowerCase();
-      const type = (document.getElementById('typF')?.value || '').toLowerCase();
-      const os = (document.getElementById('osF')?.value || '').toLowerCase();
-      const location = (document.getElementById('locF')?.value || '').toLowerCase();
-      let visible = 0;
-
-      rows.forEach(row => {
-        const cells = row.querySelectorAll('td');
-        const rowText = row.textContent.toLowerCase();
-        const rowType = cells[1]?.textContent.trim().toLowerCase() || '';
-        const rowLocation = cells[2]?.textContent.trim().toLowerCase() || '';
-        const rowEnvironment = cells[4]?.textContent.trim().toLowerCase() || '';
-        const rowOs = cells[6]?.textContent.trim().toLowerCase() || '';
-
-        const show = (!q || rowText.includes(q))
-          && (!env || rowEnvironment === env)
-          && (!type || rowType === type)
-          && (!os || rowOs === os)
-          && (!location || rowLocation === location);
-
-        row.hidden = !show;
-        if (show) visible += 1;
-      });
-      updateCount(visible);
-    };
-
-    window.ft();
-  }
+  // NOTE: Host inventory search, filter, sort, and pagination are handled
+  // entirely by the inline script in the generated inventory HTML page.
+  // app.js does not define window.ft — doing so would override the data-driven
+  // implementation in rhel_convert_html.sh that works against RHEL_INV_DATA.
 
 })();
 APPJS_EOF

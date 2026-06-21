@@ -226,15 +226,18 @@ if [[ -f "$_INVCSV" && -s "$_INVCSV" ]]; then
 fi
 
 # 14. AppCode/Env/BuildDate spot check
+# BuildDate n/a is expected for legacy hosts that predate PROVISIONDATE.
+# Only warn if AppCode or Env are n/a — those come from the hostname and
+# PNC_PROVISION_CONFIG and should always be populated on modern SOE hosts.
 if [[ -f "$_INVCSV" && -s "$_INVCSV" ]]; then
     SAMPLE_LINE=$(grep -v "^#" "$_INVCSV" | head -1)
     APP=$(echo "$SAMPLE_LINE" | awk -F, '{print $4}')
     ENV=$(echo "$SAMPLE_LINE" | awk -F, '{print $5}')
     BD=$(echo "$SAMPLE_LINE" | awk -F, '{print $6}')
-    if [[ "$APP" != "n/a" && "$ENV" != "n/a" && "$BD" != "n/a" ]]; then
-        result PASS "AppCode/Env/BuildDate populated" "AppCode=$APP Env=$ENV BuildDate=$BD"
+    if [[ "$APP" != "n/a" && "$ENV" != "n/a" ]]; then
+        result PASS "AppCode/Env populated" "AppCode=$APP Env=$ENV BuildDate=$BD"
     else
-        result WARN "AppCode/Env/BuildDate populated" "One or more is n/a — AppCode=$APP Env=$ENV BuildDate=$BD"
+        result WARN "AppCode/Env populated" "AppCode or Env is n/a — AppCode=$APP Env=$ENV"
     fi
 fi
 
