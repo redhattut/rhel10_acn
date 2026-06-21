@@ -5,7 +5,7 @@
 # Generates:
 #   config.js                                       — live KPI data for app.js
 #   index.html                                      — Infrastructure Summary
-#   deployments.html                                — Deployment Activity
+#   Monthly_Redhat_Linux_Depoloyment_Report.html    — Deployment activity (bar chart + 12 months)
 #   Monthly_Redhat_Linux_Depoloyment_Report.html    — 12-month history
 #   Annual_Redhat_Linux_Depoloyment_Report.html     — all-years history
 #   Location.html                                   — Inventory by datacenter
@@ -230,7 +230,6 @@ window.RHEL_CONFIG = {
     inventoryText:      "${INVENTDATATEXT}",
     inventoryHtml:      "${INVENTDATAHTML}",
     packageInventory:   "${PKG_CSV_BASE}",
-    midrangeInventory:  "Midrange_INVENTORY.csv",
     deploymentCsv:      "${DEPLOY_CSV_BASE}"
   },
   externalLinks: [${EXTLINKS_JSON}
@@ -283,13 +282,13 @@ _sidebar() {
         </svg>
         <span>Infrastructure Summary</span>
       </a>
-      <a href="deployments.html" class="side-link${a_dep}">
+      <a href="Monthly_Redhat_Linux_Depoloyment_Report.html" class="side-link${a_dep}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/>
         </svg>
         <span>Deployments</span>
       </a>
-      <a href="inventory.html" class="side-link${a_inv}">
+      <a href="${INVENTDATAHTML}" class="side-link${a_inv}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="3" y="4" width="18" height="16" rx="1.5"/>
           <line x1="3" y1="9" x2="21" y2="9"/>
@@ -420,14 +419,14 @@ RPT_Main() {
     </div>
   </section>
 
-  <section class="row split">
-    <div class="card">
+  <section class="row split" style="align-items:stretch">
+    <div class="card" style="display:flex;flex-direction:column;justify-content:center">
       <div class="card-head">
         <span class="chip chip-blue">#</span>
         <h2>RHEL by version</h2>
         <span class="sub">major release</span>
       </div>
-      <div class="donut-wrap">
+      <div class="donut-wrap" style="justify-content:center">
         <div class="donut" data-rhel-donut>
           <div class="donut-center">
             <span class="big" data-classified-total>${TOTAL_HOSTS}</span>
@@ -447,7 +446,7 @@ RPT_Main() {
     </div>
   </section>
 
-  <section class="row halves">
+  <section class="row halves" style="align-items:stretch">
     <div class="card">
       <div class="card-head">
         <span class="chip chip-violet">&#9638;</span>
@@ -479,7 +478,6 @@ RPT_Main() {
           <li><a href="${INVENTDATATEXT}" download>Text inventory<span class="ar">&#8594;</span></a></li>
           <li><a data-latest-inventory href="${INVENTDATACSV}" download>Inventory CSV<span class="ar">&#8594;</span></a></li>
           <li><a href="${PKG_CSV_BASE}" download>Package inventory CSV<span class="ar">&#8594;</span></a></li>
-          <li><a href="Midrange_INVENTORY.csv" download>Midrange inventory CSV<span class="ar">&#8594;</span></a></li>
         </ul>
       </div>
       <div class="res-col">
@@ -493,7 +491,7 @@ RPT_Main() {
       <div class="res-col">
         <h3>Deployment reports</h3>
         <ul class="res-list">
-          <li><a href="deployments.html">Monthly deployments<span class="ar">&#8594;</span></a></li>
+          <li><a href="Monthly_Redhat_Linux_Depoloyment_Report.html">Monthly deployments<span class="ar">&#8594;</span></a></li>
           <li><a href="Annual_Redhat_Linux_Depoloyment_Report.html">Annual deployments<span class="ar">&#8594;</span></a></li>
           <li><a href="${DEPLOY_CSV_BASE}" download>Deployment CSV<span class="ar">&#8594;</span></a></li>
         </ul>
@@ -831,24 +829,25 @@ DEOF3
 }
 
 # =============================================================================
-# RPT_Deployments_Monthly — deployments.html (last 3 months + bar chart)
+# RPT_Deployment_Monthly_Full — Monthly_Redhat_Linux_Depoloyment_Report.html
+# Primary deployments page: bar chart (last 3 months) + full 12-month history
 # =============================================================================
-RPT_Deployments_Monthly() {
+RPT_Deployment_Monthly_Full() {
     local current_year current_month
     current_year=$(date +%Y)
     current_month=$(date +%m)
 
-    _html_head "RHEL Operations — Deployments"
+    _html_head "RHEL Operations — Monthly Deployment Report"
     _sidebar "deployments"
 
-    cat << DEPHEOF
+    cat << MFEOF
 <div class="content-shell">
 <main class="page">
   <div class="page-head">
     <h1>Deployment Activity</h1>
-    <p>New RHEL builds registered across managed environments during the last three months.</p>
+    <p>New RHEL builds registered across managed environments — last 12 months.</p>
   </div>
-DEPHEOF
+MFEOF
 
     if [[ ! -f "$DEPLOYMENTDATA" ]]; then
         echo "  <section class=\"card\"><p style=\"color:var(--muted)\">Deployment data not yet available.</p></section>"
@@ -857,7 +856,7 @@ DEPHEOF
         return
     fi
 
-    # Gather last 3 months' totals for bar chart
+    # Bar chart — last 3 months
     local -a month_labels month_counts
     local max_cnt=1
     for (( i=0; i<3; i++ )); do
@@ -873,32 +872,30 @@ DEPHEOF
     done
     [[ $max_cnt -lt 1 ]] && max_cnt=1
 
-    # Find peak index
     local peak_idx=0 peak_val=0
     for (( i=0; i<3; i++ )); do
         [[ ${month_counts[$i]} -gt $peak_val ]] && { peak_val=${month_counts[$i]}; peak_idx=$i; }
     done
 
-    # Bar chart
     echo "  <section class=\"card\" style=\"margin-bottom:1.4rem\">"
     echo "    <div class=\"card-head\">"
     echo "      <span class=\"chip chip-blue\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><line x1=\"18\" y1=\"20\" x2=\"18\" y2=\"10\"/><line x1=\"12\" y1=\"20\" x2=\"12\" y2=\"4\"/><line x1=\"6\" y1=\"20\" x2=\"6\" y2=\"14\"/></svg></span>"
     echo "      <h2>Monthly build volume</h2>"
-    echo "      <span class=\"sub\">total deployments</span>"
+    echo "      <span class=\"sub\">last 3 months</span>"
     echo "    </div>"
     echo "    <div class=\"chart\">"
     for (( i=0; i<3; i++ )); do
-        local pct; pct=$(awk -v n="${month_counts[$i]}" -v d="$max_cnt" 'BEGIN{printf "%.1f", n/d*100}')
+        local cpct; cpct=$(awk -v n="${month_counts[$i]}" -v d="$max_cnt" 'BEGIN{printf "%.1f", n/d*100}')
         local peak_cls=""
         [[ $i -eq $peak_idx ]] && peak_cls=" peak"
-        echo "      <div class=\"col${peak_cls}\"><div class=\"colbar-wrap\"><div class=\"colbar\" style=\"height:${pct}%\"><span class=\"colval\">${month_counts[$i]}</span></div></div><span class=\"collabel\">${month_labels[$i]}</span></div>"
+        echo "      <div class=\"col${peak_cls}\"><div class=\"colbar-wrap\"><div class=\"colbar\" style=\"height:${cpct}%\"><span class=\"colval\">${month_counts[$i]}</span></div></div><span class=\"collabel\">${month_labels[$i]}</span></div>"
     done
     echo "    </div>"
     echo "  </section>"
     echo ""
     echo "  <div class=\"months\">"
 
-    for (( i=0; i<3; i++ )); do
+    for (( i=0; i<12; i++ )); do
         local m=$(( current_month - i ))
         local y=$current_year
         while [[ $m -le 0 ]]; do m=$(( m+12 )); y=$(( y-1 )); done
@@ -909,48 +906,6 @@ DEPHEOF
         [[ -s "$_mdtmp" ]] && _render_deploy_card "${mname} ${y}" "$_mdtmp"
         rm -f "$_mdtmp"
     done
-
-    echo "  </div>"
-    echo "</main>"
-    _html_foot
-}
-
-# =============================================================================
-# RPT_Deployment_Monthly_Full — Monthly_Redhat_Linux_Depoloyment_Report.html
-# =============================================================================
-RPT_Deployment_Monthly_Full() {
-    local current_year current_month
-    current_year=$(date +%Y)
-    current_month=$(date +%m)
-
-    _html_head "RHEL Operations — Monthly Deployment Report"
-    _sidebar ""
-
-    cat << MFEOF
-<div class="content-shell">
-<main class="page">
-  <div class="page-head">
-    <h1>Monthly Deployment Report</h1>
-    <p>New RHEL builds by month — last 12 months.</p>
-  </div>
-  <div class="months">
-MFEOF
-
-    if [[ ! -f "$DEPLOYMENTDATA" ]]; then
-        echo "    <section class=\"card\"><p style=\"color:var(--muted)\">Deployment data not yet available.</p></section>"
-    else
-        for (( i=0; i<12; i++ )); do
-            local m=$(( current_month - i ))
-            local y=$current_year
-            while [[ $m -le 0 ]]; do m=$(( m+12 )); y=$(( y-1 )); done
-            local mpad; mpad=$(printf "%02d" $m)
-            local mname; mname=$(date -d "${y}-${mpad}-01" '+%B' 2>/dev/null || echo "Month $mpad")
-            local _mdtmp; _mdtmp=$(mktemp /tmp/rhel_mdata.XXXXXX)
-            awk -v p="${y}-${mpad}" '$1~p' "$DEPLOYMENTDATA" > "$_mdtmp"
-            [[ -s "$_mdtmp" ]] && _render_deploy_card "${mname} ${y}" "$_mdtmp"
-            rm -f "$_mdtmp"
-        done
-    fi
 
     echo "  </div>"
     echo "</main>"
@@ -1013,14 +968,11 @@ log INFO "Application.html done"
 RPT_Release_detail            > "${WEBDIR}/Releases.html"
 log INFO "Releases.html done"
 
-RPT_Deployments_Monthly       > "${WEBDIR}/deployments.html"
-log INFO "deployments.html done"
-
 RPT_Deployment_Monthly_Full   > "${WEBDIR}/Monthly_Redhat_Linux_Depoloyment_Report.html"
-log INFO "Monthly deployment report done"
+log INFO "Monthly_Redhat_Linux_Depoloyment_Report.html done"
 
 RPT_Deployment_Annual         > "${WEBDIR}/Annual_Redhat_Linux_Depoloyment_Report.html"
-log INFO "Annual deployment report done"
+log INFO "Annual_Redhat_Linux_Depoloyment_Report.html done"
 
 # Non-responsive host list
 awk '!/^#/ && $2=="?" {print $1}' "$INVENTORYDATA" | sort > "${WEBDIR}/${LOSTLIST}"

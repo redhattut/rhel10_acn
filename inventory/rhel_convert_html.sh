@@ -86,13 +86,13 @@ cat > "$OUT" << HTMLEOF
         </svg>
         <span>Infrastructure Summary</span>
       </a>
-      <a href="deployments.html" class="side-link">
+      <a href="Monthly_Redhat_Linux_Depoloyment_Report.html" class="side-link">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/>
         </svg>
         <span>Deployments</span>
       </a>
-      <a href="inventory.html" class="side-link active">
+      <a href="${INVENTDATAHTML}" class="side-link active">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="3" y="4" width="18" height="16" rx="1.5"/>
           <line x1="3" y1="9" x2="21" y2="9"/>
