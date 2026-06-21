@@ -152,19 +152,14 @@ log INFO "pssh timeout    : ${PSSH_TIMEOUT}s per host"
 log INFO "pssh error dir  : $ERRDIR"
 log INFO "Writing web data to: $WEBDIR"
 
-# Ensure style.css is present in WEBDIR — copy from live webdir if needed
-_LIVE_CSS="/usr/local/midweb/RHEL/style.css"
-_LIVE_CSS_V2="/usr/local/midweb/RHEL_v2/style.css"
-if [[ ! -f "$WEBDIR/style.css" ]]; then
-    if [[ -f "$_LIVE_CSS_V2" ]]; then
-        cp "$_LIVE_CSS_V2" "$WEBDIR/style.css"
-        log INFO "Copied style.css from $_LIVE_CSS_V2"
-    elif [[ -f "$_LIVE_CSS" ]]; then
-        cp "$_LIVE_CSS" "$WEBDIR/style.css"
-        log INFO "Copied style.css from $_LIVE_CSS"
-    else
-        log WARN "style.css not found — HTML pages will be unstyled. Copy style.css to $WEBDIR/"
-    fi
+# Ensure our own style.css is present in WEBDIR
+# Style.css lives alongside the scripts — always copy the v2 one, never the legacy
+_OWN_CSS="${PGMDIR}/style.css"
+if [[ -f "$_OWN_CSS" ]]; then
+    cp "$_OWN_CSS" "$WEBDIR/style.css"
+    log INFO "style.css published to $WEBDIR"
+else
+    log WARN "style.css not found at $_OWN_CSS — HTML pages will be unstyled"
 fi
 
 # The remote script outputs tagged lines:
@@ -353,15 +348,7 @@ log SECTION "Phase 6 — Convert inventory to text and HTML"
 cp -p "$INVENTORYDATA" "$WEBDIR/$INVENTDATATEXT"
 log INFO "Text copy published: $WEBDIR/$INVENTDATATEXT"
 
-if [[ -x "${PGMDIR}/rhel_convert_html.sh" ]]; then
-    # Feed the CSV (not .dat) so CMDB fields 29-32 are populated
-    # CSV is already written to WEBDIR at this point
-    cat "${DATA_DIR}/${INVENTDATACSV}" \
-        | "${PGMDIR}/rhel_convert_html.sh" "$WEBDIR/$INVENTDATAHTML"
-    log INFO "HTML table published: $WEBDIR/$INVENTDATAHTML"
-else
-    log WARN "rhel_convert_html.sh not found — skipping HTML conversion"
-fi
+# HTML table generation moved to after Phase 7 — needs the enriched CSV
 
 # =============================================================================
 log SECTION "Phase 7 — CMDB enrichment and CSV generation"
@@ -521,6 +508,15 @@ cp "${DATA_DIR}/${INVENTDATACSV}.new" "${DATA_DIR}/$INVENTDATACSV"
 cp "${DATA_DIR}/${INVENTDATACSV}.new" "${WEBDIR}/$INVENTDATACSV"
 rm -f "${DATA_DIR}/${INVENTDATACSV}.new"
 log INFO "CSV published: $WEBDIR/$INVENTDATACSV"
+
+# Generate HTML table from enriched CSV — must be after CSV is written
+if [[ -x "${PGMDIR}/rhel_convert_html.sh" ]]; then
+    cat "${DATA_DIR}/$INVENTDATACSV" \
+        | "${PGMDIR}/rhel_convert_html.sh" "$WEBDIR/$INVENTDATAHTML"
+    log INFO "HTML table published: $WEBDIR/$INVENTDATAHTML"
+else
+    log WARN "rhel_convert_html.sh not found — skipping HTML conversion"
+fi
 
 # =============================================================================
 log SECTION "Phase 8 — Rotate historical CSV copies"

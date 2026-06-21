@@ -15,6 +15,13 @@
 #   all data files with TEST_ so nothing overlaps with normal run output.
 #   Test logs go to logs/test/ separately from production logs.
 #
+# Web assets:
+#   style.css and app.js are static files that live alongside these scripts
+#   in BASE_DIR.  They are copied to WEBDIR (or TEST_WEBDIR) at the start
+#   of every run so the web directory always has the current versions.
+#   config.js is generated fresh each run by rhel_inv_report.sh from live
+#   inventory data — it is NOT a static asset and must not be pre-staged.
+#
 # Crontab example:
 #   30 21 * * * cd /usr/local/pnc/bin/RHEL_Inventory_v2 ; \
 #     log=logs/rhel_inventory_v2_run.$(date +"%Y%m%d").log ; \
@@ -210,6 +217,28 @@ trap 'log INFO "Cleaning up PID file"; rm -f "$PIDFILE"' EXIT
 log INFO "PID $$ written to $PIDFILE"
 
 # =============================================================================
+log SECTION "Phase 0 — Web asset staging"
+# =============================================================================
+# Copy static web assets (style.css, app.js) from BASE_DIR to WEBDIR.
+# These never change between runs — we copy so WEBDIR is self-contained.
+# config.js is NOT copied here — it is generated fresh by rhel_inv_report.sh.
+# =============================================================================
+
+mkdir -p "$WEBDIR"
+
+for asset in style.css app.js; do
+    src="${BASE_DIR}/${asset}"
+    dst="${WEBDIR}/${asset}"
+    if [[ -f "$src" ]]; then
+        cp -p "$src" "$dst" && log INFO "Staged: ${asset} → ${WEBDIR}"
+    else
+        log WARN "Web asset not found in BASE_DIR: ${src}"
+        log WARN "  Ensure style.css and app.js live alongside the scripts in ${BASE_DIR}"
+        log WARN "  Pages will render without styling until the asset is placed there."
+    fi
+done
+
+# =============================================================================
 log SECTION "Phase 1 — Inventory Collection"
 # =============================================================================
 
@@ -268,6 +297,7 @@ log SECTION "RHEL Inventory Orchestrator complete"
 
 if [[ $TEST_MODE -eq 1 ]]; then
     log INFO "Test output written to: $TEST_DIR"
+    log INFO "Web assets staged to:   $WEBDIR"
     log INFO "Review results before promoting to production"
 fi
 
