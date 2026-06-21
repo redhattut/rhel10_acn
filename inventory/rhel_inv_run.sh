@@ -395,7 +395,7 @@ a { color: inherit; }
 /* =============================================================================
    Bar rows (OS / environment / location)
    ============================================================================= */
-.bars { display: flex; flex-direction: column; gap: .9rem; }
+.bars { display: flex; flex-direction: column; gap: .9rem; min-height: 180px; }
 .bar {
   display: grid;
   grid-template-columns: 84px 1fr 56px;

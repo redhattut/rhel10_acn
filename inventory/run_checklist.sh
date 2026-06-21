@@ -216,12 +216,12 @@ fi
 # 13. Location field format
 if [[ -f "$_INVCSV" && -s "$_INVCSV" ]]; then
     LOC_SAMPLE=$(grep -v "^#" "$_INVCSV" | head -1 | awk -F, '{print $3}')
-    if [[ "$LOC_SAMPLE" == *"-"* || "$LOC_SAMPLE" == "n/a" ]]; then
-        result PASS "Location field format" "Sample: $LOC_SAMPLE"
-    elif [[ -n "$LOC_SAMPLE" ]]; then
-        result WARN "Location field format" "Short code: $LOC_SAMPLE — add to expand_location() in rhel_utils.sh"
-    else
+    if [[ -z "$LOC_SAMPLE" ]]; then
         result WARN "Location field format" "Location field is empty"
+    elif [[ "$LOC_SAMPLE" == *"Greenfield-"* ]]; then
+        result WARN "Location field format" "Legacy prefix found: $LOC_SAMPLE — check expand_location() in rhel_utils.sh"
+    else
+        result PASS "Location field format" "Sample: $LOC_SAMPLE"
     fi
 fi
 

@@ -84,7 +84,7 @@ cat > "$OUT" << HTMLEOF
           <rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/>
           <rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/>
         </svg>
-        <span>Infrastructure Summary</span>
+        <span>Red Hat Linux Summary</span>
       </a>
       <a href="Monthly_Redhat_Linux_Depoloyment_Report.html" class="side-link">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -179,9 +179,18 @@ cat >> "$OUT" << HTMLEOF2
     </select>
     <select id="locF" onchange="ft()">
       <option value="">All locations</option>
+HTMLEOF2
+
+# Populate location options from LOCATIONS conf array (same source as config.js)
+if [[ -f "$CONF" ]]; then
+    for loc_code in "${LOCATIONS[@]}"; do
+        echo "      <option>${loc_code}</option>" >> "$OUT"
+    done
+fi
+
+cat >> "$OUT" << HTMLEOF3
     </select>
     <div class="inventory-actions">
-      <span class="count-badge" id="cb"></span>
       <a class="button compact" data-latest-inventory href="${INVENTDATACSV}" download>Download CSV</a>
     </div>
   </div>
@@ -224,7 +233,7 @@ cat >> "$OUT" << HTMLEOF2
           <th>Fed Enclave</th>
         </tr></thead>
         <tbody id="tb">
-HTMLEOF2
+HTMLEOF3
 
 # =============================================================================
 # Generate table rows from CSV — 32 comma-delimited fields
@@ -318,56 +327,140 @@ cat >> "$OUT" << 'FOOTEREOF'
     </div>
   </div>
 
+  <!-- Count badge + pagination — below the table -->
+  <div class="pg-bar">
+    <span class="count-badge" id="cb"></span>
+    <div class="pg-nav" id="pgNav"></div>
+    <div class="pg-size-wrap">
+      Show: <select id="pgSize" onchange="pgResize()">
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+        <option value="250">250</option>
+      </select> per page
+    </div>
+  </div>
+
 </main>
 <footer class="foot"><span>&#169; 2026 PNC &middot; OS Engineering</span></footer>
 </div><!-- /content-shell -->
 </div><!-- /app-shell -->
 
+<style>
+.pg-bar{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;padding:.85rem 0 .25rem;font-size:.82rem;color:var(--muted)}
+.pg-nav{display:flex;align-items:center;gap:.3rem;margin-left:auto}
+.pg-btn{display:inline-flex;align-items:center;justify-content:center;min-width:34px;height:34px;padding:0 .5rem;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--text);font-size:.82rem;font-weight:600;cursor:pointer;text-decoration:none;transition:background .12s,border-color .12s,color .12s}
+.pg-btn:hover{background:#f4f8ff;border-color:#cdd9f5;color:var(--blue)}
+.pg-btn.active{background:var(--blue);border-color:var(--blue);color:#fff}
+.pg-btn.disabled{opacity:.35;pointer-events:none}
+.pg-ellipsis{padding:0 .35rem;color:var(--muted)}
+.pg-size-wrap{display:flex;align-items:center;gap:.4rem}
+.pg-size-wrap select{padding:.3rem .5rem;border:1px solid var(--line);border-radius:7px;background:var(--card);color:var(--ink);font-size:.8rem}
+</style>
+
 <script>
-// Location dropdown — populated from live data, not hardcoded
 (function () {
-  const rows = Array.from(document.querySelectorAll('#tb tr'));
-  const locSel = document.getElementById('locF');
-  const cb = document.getElementById('cb');
+  const PAGE_SIZE_DEFAULT = 50;
+  let pageSize = PAGE_SIZE_DEFAULT;
+  let currentPage = 1;
 
-  if (locSel) {
-    const seen = new Set();
-    rows.forEach(function(r) {
-      const c = r.querySelectorAll('td')[2];
-      if (c && c.textContent.trim()) seen.add(c.textContent.trim());
-    });
-    Array.from(seen).sort().forEach(function(l) {
-      const o = document.createElement('option');
-      o.value = l; o.textContent = l;
-      locSel.appendChild(o);
-    });
-  }
+  // All rows in the table
+  const allRows = Array.from(document.querySelectorAll('#tb tr'));
 
-  function updateCount(v) {
-    if (cb) cb.innerHTML = 'Showing <b>' + v + '</b> of <b>' + rows.length + '</b> hosts';
-  }
-  updateCount(rows.length);
+  // Filtered rows after applying search/dropdowns
+  let filtered = allRows.slice();
 
+  const cb      = document.getElementById('cb');
+  const pgNav   = document.getElementById('pgNav');
+  const pgSzSel = document.getElementById('pgSize');
+
+  // ---- Filter logic --------------------------------------------------------
   window.ft = function () {
-    const q    = (document.getElementById('search')?.value || '').trim().toLowerCase();
-    const env  = (document.getElementById('envF')?.value   || '').toLowerCase();
-    const typ  = (document.getElementById('typF')?.value   || '').toLowerCase();
-    const os   = (document.getElementById('osF')?.value    || '').toLowerCase();
-    const loc  = (document.getElementById('locF')?.value   || '').toLowerCase();
-    let v = 0;
-    rows.forEach(function(r) {
+    const q   = (document.getElementById('search')?.value  || '').trim().toLowerCase();
+    const env = (document.getElementById('envF')?.value    || '').toLowerCase();
+    const typ = (document.getElementById('typF')?.value    || '').toLowerCase();
+    const os  = (document.getElementById('osF')?.value     || '').toLowerCase();
+    const loc = (document.getElementById('locF')?.value    || '').toLowerCase();
+
+    filtered = allRows.filter(function(r) {
       const c = r.querySelectorAll('td');
-      const show = (!q   || r.textContent.toLowerCase().includes(q))
-                && (!env  || (c[4]  && c[4].textContent.trim().toLowerCase()  === env))
-                && (!typ  || (c[1]  && c[1].textContent.trim().toLowerCase()  === typ))
-                && (!os   || (c[6]  && c[6].textContent.trim().toLowerCase()  === os))
-                && (!loc  || (c[2]  && c[2].textContent.trim().toLowerCase()  === loc));
-      r.hidden = !show;
-      if (show) v++;
+      return (!q   || r.textContent.toLowerCase().includes(q))
+          && (!env  || (c[4]  && c[4].textContent.trim().toLowerCase()  === env))
+          && (!typ  || (c[1]  && c[1].textContent.trim().toLowerCase()  === typ))
+          && (!os   || (c[6]  && c[6].textContent.trim().toLowerCase()  === os))
+          && (!loc  || (c[2]  && c[2].textContent.trim().toLowerCase()  === loc));
     });
-    updateCount(v);
+
+    currentPage = 1;
+    render();
   };
-  window.ft();
+
+  // ---- Page-size change ----------------------------------------------------
+  window.pgResize = function () {
+    pageSize = parseInt(pgSzSel.value, 10) || PAGE_SIZE_DEFAULT;
+    currentPage = 1;
+    render();
+  };
+
+  // ---- Render a page -------------------------------------------------------
+  function render() {
+    const total    = filtered.length;
+    const pages    = Math.max(1, Math.ceil(total / pageSize));
+    if (currentPage > pages) currentPage = pages;
+    const start    = (currentPage - 1) * pageSize;
+    const end      = Math.min(start + pageSize, total);
+
+    // Show/hide all rows
+    allRows.forEach(function(r) { r.hidden = true; });
+    filtered.slice(start, end).forEach(function(r) { r.hidden = false; });
+
+    // Count badge
+    if (cb) {
+      cb.innerHTML = 'Showing <b>' + (total === 0 ? 0 : start + 1) + '&ndash;' + end
+                   + '</b> of <b>' + total.toLocaleString('en-US') + '</b> all servers';
+    }
+
+    // Pagination buttons
+    renderPager(pages);
+  }
+
+  // ---- Build pager ---------------------------------------------------------
+  function renderPager(pages) {
+    if (!pgNav) return;
+    const cur = currentPage;
+
+    // Decide which page numbers to show: always first, last, cur-1..cur+1
+    const show = new Set([1, pages, cur, cur - 1, cur + 1].filter(p => p >= 1 && p <= pages));
+    const nums = Array.from(show).sort(function(a,b){return a-b;});
+
+    let html = '';
+    // Prev arrow
+    html += '<button class="pg-btn' + (cur <= 1 ? ' disabled' : '') + '" onclick="pgGo(' + (cur-1) + ')">&#8249;</button>';
+
+    let prev = 0;
+    nums.forEach(function(n) {
+      if (n - prev > 1) html += '<span class="pg-ellipsis">&hellip;</span>';
+      html += '<button class="pg-btn' + (n === cur ? ' active' : '') + '" onclick="pgGo(' + n + ')">' + n + '</button>';
+      prev = n;
+    });
+
+    // Next arrow
+    html += '<button class="pg-btn' + (cur >= pages ? ' disabled' : '') + '" onclick="pgGo(' + (cur+1) + ')">&#8250;</button>';
+
+    pgNav.innerHTML = html;
+  }
+
+  // ---- Go to page ----------------------------------------------------------
+  window.pgGo = function(n) {
+    const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+    currentPage = Math.max(1, Math.min(n, pages));
+    render();
+    // Scroll table into view
+    const tbl = document.querySelector('.tbl-card');
+    if (tbl) tbl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  // ---- Initial render ------------------------------------------------------
+  ft();
 })();
 </script>
 </body>

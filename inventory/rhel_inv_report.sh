@@ -4,7 +4,7 @@
 # =============================================================================
 # Generates:
 #   config.js                                       — live KPI data for app.js
-#   index.html                                      — Infrastructure Summary
+#   index.html                                      — Red Hat Linux Summary
 #   Monthly_Redhat_Linux_Depoloyment_Report.html    — Deployment activity (bar chart + 12 months)
 #   Monthly_Redhat_Linux_Depoloyment_Report.html    — 12-month history
 #   Annual_Redhat_Linux_Depoloyment_Report.html     — all-years history
@@ -280,7 +280,7 @@ _sidebar() {
           <rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/>
           <rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/>
         </svg>
-        <span>Infrastructure Summary</span>
+        <span>Red Hat Linux Summary</span>
       </a>
       <a href="Monthly_Redhat_Linux_Depoloyment_Report.html" class="side-link${a_dep}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -365,7 +365,7 @@ FOOTEOF
 # RPT_Main — index.html
 # =============================================================================
 RPT_Main() {
-    _html_head "RHEL Operations — Infrastructure Summary"
+    _html_head "RHEL Operations — Red Hat Linux Summary"
     _sidebar "index"
 
     cat << MAINEOF
@@ -373,7 +373,7 @@ RPT_Main() {
 <main class="page">
 
   <div class="page-head">
-    <h1>Infrastructure Summary</h1>
+    <h1>Red Hat Linux Summary</h1>
     <p>Current RHEL inventory, platform distribution, and operational status across managed environments.</p>
   </div>
 
@@ -926,22 +926,64 @@ RPT_Deployment_Annual() {
     <h1>Annual Deployment Report</h1>
     <p>New RHEL builds aggregated by year — full history from ${DEPLOYMENTDATA##*/}.</p>
   </div>
-  <div class="months">
 AEOF
 
     if [[ ! -f "$DEPLOYMENTDATA" ]]; then
-        echo "    <section class=\"card\"><p style=\"color:var(--muted)\">Deployment data not yet available.</p></section>"
-    else
-        local _ytmp; _ytmp=$(mktemp /tmp/rhel_years.XXXXXX)
-        awk -F- '$1~/^[0-9]{4}$/{print $1}' "$DEPLOYMENTDATA" | sort -ru > "$_ytmp"
-        while read -r year; do
-            local _ydtmp; _ydtmp=$(mktemp /tmp/rhel_ydata.XXXXXX)
-            grep "^${year}-" "$DEPLOYMENTDATA" > "$_ydtmp"
-            [[ -s "$_ydtmp" ]] && _render_deploy_card "${year}" "$_ydtmp"
-            rm -f "$_ydtmp"
-        done < "$_ytmp"
-        rm -f "$_ytmp"
+        echo "  <section class=\"card\"><p style=\"color:var(--muted)\">Deployment data not yet available.</p></section>"
+        echo "</main>"
+        _html_foot
+        return
     fi
+
+    # Collect all years newest-first
+    local _ytmp; _ytmp=$(mktemp /tmp/rhel_years.XXXXXX)
+    awk -F- '$1~/^[0-9]{4}$/{print $1}' "$DEPLOYMENTDATA" | sort -ru > "$_ytmp"
+
+    # Bar chart — last 3 years
+    local -a bar_labels bar_counts
+    local max_cnt=1
+    local yr_idx=0
+    while read -r year && [[ $yr_idx -lt 3 ]]; do
+        local cnt; cnt=$(grep -c "^${year}-" "$DEPLOYMENTDATA" 2>/dev/null || echo 0)
+        cnt=$(( cnt + 0 ))
+        bar_labels+=("$year")
+        bar_counts+=("$cnt")
+        [[ $cnt -gt $max_cnt ]] && max_cnt=$cnt
+        yr_idx=$(( yr_idx + 1 ))
+    done < "$_ytmp"
+    [[ $max_cnt -lt 1 ]] && max_cnt=1
+
+    local peak_idx=0 peak_val=0
+    for (( i=0; i<${#bar_counts[@]}; i++ )); do
+        [[ ${bar_counts[$i]} -gt $peak_val ]] && { peak_val=${bar_counts[$i]}; peak_idx=$i; }
+    done
+
+    echo "  <section class=\"card\" style=\"margin-bottom:1.4rem\">"
+    echo "    <div class=\"card-head\">"
+    echo "      <span class=\"chip chip-blue\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><line x1=\"18\" y1=\"20\" x2=\"18\" y2=\"10\"/><line x1=\"12\" y1=\"20\" x2=\"12\" y2=\"4\"/><line x1=\"6\" y1=\"20\" x2=\"6\" y2=\"14\"/></svg></span>"
+    echo "      <h2>Annual build volume</h2>"
+    echo "      <span class=\"sub\">last 3 years</span>"
+    echo "    </div>"
+    echo "    <div class=\"chart\">"
+    for (( i=0; i<${#bar_labels[@]}; i++ )); do
+        local apct; apct=$(awk -v n="${bar_counts[$i]}" -v d="$max_cnt" 'BEGIN{printf "%.1f", n/d*100}')
+        local peak_cls=""
+        [[ $i -eq $peak_idx ]] && peak_cls=" peak"
+        echo "      <div class=\"col${peak_cls}\"><div class=\"colbar-wrap\"><div class=\"colbar\" style=\"height:${apct}%\"><span class=\"colval\">${bar_counts[$i]}</span></div></div><span class=\"collabel\">${bar_labels[$i]}</span></div>"
+    done
+    echo "    </div>"
+    echo "  </section>"
+    echo ""
+    echo "  <div class=\"months\">"
+
+    # All year cards
+    while read -r year; do
+        local _ydtmp; _ydtmp=$(mktemp /tmp/rhel_ydata.XXXXXX)
+        grep "^${year}-" "$DEPLOYMENTDATA" > "$_ydtmp"
+        [[ -s "$_ydtmp" ]] && _render_deploy_card "${year}" "$_ydtmp"
+        rm -f "$_ydtmp"
+    done < "$_ytmp"
+    rm -f "$_ytmp"
 
     echo "  </div>"
     echo "</main>"
