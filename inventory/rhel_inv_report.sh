@@ -798,8 +798,8 @@ _render_deploy_card() {
 DEOF
 
     local virt_pct=100
-    local phys_pct=0; [[ $total -gt 0 ]] && phys_pct=$(awk "BEGIN{printf \"%.1f\",$phys/$total*100}")
-    local cloud_pct=0; [[ $total -gt 0 ]] && cloud_pct=$(awk "BEGIN{printf \"%.1f\",$cloud/$total*100}")
+    local phys_pct=0; [[ $total -gt 0 ]] && phys_pct=$(awk -v n="$phys" -v d="$total" 'BEGIN{printf "%.1f", n/d*100}')
+    local cloud_pct=0; [[ $total -gt 0 ]] && cloud_pct=$(awk -v n="$cloud" -v d="$total" 'BEGIN{printf "%.1f", n/d*100}')
 
     [[ $virt  -gt 0 ]] && echo "            <div class=\"drow\"><div class=\"drow-top\"><span class=\"nm\">Virtual</span><span class=\"ct\">${virt}</span></div><div class=\"track\"><span style=\"width:${virt_pct}%;background:var(--indigo)\"></span></div></div>"
     [[ $phys  -gt 0 ]] && echo "            <div class=\"drow\"><div class=\"drow-top\"><span class=\"nm\">Physical</span><span class=\"ct\">${phys}</span></div><div class=\"track\"><span style=\"width:${phys_pct}%;background:var(--violet)\"></span></div></div>"
@@ -818,7 +818,7 @@ DEOF2
     | while read -r cnt ver; do
         [[ -z "$cnt" || -z "$ver" ]] && continue
         local major="${ver%%.*}"
-        local pct; pct=$(awk "BEGIN{printf \"%.1f\",$cnt/$mx*100}")
+        local pct; pct=$(awk -v n="$cnt" -v d="$_maxcnt" 'BEGIN{printf "%.1f", n/d*100}')
         echo "            <div class=\"drow\"><div class=\"drow-top\"><span class=\"nm\">RHEL ${ver}</span><span class=\"ct\">${cnt}</span></div><div class=\"track\"><span style=\"width:${pct}%;background:var(--v${major})\"></span></div></div>"
     done
 
@@ -888,7 +888,7 @@ DEPHEOF
     echo "    </div>"
     echo "    <div class=\"chart\">"
     for (( i=0; i<3; i++ )); do
-        local pct; pct=$(awk "BEGIN{printf \"%.1f\",${month_counts[$i]}/$max_cnt*100}")
+        local pct; pct=$(awk -v n="${month_counts[$i]}" -v d="$max_cnt" 'BEGIN{printf "%.1f", n/d*100}')
         local peak_cls=""
         [[ $i -eq $peak_idx ]] && peak_cls=" peak"
         echo "      <div class=\"col${peak_cls}\"><div class=\"colbar-wrap\"><div class=\"colbar\" style=\"height:${pct}%\"><span class=\"colval\">${month_counts[$i]}</span></div></div><span class=\"collabel\">${month_labels[$i]}</span></div>"

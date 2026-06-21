@@ -152,15 +152,8 @@ log INFO "pssh timeout    : ${PSSH_TIMEOUT}s per host"
 log INFO "pssh error dir  : $ERRDIR"
 log INFO "Writing web data to: $WEBDIR"
 
-# Ensure our own style.css is present in WEBDIR
-# Style.css lives alongside the scripts — always copy the v2 one, never the legacy
-_OWN_CSS="${PGMDIR}/style.css"
-if [[ -f "$_OWN_CSS" ]]; then
-    cp "$_OWN_CSS" "$WEBDIR/style.css"
-    log INFO "style.css published to $WEBDIR"
-else
-    log WARN "style.css not found at $_OWN_CSS — HTML pages will be unstyled"
-fi
+# style.css is written by rhel_inv_run.sh Phase 0 before this script runs.
+# No action needed here.
 
 # The remote script outputs tagged lines:
 #   INV|...   system inventory record
