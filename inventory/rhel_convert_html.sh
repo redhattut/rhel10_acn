@@ -32,6 +32,8 @@ fi
 CONF="$(dirname "$0")/rhel_inv.conf"
 [[ -f "$CONF" ]] && . "$CONF"
 
+FOOTER_COMPANY="${SITE_FOOTER_COMPANY:-PNC}"
+FOOTER_ORG="${SITE_FOOTER_ORG:-IaaS - Data Center Infrastructure - Linux Engineering}"
 DEPLOY_CSV_BASE="${DEPLOYDATACSV##*/}"
 UPDATED_HUMAN=$(date '+%b %-d, %Y')
 
@@ -121,11 +123,12 @@ cat > "$OUT" << HTMLEOF
       </svg>
       <span>Latest Inventory CSV</span>
     </a>
-    <a class="side-link" href="${DEPLOY_CSV_BASE}" download>
+    <a class="side-link" href="Midrange_Mod/index.html">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>
+        <rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/>
+        <rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/>
       </svg>
-      <span>Deployment CSV</span>
+      <span>Midrange Mod Reports</span>
     </a>
     <div class="side-status">
       <span class="dot"></span>
@@ -341,7 +344,10 @@ cat >> "$OUT" << 'FOOTEREOF'
   </div>
 
 </main>
-<footer class="foot"><span>&#169; 2026 PNC &middot; OS Engineering</span></footer>
+FOOTEREOF
+# Footer with conf-driven text (can't use variables inside single-quoted heredoc)
+echo "<footer class=\"foot\"><span>&copy; $(date +%Y) ${FOOTER_COMPANY} &middot; ${FOOTER_ORG}</span></footer>" >> "$OUT"
+cat >> "$OUT" << 'FOOTEREOF2'
 </div><!-- /content-shell -->
 </div><!-- /app-shell -->
 
@@ -465,6 +471,6 @@ cat >> "$OUT" << 'FOOTEREOF'
 </script>
 </body>
 </html>
-FOOTEREOF
+FOOTEREOF2
 
 rm -f "$TMPCSV"

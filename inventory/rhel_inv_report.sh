@@ -54,6 +54,10 @@ UPDATED_HUMAN=$(date '+%b %-d, %Y')
 DEPLOY_CSV_BASE="${DEPLOYDATACSV##*/}"
 PKG_CSV_BASE=$(basename "${PACKAGEDATA:-RHEL_PACKAGES_v2.csv}")
 
+# Footer text — sourced from conf; fall back gracefully if not set
+FOOTER_COMPANY="${SITE_FOOTER_COMPANY:-PNC}"
+FOOTER_ORG="${SITE_FOOTER_ORG:-IaaS - Data Center Infrastructure - Linux Engineering}"
+
 # =============================================================================
 # Intermediate data — single awk pass producing four lookup files
 # .dat fields: $1=Host $2=Type(Virt/Phys) $3=OS $21=Location
@@ -205,7 +209,7 @@ window.RHEL_CONFIG = {
   site: {
     title:        "${SITE_TITLE:-RHEL Operations}",
     subtitle:     "${SITE_SUBTITLE:-Inventory & Deployment}",
-    organization: "${SITE_ORG:-OS Engineering · PNC}",
+    organization: "${SITE_ORG:-IaaS · PNC}",
     updated:      "${UPDATED_HUMAN}"
   },
   totals: {
@@ -317,11 +321,12 @@ _sidebar() {
       </svg>
       <span>Latest Inventory CSV</span>
     </a>
-    <a class="side-link" href="${DEPLOY_CSV_BASE}" download>
+    <a class="side-link" href="Midrange_Mod/index.html">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>
+        <rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/>
+        <rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/>
       </svg>
-      <span>Deployment CSV</span>
+      <span>Midrange Mod Reports</span>
     </a>
     <div class="side-status">
       <span class="dot"></span>
@@ -353,7 +358,7 @@ HEADEOF
 # _html_foot — closes content-shell, app-shell, body, html
 _html_foot() {
     cat << FOOTEOF
-<footer class="foot"><span>&copy; ${YEAR} PNC &middot; OS Engineering</span></footer>
+<footer class="foot"><span>&copy; ${YEAR} ${FOOTER_COMPANY} &middot; ${FOOTER_ORG}</span></footer>
 </div><!-- /content-shell -->
 </div><!-- /app-shell -->
 </body>
@@ -493,7 +498,7 @@ RPT_Main() {
         <ul class="res-list">
           <li><a href="Monthly_Redhat_Linux_Depoloyment_Report.html">Monthly deployments<span class="ar">&#8594;</span></a></li>
           <li><a href="Annual_Redhat_Linux_Depoloyment_Report.html">Annual deployments<span class="ar">&#8594;</span></a></li>
-          <li><a href="${DEPLOY_CSV_BASE}" download>Deployment CSV<span class="ar">&#8594;</span></a></li>
+          <li><a href="Midrange_Mod/index.html">Midrange Mod Reports<span class="ar">&#8594;</span></a></li>
         </ul>
       </div>
     </div>
@@ -726,7 +731,7 @@ APPEOF2
     </div>
   </section>
 </main>
-<footer class="foot"><span>&copy; ${YEAR} PNC &middot; OS Engineering</span></footer>
+<footer class="foot"><span>&copy; ${YEAR} ${FOOTER_COMPANY} &middot; ${FOOTER_ORG}</span></footer>
 </div><!-- /content-shell -->
 </div><!-- /app-shell -->
 <script>
@@ -844,7 +849,7 @@ RPT_Deployment_Monthly_Full() {
 <div class="content-shell">
 <main class="page">
   <div class="page-head">
-    <h1>Deployment Activity</h1>
+    <h1>Monthly Deployment Report</h1>
     <p>New RHEL builds registered across managed environments — last 12 months.</p>
   </div>
 MFEOF
@@ -991,6 +996,202 @@ AEOF
 }
 
 # =============================================================================
+# RPT_Midrange_Archive — Midrange_Mod/index.html
+# =============================================================================
+# Generates a styled archive index page for the Midrange Mod Report CSVs.
+# Matches the look of history.html (historical inventory downloads).
+# Also writes style.css and app.js into Midrange_Mod/ so it is self-contained.
+#
+# The Midrange_Mod_Report.sh script writes its CSVs to:
+#   ${WEBDIR}/Midrange_Mod/archive/Midrange_Mod_Report_*.csv
+# This page lists them newest-first with download links.
+# =============================================================================
+RPT_Midrange_Archive() {
+    local MMDIR="${WEBDIR}/Midrange_Mod"
+    local MMARCHIVE="${MMDIR}/archive"
+    mkdir -p "$MMDIR"
+
+    # Stage style.css and app.js into Midrange_Mod/ so the page renders
+    # correctly when opened directly — it must be self-contained.
+    for _asset in style.css app.js; do
+        [[ -f "${WEBDIR}/${_asset}" ]] && \
+            cp -p "${WEBDIR}/${_asset}" "${MMDIR}/${_asset}" 2>/dev/null
+    done
+
+    local OUT="${MMDIR}/index.html"
+
+    # Build file list JSON for app.js data-history-rows (reuse same pattern)
+    local HIST_ROWS=""
+    if [[ -d "$MMARCHIVE" ]]; then
+        local idx=0
+        while IFS= read -r fpath; do
+            [[ -z "$fpath" ]] && continue
+            local fname; fname=$(basename "$fpath")
+            local fsize; fsize=$(du -sh "$fpath" 2>/dev/null | cut -f1)
+            local fts_h; fts_h=$(stat -c '%y' "$fpath" 2>/dev/null \
+                | awk '{print $1, $2}' | cut -c1-16 \
+                | xargs -I{} date -d "{}" '+%b %-d, %Y %-I:%M %p %Z' 2>/dev/null)
+            [[ $idx -gt 0 ]] && HIST_ROWS+=","
+            HIST_ROWS+="
+    { \"filename\": \"${fname}\", \"timestamp\": \"${fts_h}\", \"size\": \"${fsize}\", \"href\": \"archive/${fname}\" }"
+            idx=$(( idx + 1 ))
+        done < <(find "$MMARCHIVE" -maxdepth 1 -name "*.csv" \
+                 -printf '%T@ %p\n' 2>/dev/null \
+                 | sort -rn | awk '{print $2}' | head -60)
+    fi
+
+    # Write a minimal local config.js so the sidebar brand/updated text renders
+    cat > "${MMDIR}/config.js" << MMCFGEOF
+window.RHEL_CONFIG = {
+  site: {
+    title:        "${SITE_TITLE:-RHEL Operations}",
+    subtitle:     "${SITE_SUBTITLE:-Inventory & Deployment}",
+    organization: "${SITE_ORG:-IaaS · PNC}",
+    updated:      "${UPDATED_HUMAN}"
+  },
+  totals:       { totalHosts:0, virtual:0, physical:0, cloud:0, sshFailures:0 },
+  rhelVersions: [], environments: [], locations: [],
+  downloads:    { latestInventoryCsv: "../${INVENTDATACSV}" },
+  externalLinks: [],
+  historicalFiles: [${HIST_ROWS}
+  ]
+};
+MMCFGEOF
+
+    # Write index.html
+    cat > "$OUT" << MMEOF
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>RHEL Operations — Midrange Mod Reports</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="config.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+<div class="app-shell">
+
+<aside class="sidebar">
+  <div class="side-brand">
+    <span class="brand-mark">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="4" width="18" height="16" rx="1.5"/>
+        <line x1="3" y1="9" x2="21" y2="9"/>
+        <line x1="9" y1="9" x2="9" y2="20"/>
+      </svg>
+    </span>
+    <span class="brand-text">
+      <b data-site-title>RHEL Operations</b>
+      <span data-site-subtitle>Inventory &amp; Deployment</span>
+    </span>
+  </div>
+  <nav class="side-nav" aria-label="Primary navigation">
+    <div class="nav-group">
+      <div class="nav-label">Operations</div>
+      <a href="../index.html" class="side-link">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/>
+          <rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/>
+        </svg>
+        <span>Red Hat Linux Summary</span>
+      </a>
+      <a href="../Monthly_Redhat_Linux_Depoloyment_Report.html" class="side-link">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/>
+        </svg>
+        <span>Deployments</span>
+      </a>
+      <a href="../${INVENTDATAHTML}" class="side-link">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="4" width="18" height="16" rx="1.5"/>
+          <line x1="3" y1="9" x2="21" y2="9"/>
+          <line x1="9" y1="9" x2="9" y2="20"/>
+        </svg>
+        <span>Host Inventory</span>
+      </a>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">External Tools</div>
+      <div data-external-links></div>
+    </div>
+  </nav>
+  <div class="side-bottom">
+    <div class="nav-label">Data &amp; Reports</div>
+    <a href="../history.html" class="side-link">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/>
+        <path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>
+      </svg>
+      <span>Historical Inventory</span>
+    </a>
+    <a href="index.html" class="side-link active">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/>
+        <rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/>
+      </svg>
+      <span>Midrange Mod Reports</span>
+    </a>
+    <a class="side-link" data-latest-inventory href="../${INVENTDATACSV}" download>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>
+      </svg>
+      <span>Latest Inventory CSV</span>
+    </a>
+    <div class="side-status">
+      <span class="dot"></span>
+      <span data-site-updated>Updated ${UPDATED_HUMAN}</span>
+    </div>
+  </div>
+</aside>
+
+<div class="content-shell">
+<main class="page">
+  <div class="page-head">
+    <h1>Midrange Mod Reports</h1>
+    <p>Archived Midrange Mod Report CSV files — newest first. Generated by Midrange_Mod_Report.sh.</p>
+  </div>
+  <section class="card">
+    <div class="card-head">
+      <span class="chip chip-amber">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/>
+          <path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>
+        </svg>
+      </span>
+      <h2>Report archive</h2>
+      <span class="sub">newest first</span>
+    </div>
+    <div class="history-note">
+      Files are generated by <strong>Midrange_Mod_Report.sh</strong> and archived to
+      <code style="font-size:.8rem;background:#f3f6fc;padding:2px 6px;border-radius:5px">Midrange_Mod/archive/</code>.
+    </div>
+    <div class="history-wrap">
+      <table class="history-table">
+        <thead><tr>
+          <th>Status</th>
+          <th>Filename</th>
+          <th>Generated</th>
+          <th>Size</th>
+          <th></th>
+        </tr></thead>
+        <tbody data-history-rows></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<footer class="foot"><span>&copy; ${YEAR} ${FOOTER_COMPANY} &middot; ${FOOTER_ORG}</span></footer>
+</div><!-- /content-shell -->
+</div><!-- /app-shell -->
+</body>
+</html>
+MMEOF
+
+    log INFO "Midrange_Mod/index.html written (${MMDIR})"
+}
+
+# =============================================================================
 # Main — generate all reports
 # =============================================================================
 log SECTION "Generating HTML reports and config.js"
@@ -1015,6 +1216,9 @@ log INFO "Monthly_Redhat_Linux_Depoloyment_Report.html done"
 
 RPT_Deployment_Annual         > "${WEBDIR}/Annual_Redhat_Linux_Depoloyment_Report.html"
 log INFO "Annual_Redhat_Linux_Depoloyment_Report.html done"
+
+RPT_Midrange_Archive
+log INFO "Midrange_Mod/index.html done"
 
 # Non-responsive host list
 awk '!/^#/ && $2=="?" {print $1}' "$INVENTORYDATA" | sort > "${WEBDIR}/${LOSTLIST}"
