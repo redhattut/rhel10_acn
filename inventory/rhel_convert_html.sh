@@ -72,7 +72,6 @@ FAIL_COUNT=$(( ${_fc:-0} + 0 ))
 
     grep -v "^#" "$TMPCSV" | awk -F, '
     function esc(s,    r) {
-        # Escape backslash first, then double-quote, then newline/tab
         r = s
         gsub(/\\/, "\\\\", r)
         gsub(/"/, "\\\"", r)
@@ -81,18 +80,21 @@ FAIL_COUNT=$(( ${_fc:-0} + 0 ))
         return r
     }
     {
-        printf "[\"" esc($1) "\",\"" esc($2) "\",\"" esc($3) "\",\""
-        printf esc($4) "\",\"" esc($5) "\",\"" esc($6) "\",\""
-        printf esc($7) "\",\"" esc($8) "\",\"" esc($9) "\",\""
-        printf esc($10) "\",\"" esc($11) "\",\"" esc($12) "\",\""
-        printf esc($13) "\",\"" esc($14) "\",\"" esc($15) "\",\""
-        printf esc($16) "\",\"" esc($17) "\",\"" esc($18) "\",\""
-        printf esc($19) "\",\"" esc($20) "\",\"" esc($21) "\",\""
-        printf esc($22) "\",\"" esc($23) "\",\"" esc($24) "\",\""
-        printf esc($25) "\",\"" esc($26) "\",\"" esc($27) "\",\""
-        printf esc($28) "\",\"" esc($29) "\",\"" esc($30) "\",\""
-        printf esc($31) "\",\"" esc($32) "\"],\n"
-    }'
+        # Store each row; print previous row with comma, last row without
+        if (NR > 1) printf "%s,\n", prev
+        prev = "[\"" esc($1) "\",\"" esc($2) "\",\"" esc($3) "\",\""  \
+             esc($4) "\",\"" esc($5) "\",\"" esc($6) "\",\""           \
+             esc($7) "\",\"" esc($8) "\",\"" esc($9) "\",\""           \
+             esc($10) "\",\"" esc($11) "\",\"" esc($12) "\",\""        \
+             esc($13) "\",\"" esc($14) "\",\"" esc($15) "\",\""        \
+             esc($16) "\",\"" esc($17) "\",\"" esc($18) "\",\""        \
+             esc($19) "\",\"" esc($20) "\",\"" esc($21) "\",\""        \
+             esc($22) "\",\"" esc($23) "\",\"" esc($24) "\",\""        \
+             esc($25) "\",\"" esc($26) "\",\"" esc($27) "\",\""        \
+             esc($28) "\",\"" esc($29) "\",\"" esc($30) "\",\""        \
+             esc($31) "\",\"" esc($32) "\"]"
+    }
+    END { if (prev != "") printf "%s\n", prev }'
 
     echo "];"
 } > "$DATA_JS"
@@ -110,8 +112,8 @@ cat > "$OUT" << HTMLEOF
   <link rel="stylesheet" href="style.css">
   <script src="config.js" defer></script>
   <script src="app.js" defer></script>
-  <!-- Inventory row data — fetched once, cached by browser -->
-  <script src="${DATA_JS_BASE}" defer></script>
+  <!-- Inventory row data — loaded synchronously so it is available when page script runs -->
+  <script src="${DATA_JS_BASE}"></script>
 </head>
 <body>
 <div class="app-shell">
@@ -390,20 +392,8 @@ cat >> "$OUT" << HTMLEOF3
   var pgNav  = document.getElementById('pgNav');
   var pgSz   = document.getElementById('pgSize');
 
-  // Wait for data file to load (deferred script), then initialise
-  function init() {
-    if (typeof window.RHEL_INV_DATA === 'undefined') {
-      cb.textContent = 'Loading data\u2026';
-      setTimeout(init, 100);
-      return;
-    }
-    ft();
-  }
-
   // ---- Filter ---------------------------------------------------------------
   window.ft = function () {
-    if (typeof window.RHEL_INV_DATA === 'undefined') return;
-
     var q   = (document.getElementById('search').value  || '').trim().toLowerCase();
     var env = (document.getElementById('envF').value    || '').toLowerCase();
     var typ = (document.getElementById('typF').value    || '').toLowerCase();
@@ -488,7 +478,12 @@ cat >> "$OUT" << HTMLEOF3
     if (tbl) tbl.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  init();
+  // Kick off initial render
+  if (typeof window.RHEL_INV_DATA !== 'undefined') {
+    ft();
+  } else {
+    if (cb) cb.textContent = 'No data — check ' + '${DATA_JS_BASE}';
+  }
 })();
 </script>
 </body>
