@@ -1,13 +1,18 @@
 #!/bin/bash
 # =============================================================================
-# rhel_convert_html.sh — Convert RHEL_INVENTORY CSV to styled HTML table
+# rhel_convert_html.sh — Convert RHEL_INVENTORY CSV to HTML shell + data JS
 # =============================================================================
 # Reads the enriched CSV (32 comma-separated fields) from stdin.
-# Writes a styled HTML table to the output file passed as $1.
+# Writes TWO files:
 #
-# Uses the new RHEL Fleet Dashboard style (style.css + config.js + app.js).
-# The sidebar, stat chips, pill badges, OS badges, and status indicators all
-# use CSS classes from style.css exactly — no inline overrides to the design.
+#   <output_html>          — Page shell (sidebar, controls, empty tbody), ~40KB.
+#                            Never contains data rows. Loads instantly.
+#   <output_html>.data.js  — All row data as a JS array, ~8-10MB for 22k hosts.
+#                            Fetched once by the browser and cached. The page JS
+#                            slices 50 rows at a time into the DOM on demand.
+#
+# This keeps the browser from parsing 22k DOM nodes at load time — the old
+# single-file approach produced a 21MB HTML file that locked the browser.
 #
 # CSV column order (matches CSV_HEADER in rhel_inv_collect.sh):
 #  1=Host  2=Type  3=Location  4=App Code  5=Environment  6=Build Date
@@ -19,7 +24,7 @@
 #  29=CMDB Support Group  30=CMDB Install Status
 #  31=CMDB Desired Operational State  32=Fed Enclave
 #
-# Usage: cat "$INVENTDATACSV" | ./rhel_convert_html.sh "$WEBDIR/inventory.html"
+# Usage: cat "$INVENTDATACSV" | ./rhel_convert_html.sh "$WEBDIR/$INVENTDATAHTML"
 # =============================================================================
 
 OUT="$1"
@@ -28,7 +33,11 @@ if [[ -z "$OUT" ]]; then
     exit 1
 fi
 
-# Source config so we have INVENTDATACSV, DEPLOY_CSV_BASE, UPDATED_HUMAN, etc.
+# Data JS file lives alongside the HTML — same name + .data.js
+DATA_JS="${OUT}.data.js"
+DATA_JS_BASE="$(basename "$DATA_JS")"
+
+# Source config
 CONF="$(dirname "$0")/rhel_inv.conf"
 [[ -f "$CONF" ]] && . "$CONF"
 
@@ -36,20 +45,61 @@ FOOTER_COMPANY="${SITE_FOOTER_COMPANY:-PNC}"
 FOOTER_ORG="${SITE_FOOTER_ORG:-IaaS - Data Center Infrastructure - Linux Engineering}"
 DEPLOY_CSV_BASE="${DEPLOYDATACSV##*/}"
 UPDATED_HUMAN=$(date '+%b %-d, %Y')
+YEAR=$(date +%Y)
 
-# Write stdin to temp file — allows multiple reads
+# Write stdin to temp file — need two passes (stats + data JS)
 TMPCSV=$(mktemp /tmp/rhel_inv_html.XXXXXX)
 cat > "$TMPCSV"
 
-# Stats from CSV (skip comment/header line starting with #)
+# Stats from CSV
 TOTAL_HOSTS=$(grep -v "^#" "$TMPCSV" | wc -l)
-VIRT_COUNT=$(awk  -F, '!/^#/ && $2=="Virt"'              "$TMPCSV" | wc -l)
-PHYS_COUNT=$(awk  -F, '!/^#/ && $2=="Phys"'              "$TMPCSV" | wc -l)
-CLOUD_COUNT=$(awk -F, '!/^#/ && $2=="Cloud"'             "$TMPCSV" | wc -l)
+VIRT_COUNT=$(awk  -F, '!/^#/ && $2=="Virt"'  "$TMPCSV" | wc -l)
+PHYS_COUNT=$(awk  -F, '!/^#/ && $2=="Phys"'  "$TMPCSV" | wc -l)
+CLOUD_COUNT=$(awk -F, '!/^#/ && $2=="Cloud"' "$TMPCSV" | wc -l)
 FAIL_COUNT=0
-_fc=$(grep -cE "^[^#].*,(SSHFAIL|SSHFAIL,)" "$TMPCSV" 2>/dev/null) || _fc=0
+_fc=$(awk -F, '!/^#/ && ($2=="SSHFAIL" || $7=="SSHFAIL")' "$TMPCSV" | wc -l)
 FAIL_COUNT=$(( ${_fc:-0} + 0 ))
 
+# =============================================================================
+# Write data JS file — one awk pass, escapes only what JSON requires
+# Each row becomes a JS array element: ["field1","field2",...]
+# The page JS reads RHEL_INV_DATA and slices/renders on demand.
+# =============================================================================
+{
+    echo "/* RHEL Inventory data — generated $(date) */"
+    echo "/* ${TOTAL_HOSTS} hosts */"
+    echo "window.RHEL_INV_DATA = ["
+
+    grep -v "^#" "$TMPCSV" | awk -F, '
+    function esc(s,    r) {
+        # Escape backslash first, then double-quote, then newline/tab
+        r = s
+        gsub(/\\/, "\\\\", r)
+        gsub(/"/, "\\\"", r)
+        gsub(/\n/, "\\n", r)
+        gsub(/\t/, "\\t", r)
+        return r
+    }
+    {
+        printf "[\"" esc($1) "\",\"" esc($2) "\",\"" esc($3) "\",\""
+        printf esc($4) "\",\"" esc($5) "\",\"" esc($6) "\",\""
+        printf esc($7) "\",\"" esc($8) "\",\"" esc($9) "\",\""
+        printf esc($10) "\",\"" esc($11) "\",\"" esc($12) "\",\""
+        printf esc($13) "\",\"" esc($14) "\",\"" esc($15) "\",\""
+        printf esc($16) "\",\"" esc($17) "\",\"" esc($18) "\",\""
+        printf esc($19) "\",\"" esc($20) "\",\"" esc($21) "\",\""
+        printf esc($22) "\",\"" esc($23) "\",\"" esc($24) "\",\""
+        printf esc($25) "\",\"" esc($26) "\",\"" esc($27) "\",\""
+        printf esc($28) "\",\"" esc($29) "\",\"" esc($30) "\",\""
+        printf esc($31) "\",\"" esc($32) "\"],\n"
+    }'
+
+    echo "];"
+} > "$DATA_JS"
+
+# =============================================================================
+# Write HTML shell — no data rows, loads instantly
+# =============================================================================
 cat > "$OUT" << HTMLEOF
 <!DOCTYPE html>
 <html lang="en">
@@ -60,6 +110,8 @@ cat > "$OUT" << HTMLEOF
   <link rel="stylesheet" href="style.css">
   <script src="config.js" defer></script>
   <script src="app.js" defer></script>
+  <!-- Inventory row data — fetched once, cached by browser -->
+  <script src="${DATA_JS_BASE}" defer></script>
 </head>
 <body>
 <div class="app-shell">
@@ -117,18 +169,18 @@ cat > "$OUT" << HTMLEOF
       </svg>
       <span>Historical Inventory</span>
     </a>
-    <a class="side-link" data-latest-inventory href="${INVENTDATACSV}" download>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>
-      </svg>
-      <span>Latest Inventory CSV</span>
-    </a>
-    <a class="side-link" href="Midrange_Mod/index.html">
+    <a href="Midrange_Mod/index.html" class="side-link">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/>
         <rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/>
       </svg>
       <span>Midrange Mod Reports</span>
+    </a>
+    <a class="side-link" data-latest-inventory href="${INVENTDATACSV}" download>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>
+      </svg>
+      <span>Latest Inventory CSV</span>
     </a>
     <div class="side-status">
       <span class="dot"></span>
@@ -171,7 +223,7 @@ cat > "$OUT" << HTMLEOF
       <option value="">All OS versions</option>
 HTMLEOF
 
-# Populate OS version options dynamically from config OS_VERSIONS array
+# OS version options from conf
 if [[ -f "$CONF" ]]; then
     for ver in "${OS_VERSIONS[@]}"; do
         echo "      <option>${ver}</option>" >> "$OUT"
@@ -184,7 +236,7 @@ cat >> "$OUT" << HTMLEOF2
       <option value="">All locations</option>
 HTMLEOF2
 
-# Populate location options from LOCATIONS conf array (same source as config.js)
+# Location options from conf
 if [[ -f "$CONF" ]]; then
     for loc_code in "${LOCATIONS[@]}"; do
         echo "      <option>${loc_code}</option>" >> "$OUT"
@@ -202,137 +254,25 @@ cat >> "$OUT" << HTMLEOF3
     <div class="tbl-wrap">
       <table id="t" style="min-width:2300px">
         <thead><tr>
-          <th>Host</th>
-          <th>Type</th>
-          <th>Location</th>
-          <th>App Code</th>
-          <th>Environment</th>
-          <th>Build Date</th>
-          <th>OS</th>
-          <th>Kernel</th>
-          <th>Architecture</th>
-          <th>Memory&nbsp;(MB)</th>
-          <th>CPU&nbsp;Sockets</th>
-          <th>CPU&nbsp;Cores</th>
-          <th>CPU&nbsp;Threads</th>
-          <th>CPU Type</th>
-          <th>CPU&nbsp;Speed</th>
-          <th>Server Vendor</th>
-          <th>Server Model</th>
-          <th>Serial Num</th>
-          <th>Syslog-ng</th>
-          <th>Uptime&nbsp;(days)</th>
-          <th>VMTools Ver</th>
-          <th>VMTools Run</th>
-          <th>Last Backup</th>
-          <th>IP Address</th>
-          <th>CI Device</th>
-          <th>vCenter</th>
-          <th>Build Type</th>
-          <th>DB Type</th>
-          <th>CMDB Support Group</th>
-          <th>Install Status</th>
-          <th>Op State</th>
-          <th>Fed Enclave</th>
+          <th>Host</th><th>Type</th><th>Location</th><th>App Code</th>
+          <th>Environment</th><th>Build Date</th><th>OS</th><th>Kernel</th>
+          <th>Architecture</th><th>Memory&nbsp;(MB)</th><th>CPU&nbsp;Sockets</th>
+          <th>CPU&nbsp;Cores</th><th>CPU&nbsp;Threads</th><th>CPU Type</th>
+          <th>CPU&nbsp;Speed</th><th>Server Vendor</th><th>Server Model</th>
+          <th>Serial Num</th><th>Syslog-ng</th><th>Uptime&nbsp;(days)</th>
+          <th>VMTools Ver</th><th>VMTools Run</th><th>Last Backup</th>
+          <th>IP Address</th><th>CI Device</th><th>vCenter</th>
+          <th>Build Type</th><th>DB Type</th><th>CMDB Support Group</th>
+          <th>Install Status</th><th>Op State</th><th>Fed Enclave</th>
         </tr></thead>
-        <tbody id="tb">
-HTMLEOF3
-
-# =============================================================================
-# Generate table rows from CSV — 32 comma-delimited fields
-# Uses CSS classes from style.css exactly:
-#   .pill-virt / .pill-phys              — Type column
-#   .pill-prod / .pill-uat / .pill-qa / .pill-rnd  — Environment
-#   .pill-fed / .pill-nonfed             — Fed Enclave
-#   .osb.v7 / .osb.v8 / .osb.v9         — OS version badge
-#   .st.st-ok / .st.st-fail / .st.st-unk — Syslog-ng status
-#   .sub                                 — muted secondary text
-# =============================================================================
-grep -v "^#" "$TMPCSV" | awk -F, '
-function pill_type(v) {
-    if (v == "Virt")  return "<span class=\"pill pill-virt\">Virt</span>"
-    if (v == "Phys")  return "<span class=\"pill pill-phys\">Phys</span>"
-    if (v == "Cloud") return "<span class=\"pill pill-virt\" style=\"background:#e3f7f4;color:#0f8f85\">Cloud</span>"
-    return v
-}
-function pill_env(v) {
-    lv = tolower(v)
-    if (lv == "prod") return "<span class=\"pill pill-prod\">"v"</span>"
-    if (lv == "uat")  return "<span class=\"pill pill-uat\">"v"</span>"
-    if (lv == "qa")   return "<span class=\"pill pill-qa\">"v"</span>"
-    if (lv == "rnd")  return "<span class=\"pill pill-rnd\">"v"</span>"
-    return v
-}
-function osb(v) {
-    major = substr(v, 1, 1)
-    if (major == "7") return "<span class=\"osb v7\">"v"</span>"
-    if (major == "8") return "<span class=\"osb v8\">"v"</span>"
-    if (major == "9") return "<span class=\"osb v9\">"v"</span>"
-    return v
-}
-function syslog_st(v) {
-    if (v == "active")  return "<span class=\"st st-ok\">active</span>"
-    if (v == "failed")  return "<span class=\"st st-fail\">failed</span>"
-    return "<span class=\"st st-unk\">"v"</span>"
-}
-function pill_fed(v) {
-    if (v == "Fed")     return "<span class=\"pill pill-fed\">Fed</span>"
-    if (v == "Non-Fed") return "<span class=\"pill pill-nonfed\">Non-Fed</span>"
-    return v
-}
-{
-    host=$1;  typ=$2;   loc=$3;   app=$4;   env=$5;   bdate=$6
-    os=$7;    ker=$8;   arch=$9;  mem=$10;  skt=$11;  cores=$12
-    thr=$13;  cput=$14; cpus=$15; vend=$16; model=$17; serial=$18
-    syslog=$19; uptime=$20; vmtver=$21; vmtrun=$22; lastbkp=$23
-    ip=$24;   cidev=$25; vcenter=$26; btype=$27; dbtype=$28
-    cmdbsg=$29; inst=$30; opstate=$31; fed=$32
-
-    printf "<tr>\n"
-    printf "  <td>%s</td>\n",             host
-    printf "  <td>%s</td>\n",             pill_type(typ)
-    printf "  <td>%s</td>\n",             loc
-    printf "  <td>%s</td>\n",             app
-    printf "  <td>%s</td>\n",             pill_env(env)
-    printf "  <td>%s</td>\n",             bdate
-    printf "  <td>%s</td>\n",             osb(os)
-    printf "  <td class=\"sub\">%s</td>\n", ker
-    printf "  <td>%s</td>\n",             arch
-    printf "  <td>%s</td>\n",             mem
-    printf "  <td>%s</td>\n",             skt
-    printf "  <td>%s</td>\n",             cores
-    printf "  <td>%s</td>\n",             thr
-    printf "  <td class=\"sub\">%s</td>\n", cput
-    printf "  <td>%s</td>\n",             cpus
-    printf "  <td>%s</td>\n",             vend
-    printf "  <td class=\"sub\">%s</td>\n", model
-    printf "  <td class=\"sub\">%s</td>\n", serial
-    printf "  <td>%s</td>\n",             syslog_st(syslog)
-    printf "  <td>%s</td>\n",             uptime
-    printf "  <td>%s</td>\n",             vmtver
-    printf "  <td>%s</td>\n",             vmtrun
-    printf "  <td class=\"sub\">%s</td>\n", lastbkp
-    printf "  <td>%s</td>\n",             ip
-    printf "  <td>%s</td>\n",             cidev
-    printf "  <td class=\"sub\">%s</td>\n", vcenter
-    printf "  <td>%s</td>\n",             btype
-    printf "  <td class=\"sub\">%s</td>\n", dbtype
-    printf "  <td>%s</td>\n",             cmdbsg
-    printf "  <td>%s</td>\n",             inst
-    printf "  <td>%s</td>\n",             opstate
-    printf "  <td>%s</td>\n",             pill_fed(fed)
-    printf "</tr>\n"
-}' >> "$OUT"
-
-cat >> "$OUT" << 'FOOTEREOF'
-        </tbody>
+        <tbody id="tb"></tbody>
       </table>
     </div>
   </div>
 
-  <!-- Count badge + pagination — below the table -->
+  <!-- Count + pagination below the table -->
   <div class="pg-bar">
-    <span class="count-badge" id="cb"></span>
+    <span class="count-badge" id="cb">Loading&#8230;</span>
     <div class="pg-nav" id="pgNav"></div>
     <div class="pg-size-wrap">
       Show: <select id="pgSize" onchange="pgResize()">
@@ -344,10 +284,7 @@ cat >> "$OUT" << 'FOOTEREOF'
   </div>
 
 </main>
-FOOTEREOF
-# Footer with conf-driven text (can't use variables inside single-quoted heredoc)
-echo "<footer class=\"foot\"><span>&copy; $(date +%Y) ${FOOTER_COMPANY} &middot; ${FOOTER_ORG}</span></footer>" >> "$OUT"
-cat >> "$OUT" << 'FOOTEREOF2'
+<footer class="foot"><span>&copy; ${YEAR} ${FOOTER_COMPANY} &middot; ${FOOTER_ORG}</span></footer>
 </div><!-- /content-shell -->
 </div><!-- /app-shell -->
 
@@ -357,120 +294,205 @@ cat >> "$OUT" << 'FOOTEREOF2'
 .pg-btn{display:inline-flex;align-items:center;justify-content:center;min-width:34px;height:34px;padding:0 .5rem;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--text);font-size:.82rem;font-weight:600;cursor:pointer;text-decoration:none;transition:background .12s,border-color .12s,color .12s}
 .pg-btn:hover{background:#f4f8ff;border-color:#cdd9f5;color:var(--blue)}
 .pg-btn.active{background:var(--blue);border-color:var(--blue);color:#fff}
-.pg-btn.disabled{opacity:.35;pointer-events:none}
+.pg-btn.disabled{opacity:.35;pointer-events:none;cursor:default}
 .pg-ellipsis{padding:0 .35rem;color:var(--muted)}
 .pg-size-wrap{display:flex;align-items:center;gap:.4rem}
 .pg-size-wrap select{padding:.3rem .5rem;border:1px solid var(--line);border-radius:7px;background:var(--card);color:var(--ink);font-size:.8rem}
 </style>
 
 <script>
+// =============================================================================
+// Inventory table — data-driven, DOM-minimal pagination
+// All row data lives in RHEL_INV_DATA (loaded from .data.js).
+// Only the current page's rows ever exist in the DOM.
+// =============================================================================
 (function () {
-  const PAGE_SIZE_DEFAULT = 50;
-  let pageSize = PAGE_SIZE_DEFAULT;
-  let currentPage = 1;
 
-  // All rows in the table
-  const allRows = Array.from(document.querySelectorAll('#tb tr'));
+  // CSS class helpers for pill/badge rendering
+  function pillType(v) {
+    if (v === 'Virt')  return '<span class="pill pill-virt">Virt</span>';
+    if (v === 'Phys')  return '<span class="pill pill-phys">Phys</span>';
+    if (v === 'Cloud') return '<span class="pill pill-virt" style="background:#e3f7f4;color:#0f8f85">Cloud</span>';
+    return esc(v);
+  }
+  function pillEnv(v) {
+    var m = {'prod':'pill-prod','uat':'pill-uat','qa':'pill-qa','rnd':'pill-rnd'};
+    var k = v.toLowerCase();
+    return m[k] ? '<span class="pill ' + m[k] + '">' + esc(v) + '</span>' : esc(v);
+  }
+  function osb(v) {
+    var mj = v.charAt(0);
+    if (mj === '7' || mj === '8' || mj === '9')
+      return '<span class="osb v' + mj + '">' + esc(v) + '</span>';
+    return esc(v);
+  }
+  function syslogSt(v) {
+    if (v === 'active')  return '<span class="st st-ok">active</span>';
+    if (v === 'failed')  return '<span class="st st-fail">failed</span>';
+    return '<span class="st st-unk">' + esc(v) + '</span>';
+  }
+  function pillFed(v) {
+    if (v === 'Fed')     return '<span class="pill pill-fed">Fed</span>';
+    if (v === 'Non-Fed') return '<span class="pill pill-nonfed">Non-Fed</span>';
+    return esc(v);
+  }
+  function esc(s) {
+    return String(s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function sub(s) { return '<span class="sub">' + esc(s) + '</span>'; }
 
-  // Filtered rows after applying search/dropdowns
-  let filtered = allRows.slice();
+  function buildRow(r) {
+    // r is a 32-element array from RHEL_INV_DATA
+    return '<tr>'
+      + '<td>'          + esc(r[0])     + '</td>'   // Host
+      + '<td>'          + pillType(r[1])+ '</td>'   // Type
+      + '<td>'          + esc(r[2])     + '</td>'   // Location
+      + '<td>'          + esc(r[3])     + '</td>'   // App Code
+      + '<td>'          + pillEnv(r[4]) + '</td>'   // Environment
+      + '<td>'          + esc(r[5])     + '</td>'   // Build Date
+      + '<td>'          + osb(r[6])     + '</td>'   // OS
+      + '<td>'          + sub(r[7])     + '</td>'   // Kernel
+      + '<td>'          + esc(r[8])     + '</td>'   // Architecture
+      + '<td>'          + esc(r[9])     + '</td>'   // Memory
+      + '<td>'          + esc(r[10])    + '</td>'   // CPU Sockets
+      + '<td>'          + esc(r[11])    + '</td>'   // CPU Cores
+      + '<td>'          + esc(r[12])    + '</td>'   // CPU Threads
+      + '<td>'          + sub(r[13])    + '</td>'   // CPU Type
+      + '<td>'          + esc(r[14])    + '</td>'   // CPU Speed
+      + '<td>'          + esc(r[15])    + '</td>'   // Server Vendor
+      + '<td>'          + sub(r[16])    + '</td>'   // Server Model
+      + '<td>'          + sub(r[17])    + '</td>'   // Serial Num
+      + '<td>'          + syslogSt(r[18])+'</td>'   // Syslog-ng
+      + '<td>'          + esc(r[19])    + '</td>'   // Uptime
+      + '<td>'          + esc(r[20])    + '</td>'   // VMTools Ver
+      + '<td>'          + esc(r[21])    + '</td>'   // VMTools Run
+      + '<td>'          + sub(r[22])    + '</td>'   // Last Backup
+      + '<td>'          + esc(r[23])    + '</td>'   // IP Address
+      + '<td>'          + esc(r[24])    + '</td>'   // CI Device
+      + '<td>'          + sub(r[25])    + '</td>'   // vCenter
+      + '<td>'          + esc(r[26])    + '</td>'   // Build Type
+      + '<td>'          + sub(r[27])    + '</td>'   // DB Type
+      + '<td>'          + esc(r[28])    + '</td>'   // CMDB Support Group
+      + '<td>'          + esc(r[29])    + '</td>'   // Install Status
+      + '<td>'          + esc(r[30])    + '</td>'   // Op State
+      + '<td>'          + pillFed(r[31])+ '</td>'   // Fed Enclave
+      + '</tr>';
+  }
 
-  const cb      = document.getElementById('cb');
-  const pgNav   = document.getElementById('pgNav');
-  const pgSzSel = document.getElementById('pgSize');
+  var PAGE_SIZE = 50;
+  var currentPage = 1;
+  var filtered = [];
 
-  // ---- Filter logic --------------------------------------------------------
+  var tb     = document.getElementById('tb');
+  var cb     = document.getElementById('cb');
+  var pgNav  = document.getElementById('pgNav');
+  var pgSz   = document.getElementById('pgSize');
+
+  // Wait for data file to load (deferred script), then initialise
+  function init() {
+    if (typeof window.RHEL_INV_DATA === 'undefined') {
+      cb.textContent = 'Loading data\u2026';
+      setTimeout(init, 100);
+      return;
+    }
+    ft();
+  }
+
+  // ---- Filter ---------------------------------------------------------------
   window.ft = function () {
-    const q   = (document.getElementById('search')?.value  || '').trim().toLowerCase();
-    const env = (document.getElementById('envF')?.value    || '').toLowerCase();
-    const typ = (document.getElementById('typF')?.value    || '').toLowerCase();
-    const os  = (document.getElementById('osF')?.value     || '').toLowerCase();
-    const loc = (document.getElementById('locF')?.value    || '').toLowerCase();
+    if (typeof window.RHEL_INV_DATA === 'undefined') return;
 
-    filtered = allRows.filter(function(r) {
-      const c = r.querySelectorAll('td');
-      return (!q   || r.textContent.toLowerCase().includes(q))
-          && (!env  || (c[4]  && c[4].textContent.trim().toLowerCase()  === env))
-          && (!typ  || (c[1]  && c[1].textContent.trim().toLowerCase()  === typ))
-          && (!os   || (c[6]  && c[6].textContent.trim().toLowerCase()  === os))
-          && (!loc  || (c[2]  && c[2].textContent.trim().toLowerCase()  === loc));
+    var q   = (document.getElementById('search').value  || '').trim().toLowerCase();
+    var env = (document.getElementById('envF').value    || '').toLowerCase();
+    var typ = (document.getElementById('typF').value    || '').toLowerCase();
+    var os  = (document.getElementById('osF').value     || '').toLowerCase();
+    var loc = (document.getElementById('locF').value    || '').toLowerCase();
+
+    filtered = window.RHEL_INV_DATA.filter(function(r) {
+      if (env && r[4].toLowerCase()  !== env) return false;
+      if (typ && r[1].toLowerCase()  !== typ) return false;
+      if (os  && r[6].toLowerCase()  !== os)  return false;
+      if (loc && r[2].toLowerCase()  !== loc) return false;
+      if (q) {
+        // Search across all 32 fields joined — fast single-pass
+        return r.join('\x00').toLowerCase().indexOf(q) !== -1;
+      }
+      return true;
     });
 
     currentPage = 1;
     render();
   };
 
-  // ---- Page-size change ----------------------------------------------------
+  // ---- Page size change -----------------------------------------------------
   window.pgResize = function () {
-    pageSize = parseInt(pgSzSel.value, 10) || PAGE_SIZE_DEFAULT;
+    PAGE_SIZE = parseInt(pgSz.value, 10) || 50;
     currentPage = 1;
     render();
   };
 
-  // ---- Render a page -------------------------------------------------------
+  // ---- Render current page --------------------------------------------------
   function render() {
-    const total    = filtered.length;
-    const pages    = Math.max(1, Math.ceil(total / pageSize));
+    var total  = filtered.length;
+    var pages  = Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (currentPage > pages) currentPage = pages;
-    const start    = (currentPage - 1) * pageSize;
-    const end      = Math.min(start + pageSize, total);
 
-    // Show/hide all rows
-    allRows.forEach(function(r) { r.hidden = true; });
-    filtered.slice(start, end).forEach(function(r) { r.hidden = false; });
+    var start  = (currentPage - 1) * PAGE_SIZE;
+    var end    = Math.min(start + PAGE_SIZE, total);
+    var slice  = filtered.slice(start, end);
+
+    // Build all row HTML in one string — single innerHTML write, much faster
+    // than appending individual rows
+    tb.innerHTML = slice.map(buildRow).join('');
 
     // Count badge
-    if (cb) {
-      cb.innerHTML = 'Showing <b>' + (total === 0 ? 0 : start + 1) + '&ndash;' + end
-                   + '</b> of <b>' + total.toLocaleString('en-US') + '</b> all servers';
-    }
+    cb.innerHTML = 'Showing <b>' + (total === 0 ? 0 : start + 1)
+                 + '&ndash;' + end + '</b> of <b>'
+                 + total.toLocaleString('en-US') + '</b> hosts';
 
-    // Pagination buttons
     renderPager(pages);
   }
 
-  // ---- Build pager ---------------------------------------------------------
+  // ---- Pager ----------------------------------------------------------------
   function renderPager(pages) {
-    if (!pgNav) return;
-    const cur = currentPage;
+    var cur  = currentPage;
+    var show = {};
+    [1, pages, cur - 1, cur, cur + 1].forEach(function(p) {
+      if (p >= 1 && p <= pages) show[p] = true;
+    });
+    var nums = Object.keys(show).map(Number).sort(function(a,b){return a-b;});
 
-    // Decide which page numbers to show: always first, last, cur-1..cur+1
-    const show = new Set([1, pages, cur, cur - 1, cur + 1].filter(p => p >= 1 && p <= pages));
-    const nums = Array.from(show).sort(function(a,b){return a-b;});
-
-    let html = '';
-    // Prev arrow
-    html += '<button class="pg-btn' + (cur <= 1 ? ' disabled' : '') + '" onclick="pgGo(' + (cur-1) + ')">&#8249;</button>';
-
-    let prev = 0;
+    var html = '<button class="pg-btn' + (cur <= 1 ? ' disabled' : '')
+             + '" onclick="pgGo(' + (cur-1) + ')">&#8249;</button>';
+    var prev = 0;
     nums.forEach(function(n) {
       if (n - prev > 1) html += '<span class="pg-ellipsis">&hellip;</span>';
-      html += '<button class="pg-btn' + (n === cur ? ' active' : '') + '" onclick="pgGo(' + n + ')">' + n + '</button>';
+      html += '<button class="pg-btn' + (n === cur ? ' active' : '')
+            + '" onclick="pgGo(' + n + ')">' + n + '</button>';
       prev = n;
     });
-
-    // Next arrow
-    html += '<button class="pg-btn' + (cur >= pages ? ' disabled' : '') + '" onclick="pgGo(' + (cur+1) + ')">&#8250;</button>';
+    html += '<button class="pg-btn' + (cur >= pages ? ' disabled' : '')
+          + '" onclick="pgGo(' + (cur+1) + ')">&#8250;</button>';
 
     pgNav.innerHTML = html;
   }
 
-  // ---- Go to page ----------------------------------------------------------
+  // ---- Go to page -----------------------------------------------------------
   window.pgGo = function(n) {
-    const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+    var pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
     currentPage = Math.max(1, Math.min(n, pages));
     render();
-    // Scroll table into view
-    const tbl = document.querySelector('.tbl-card');
+    var tbl = document.querySelector('.tbl-card');
     if (tbl) tbl.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  // ---- Initial render ------------------------------------------------------
-  ft();
+  init();
 })();
 </script>
 </body>
 </html>
-FOOTEREOF2
+HTMLEOF3
 
 rm -f "$TMPCSV"
