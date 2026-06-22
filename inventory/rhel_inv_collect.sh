@@ -443,7 +443,24 @@ current_file == cmdb_file && !/^#/ {
 # ============================================================
 current_file == inv_file && !/^#/ && NF >= 1 {
     host = $1
+    typ  = $2
+
+    # Skip non-RHEL hosts entirely — OS field "?" means no /etc/redhat-release
+    # Ubuntu, Debian, other Linux variants get "?" and must not appear in output
+    if ($3 == "?") { next }
+
     loc  = expand_loc($21)
+
+    # If location looks like an IP address (set by duplicate PNC_PROVISION_CONFIG
+    # block on repurposed servers), replace with "unknown"
+    if (loc ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) loc = "unknown"
+
+    # Cloud servers live in Azure datacenters — override type to "Cloud"
+    # so the inventory page cloud count matches the index page
+    if (loc == "AZCE" || loc == "AZE2") typ = "Cloud"
+
+    # SSHFAIL stubs: type field is already "SSHFAIL" — pass through as-is
+    # (loc will be "n/a", typ stays "SSHFAIL")
 
     bdate = na($28)
     if (bdate == "n/a" && (host in deploy_date))
@@ -459,7 +476,7 @@ current_file == inv_file && !/^#/ && NF >= 1 {
         missing++
     }
 
-    print host "," $2 "," loc "," na($26) "," na($27) "," bdate "," \
+    print host "," typ "," loc "," na($26) "," na($27) "," bdate "," \
           na($3) "," na($4) "," na($5) "," na($6) "," na($7) "," \
           na($8) "," na($9) "," na($10) "," na($11) "," na($12) "," \
           na($13) "," na($14) "," na($15) "," na($16) "," na($17) "," \

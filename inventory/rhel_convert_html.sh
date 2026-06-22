@@ -156,6 +156,20 @@ cat > "$OUT" << HTMLEOF
         </svg>
         <span>Host Inventory</span>
       </a>
+      <a href="history.html" class="side-link">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/>
+          <path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>
+        </svg>
+        <span>Historical Inventory</span>
+      </a>
+      <a href="Midrange_Mod/index.html" class="side-link">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M2 20h20"/><path d="M4 20V10l8-6 8 6v10"/>
+          <path d="M10 20v-6h4v6"/>
+        </svg>
+        <span>Midrange Mod Reports</span>
+      </a>
     </div>
     <div class="nav-group">
       <div class="nav-label">External Tools</div>
@@ -163,21 +177,6 @@ cat > "$OUT" << HTMLEOF
     </div>
   </nav>
   <div class="side-bottom">
-    <div class="nav-label">Data &amp; Reports</div>
-    <a href="history.html" class="side-link">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/>
-        <path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>
-      </svg>
-      <span>Historical Inventory</span>
-    </a>
-    <a href="Midrange_Mod/index.html" class="side-link">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/>
-        <rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/>
-      </svg>
-      <span>Midrange Mod Reports</span>
-    </a>
     <a class="side-link" data-latest-inventory href="${INVENTDATACSV}" download>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>

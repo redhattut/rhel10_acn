@@ -253,12 +253,13 @@ log INFO "config.js written"
 # active-page: index | deployments | inventory | history | "" (none)
 _sidebar() {
     local active="$1"
-    local a_idx="" a_dep="" a_inv="" a_his=""
+    local a_idx="" a_dep="" a_inv="" a_his="" a_mid=""
     case "$active" in
         index)       a_idx=" active" ;;
         deployments) a_dep=" active" ;;
         inventory)   a_inv=" active" ;;
         history)     a_his=" active" ;;
+        midrange)    a_mid=" active" ;;
     esac
 
     cat << SIDEEOF
@@ -300,6 +301,20 @@ _sidebar() {
         </svg>
         <span>Host Inventory</span>
       </a>
+      <a href="history.html" class="side-link${a_his}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/>
+          <path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>
+        </svg>
+        <span>Historical Inventory</span>
+      </a>
+      <a href="Midrange_Mod/index.html" class="side-link${a_mid}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M2 20h20"/><path d="M4 20V10l8-6 8 6v10"/>
+          <path d="M10 20v-6h4v6"/>
+        </svg>
+        <span>Midrange Mod Reports</span>
+      </a>
     </div>
     <div class="nav-group">
       <div class="nav-label">External Tools</div>
@@ -307,26 +322,11 @@ _sidebar() {
     </div>
   </nav>
   <div class="side-bottom">
-    <div class="nav-label">Data &amp; Reports</div>
-    <a href="history.html" class="side-link${a_his}">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/>
-        <path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>
-      </svg>
-      <span>Historical Inventory</span>
-    </a>
     <a class="side-link" data-latest-inventory href="${INVENTDATACSV}" download>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>
       </svg>
       <span>Latest Inventory CSV</span>
-    </a>
-    <a class="side-link" href="Midrange_Mod/index.html">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/>
-        <rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/>
-      </svg>
-      <span>Midrange Mod Reports</span>
     </a>
     <div class="side-status">
       <span class="dot"></span>
@@ -665,17 +665,72 @@ LOCBEOF
 # =============================================================================
 RPT_by_Mnemonic() {
     local GRAND
-    GRAND=$(grep -v "^#" "$INVENTORYDATA" | wc -l)
+    GRAND=$(grep -vc "^#" "$INVENTORYDATA" 2>/dev/null || echo 0)
+
+    # Build series metadata from OS_SERIES conf array
+    # Each entry: "Label:ver1,ver2,..."  e.g. "RHEL 8.x Series:8.8,8.10"
+    # We extract: series label (shortened to "RHEL 8", "RHEL 9")
+    # and the comma-separated version list for counting
+    local -a SERIES_LABELS SERIES_VERS
+    for entry in "${OS_SERIES[@]}"; do
+        local slabel="${entry%%:*}"
+        local svers="${entry##*:}"
+        # Shorten "RHEL 8.x Series" → "RHEL 8", "RHEL 9.x Series" → "RHEL 9"
+        local sshort; sshort=$(echo "$slabel" | sed 's/\.x Series//')
+        SERIES_LABELS+=("$sshort")
+        SERIES_VERS+=("$svers")
+    done
+    local NSERIES=${#SERIES_LABELS[@]}
+
+    # Build CSV for Application.html download — written to WEBDIR
+    local APP_CSV="${WEBDIR}/Application.csv"
+    {
+        # Header
+        printf "App Code,Total,Virt,Phys,Cloud"
+        for (( s=0; s<NSERIES; s++ )); do
+            printf ",%s" "${SERIES_LABELS[$s]}"
+        done
+        printf "\n"
+
+        awk '!/^#/{print $26}' "$INVENTORYDATA" | sort -u \
+        | while read -r APP; do
+            [[ -z "$APP" || "$APP" == "n/a" ]] && continue
+            local STOTAL; STOTAL=$(grep -c "^$APP " "$APPDATAPLAT" 2>/dev/null || echo 0)
+            STOTAL=$(( STOTAL + 0 ))
+            [[ $STOTAL -eq 0 ]] && continue
+            local VIRT; VIRT=$(awk -v a="$APP" '$1==a && $2=="Virt"' "$APPDATAPLAT" | wc -l)
+            local PHYS; PHYS=$(awk -v a="$APP" '$1==a && $2=="Phys"' "$APPDATAPLAT" | wc -l)
+            local CLOUD; CLOUD=$(awk -v a="$APP" '$1==a && $2=="Cloud"' "$APPDATAPLAT" | wc -l)
+            printf "%s,%d,%d,%d,%d" "$APP" "$STOTAL" "$VIRT" "$PHYS" "$CLOUD"
+            for (( s=0; s<NSERIES; s++ )); do
+                local vers="${SERIES_VERS[$s]}"
+                local cnt
+                cnt=$(awk -v a="$APP" -v vlist="$vers" '
+                    BEGIN { n=split(vlist,v,","); for(i=1;i<=n;i++) ok[v[i]]=1 }
+                    $1==a && ($2 in ok)
+                ' "$APPDATAREL" | wc -l)
+                printf ",%d" "$cnt"
+            done
+            printf "\n"
+        done
+    } > "$APP_CSV"
+    log INFO "Application CSV written: $APP_CSV"
 
     _html_head "RHEL Operations — Inventory by Application Code"
     _sidebar ""
+
+    # Build thead series columns
+    local SERIES_TH=""
+    for (( s=0; s<NSERIES; s++ )); do
+        SERIES_TH+="            <th onclick=\"sortApp($((s+5)))\" style=\"cursor:pointer;text-align:right\">${SERIES_LABELS[$s]} &#8597;</th>\n"
+    done
 
     cat << APPEOF2
 <div class="content-shell">
 <main class="page">
   <div class="page-head">
     <h1>Inventory by Application Code</h1>
-    <p>Host counts, platform split, and OS versions grouped by application mnemonic.</p>
+    <p>Host counts, platform split, and OS version distribution grouped by application mnemonic.</p>
   </div>
   <section class="card">
     <div class="card-head">
@@ -685,6 +740,7 @@ RPT_by_Mnemonic() {
     </div>
     <div class="controls" style="margin-bottom:1rem">
       <input type="text" id="appSearch" placeholder="Filter by app code&#8230;" oninput="filterApp()" style="min-width:220px">
+      <a class="button compact" href="Application.csv" download style="margin-left:auto">Download CSV</a>
     </div>
     <div class="tbl-card">
       <div class="tbl-wrap">
@@ -692,39 +748,74 @@ RPT_by_Mnemonic() {
           <thead><tr>
             <th onclick="sortApp(0)" style="cursor:pointer">App Code &#8597;</th>
             <th onclick="sortApp(1)" style="cursor:pointer;text-align:right">Total &#8597;</th>
-            <th style="text-align:right">Virt</th>
-            <th style="text-align:right">Phys</th>
-            <th>OS Versions</th>
-          </tr></thead>
-          <tbody id="appBody">
+            <th onclick="sortApp(2)" style="cursor:pointer;text-align:right">Virt &#8597;</th>
+            <th onclick="sortApp(3)" style="cursor:pointer;text-align:right">Phys &#8597;</th>
+            <th onclick="sortApp(4)" style="cursor:pointer;text-align:right">Cloud &#8597;</th>
 APPEOF2
+
+    # Emit series column headers
+    for (( s=0; s<NSERIES; s++ )); do
+        echo "            <th onclick=\"sortApp($((s+5)))\" style=\"cursor:pointer;text-align:right\">${SERIES_LABELS[$s]} &#8597;</th>"
+    done
+
+    echo "          </tr></thead>"
+    echo "          <tbody id=\"appBody\">"
 
     awk '!/^#/{print $26}' "$INVENTORYDATA" | sort -u \
     | while read -r APP; do
         [[ -z "$APP" || "$APP" == "n/a" ]] && continue
-        STOTAL=$(grep -c "^$APP " "$APPDATAPLAT" 2>/dev/null || echo 0)
+        local STOTAL; STOTAL=$(grep -c "^$APP " "$APPDATAPLAT" 2>/dev/null || echo 0)
         STOTAL=$(( STOTAL + 0 ))
-        VIRT=$(grep "^$APP " "$APPDATAPLAT" | awk '$2=="Virt"' | wc -l)
-        PHYS=$(grep "^$APP " "$APPDATAPLAT" | awk '$2=="Phys"' | wc -l)
-        APPLO=$(echo "$APP" | tr '[:upper:]' '[:lower:]')
-        OS_LIST=$(grep "^$APP " "$APPDATAREL" | awk '{print $2}' \
-            | sort | uniq -c | sort -rn | head -5 \
-            | awk 'BEGIN{sep=""} {printf "%sRHEL %s [%s]", sep, $2, $1; sep=", "}')
+        [[ $STOTAL -eq 0 ]] && continue
+        local VIRT; VIRT=$(awk -v a="$APP" '$1==a && $2=="Virt"' "$APPDATAPLAT" | wc -l)
+        local PHYS; PHYS=$(awk -v a="$APP" '$1==a && $2=="Phys"' "$APPDATAPLAT" | wc -l)
+        local CLOUD; CLOUD=$(awk -v a="$APP" '$1==a && $2=="Cloud"' "$APPDATAPLAT" | wc -l)
+        local APPLO; APPLO=$(echo "$APP" | tr '[:upper:]' '[:lower:]')
+
         echo "            <tr data-app=\"${APPLO}\" data-total=\"${STOTAL}\">"
         echo "              <td style=\"font-weight:600;color:var(--ink)\">${APP}</td>"
         echo "              <td style=\"text-align:right;font-weight:700\">${STOTAL}</td>"
         echo "              <td style=\"text-align:right\" class=\"sub\">${VIRT}</td>"
         echo "              <td style=\"text-align:right\" class=\"sub\">${PHYS}</td>"
-        echo "              <td class=\"sub\">${OS_LIST}</td>"
+        echo "              <td style=\"text-align:right\" class=\"sub\">${CLOUD}</td>"
+
+        for (( s=0; s<NSERIES; s++ )); do
+            local vers="${SERIES_VERS[$s]}"
+            local cnt
+            cnt=$(awk -v a="$APP" -v vlist="$vers" '
+                BEGIN { n=split(vlist,v,","); for(i=1;i<=n;i++) ok[v[i]]=1 }
+                $1==a && ($2 in ok)
+            ' "$APPDATAREL" | wc -l)
+            echo "              <td style=\"text-align:right\" class=\"sub\">${cnt}</td>"
+        done
         echo "            </tr>"
     done
+
+    # Grand total row — series totals
+    local GT_COLS=""
+    for (( s=0; s<NSERIES; s++ )); do
+        local vers="${SERIES_VERS[$s]}"
+        local tcnt
+        tcnt=$(awk -v vlist="$vers" '
+            BEGIN { n=split(vlist,v,","); for(i=1;i<=n;i++) ok[v[i]]=1 }
+            $2 in ok
+        ' "$APPDATAREL" | wc -l)
+        GT_COLS+="              <td style=\"text-align:right;font-weight:700\">${tcnt}</td>\n"
+    done
+
+    local GT_VIRT GT_PHYS GT_CLOUD
+    GT_VIRT=$(awk '$2=="Virt"'  "$APPDATAPLAT" | wc -l)
+    GT_PHYS=$(awk '$2=="Phys"'  "$APPDATAPLAT" | wc -l)
+    GT_CLOUD=$(awk '$2=="Cloud"' "$APPDATAPLAT" | wc -l)
 
     cat << APPJSEOF
             <tr style="border-top:2px solid var(--line)">
               <td style="font-weight:700;color:var(--ink)">Grand Total</td>
               <td style="text-align:right;font-weight:700">${GRAND}</td>
-              <td colspan="3"></td>
-            </tr>
+              <td style="text-align:right;font-weight:700">${GT_VIRT}</td>
+              <td style="text-align:right;font-weight:700">${GT_PHYS}</td>
+              <td style="text-align:right;font-weight:700">${GT_CLOUD}</td>
+$(printf '%b' "$GT_COLS")            </tr>
           </tbody>
         </table>
       </div>
@@ -739,14 +830,14 @@ APPEOF2
   const rows = Array.from(document.querySelectorAll('#appBody tr[data-app]'));
   const countEl = document.getElementById('appCount');
   if (countEl) countEl.textContent = rows.length + ' application codes';
-  let sortDir = 1;
+  const sortDirs = {};
   window.sortApp = function(col) {
-    sortDir *= -1;
+    const dir = sortDirs[col] = -(sortDirs[col] || 1);
     rows.sort(function(a, b) {
       const va = a.querySelectorAll('td')[col].textContent.trim();
       const vb = b.querySelectorAll('td')[col].textContent.trim();
-      return col === 0 ? va.localeCompare(vb) * sortDir
-                       : (parseInt(va) - parseInt(vb)) * sortDir;
+      return col === 0 ? va.localeCompare(vb) * dir
+                       : (parseInt(va)||0 - (parseInt(vb)||0)) * dir;
     });
     const tb = document.getElementById('appBody');
     rows.forEach(function(r){ tb.insertBefore(r, tb.lastElementChild); });
@@ -1111,6 +1202,20 @@ MMCFGEOF
         </svg>
         <span>Host Inventory</span>
       </a>
+      <a href="../history.html" class="side-link">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/>
+          <path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>
+        </svg>
+        <span>Historical Inventory</span>
+      </a>
+      <a href="index.html" class="side-link active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M2 20h20"/><path d="M4 20V10l8-6 8 6v10"/>
+          <path d="M10 20v-6h4v6"/>
+        </svg>
+        <span>Midrange Mod Reports</span>
+      </a>
     </div>
     <div class="nav-group">
       <div class="nav-label">External Tools</div>
@@ -1118,21 +1223,6 @@ MMCFGEOF
     </div>
   </nav>
   <div class="side-bottom">
-    <div class="nav-label">Data &amp; Reports</div>
-    <a href="../history.html" class="side-link">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/>
-        <path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>
-      </svg>
-      <span>Historical Inventory</span>
-    </a>
-    <a href="index.html" class="side-link active">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/>
-        <rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/>
-      </svg>
-      <span>Midrange Mod Reports</span>
-    </a>
     <a class="side-link" data-latest-inventory href="../${INVENTDATACSV}" download>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>
@@ -1221,7 +1311,7 @@ RPT_Midrange_Archive
 log INFO "Midrange_Mod/index.html done"
 
 # Non-responsive host list
-awk '!/^#/ && $2=="?" {print $1}' "$INVENTORYDATA" | sort > "${WEBDIR}/${LOSTLIST}"
+awk '!/^#/ && ($2=="SSHFAIL" || $3=="SSHFAIL") {print $1}' "$INVENTORYDATA" | sort > "${WEBDIR}/${LOSTLIST}"
 LOSTCOUNT=$(wc -l < "${WEBDIR}/${LOSTLIST}")
 log INFO "Non-responsive hosts: $LOSTCOUNT — ${WEBDIR}/${LOSTLIST}"
 

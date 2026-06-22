@@ -90,6 +90,32 @@ while IFS= read -r raw; do
             if [[ "$line" == FAILURE* ]]; then
                 echo "$(date '+%Y-%m-%d %H:%M:%S') PSSH_FAILURE: $raw" >> "$ERR_LOG"
                 (( count_err++ ))
+
+                # Extract hostname from pssh FAILURE line.
+                # Format: "FAILURE <hostname> ..."  or from raw "hostname: FAILURE ..."
+                # Try raw first (most reliable — pssh prefixes the hostname)
+                _fail_host=""
+                if [[ "$raw" == *": "* ]]; then
+                    _fail_host="${raw%%: *}"
+                    _fail_host="${_fail_host##* }"   # strip any leading number
+                fi
+                # Fallback: parse from "FAILURE <hostname>" in the stripped line
+                if [[ -z "$_fail_host" ]]; then
+                    _fail_host=$(echo "$line" | awk '{print $2}')
+                fi
+                # Strip FQDN suffix if present — keep short hostname
+                _fail_host="${_fail_host%%.*}"
+
+                # Write a stub INV record so the host appears in the .dat
+                # and can be counted as an SSH failure in reports.
+                # Format matches rhel_remote_scan.sh INV output (28 space-delimited fields):
+                # Host Type OS Kernel Arch Mem Skt Cores Thds CPUType CPUSpd Vendor Model
+                # Serial Syslog Uptime VMVer VMRun LastBkp IP Loc CIDev vCenter BldType
+                # DBType AppCode Env BuildDate
+                if [[ -n "$_fail_host" ]]; then
+                    echo "$_fail_host SSHFAIL SSHFAIL n/a n/a 0 0 0 0 n/a 0 n/a n/a n/a SSHFAIL 0 n/a N UNKNOWN n/a n/a n/a n/a n/a n/a n/a n/a n/a" >> "$INV_OUT"
+                    (( count_inv++ ))
+                fi
             else
                 (( count_skip++ ))
             fi
