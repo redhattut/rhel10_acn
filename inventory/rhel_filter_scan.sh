@@ -83,47 +83,59 @@ while IFS= read -r raw; do
     (( ${#line} == 0 )) && continue
 
     # --- Detect and log pssh status lines ------------------------------------
-    # pssh emits "hostname: [1] ...", "SUCCESS", "FAILURE", "[stderr]" etc.
-    # The remote script never emits lines starting with these tokens.
+    # pssh --inline-stdout emits status lines in two formats:
+    #
+    # Format A (bare):   "SUCCESS hostname"  or  "FAILURE hostname ..."
+    # Format B (numbered): "[1] 01:36:06 [SUCCESS] hostname"
+    #                      "[1] 01:36:06 [FAILURE] hostname Exited with error code 255"
+    #
+    # After stripping the "hostname: " prefix, Format B lines start with "[N]"
+    # and contain "[FAILURE]" or "[SUCCESS]" as a token inside the line.
+    # We must check for [FAILURE] content BEFORE doing the generic [* skip.
+    #
+    # The remote script (rhel_remote_scan.sh) never emits lines starting with
+    # SUCCESS, FAILURE, [, or containing [FAILURE] as a pssh status token.
+
+    _fail_host=""
+
     case "$line" in
-        SUCCESS*|FAILURE*|\[*|\[stderr\]*)
-            if [[ "$line" == FAILURE* ]]; then
-                echo "$(date '+%Y-%m-%d %H:%M:%S') PSSH_FAILURE: $raw" >> "$ERR_LOG"
-                (( count_err++ ))
+        # Format A bare FAILURE — "FAILURE hostname ..."
+        FAILURE*)
+            echo "$(date '+%Y-%m-%d %H:%M:%S') PSSH_FAILURE: $raw" >> "$ERR_LOG"
+            (( count_err++ ))
+            # Hostname is the second word
+            _fail_host=$(echo "$line" | awk '{print $2}')
+            ;;
 
-                # Extract hostname from pssh FAILURE line.
-                # Format: "FAILURE <hostname> ..."  or from raw "hostname: FAILURE ..."
-                # Try raw first (most reliable — pssh prefixes the hostname)
-                _fail_host=""
-                if [[ "$raw" == *": "* ]]; then
-                    _fail_host="${raw%%: *}"
-                    _fail_host="${_fail_host##* }"   # strip any leading number
-                fi
-                # Fallback: parse from "FAILURE <hostname>" in the stripped line
-                if [[ -z "$_fail_host" ]]; then
-                    _fail_host=$(echo "$line" | awk '{print $2}')
-                fi
-                # Strip FQDN suffix if present — keep short hostname
-                _fail_host="${_fail_host%%.*}"
+        # Format B numbered — "[1] HH:MM:SS [FAILURE] hostname ..."
+        *\[FAILURE\]*)
+            echo "$(date '+%Y-%m-%d %H:%M:%S') PSSH_FAILURE: $raw" >> "$ERR_LOG"
+            (( count_err++ ))
+            # Hostname follows immediately after [FAILURE] token
+            _fail_host=$(echo "$line" | sed 's/.*\[FAILURE\] //' | awk '{print $1}')
+            ;;
 
-                # Write a stub INV record so the host appears in the .dat
-                # and can be counted as an SSH failure in reports.
-                # Format matches rhel_remote_scan.sh INV output (28 space-delimited fields):
-                # Host Type OS Kernel Arch Mem Skt Cores Thds CPUType CPUSpd Vendor Model
-                # Serial Syslog Uptime VMVer VMRun LastBkp IP Loc CIDev vCenter BldType
-                # DBType AppCode Env BuildDate
-                if [[ -n "$_fail_host" ]]; then
-                    echo "$_fail_host SSHFAIL SSHFAIL n/a n/a 0 0 0 0 n/a 0 n/a n/a n/a SSHFAIL 0 n/a N UNKNOWN n/a n/a n/a n/a n/a n/a n/a n/a n/a" >> "$INV_OUT"
-                    (( count_inv++ ))
-                fi
-            else
-                (( count_skip++ ))
-            fi
+        # All other pssh status/metadata lines — skip silently
+        SUCCESS*|\[*|\[stderr\]*)
+            (( count_skip++ ))
             continue
             ;;
     esac
 
-    # Also skip lines that look like pssh's "[1] ..." numbering
+    # If we extracted a failure hostname, write a stub INV record
+    # so the host appears in the .dat and is counted as SSH failure.
+    # Format matches rhel_remote_scan.sh INV output (28 space-delimited fields).
+    if [[ -n "$_fail_host" ]]; then
+        # Strip FQDN suffix — keep short hostname to match MASTERHOSTLIST format
+        _fail_host="${_fail_host%%.*}"
+        if [[ -n "$_fail_host" && "$_fail_host" != "[FAILURE]" ]]; then
+            echo "$_fail_host SSHFAIL SSHFAIL n/a n/a 0 0 0 0 n/a 0 n/a n/a n/a SSHFAIL 0 n/a N UNKNOWN n/a n/a n/a n/a n/a n/a n/a n/a n/a" >> "$INV_OUT"
+            (( count_inv++ ))
+        fi
+        continue
+    fi
+
+    # Skip pssh numbered lines that aren't FAILURE (belt-and-suspenders)
     if [[ "$line" =~ ^\[[0-9]+\] ]]; then
         (( count_skip++ ))
         continue

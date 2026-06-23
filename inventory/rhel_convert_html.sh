@@ -177,12 +177,6 @@ cat > "$OUT" << HTMLEOF
     </div>
   </nav>
   <div class="side-bottom">
-    <a class="side-link" data-latest-inventory href="${INVENTDATACSV}" download>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>
-      </svg>
-      <span>Latest Inventory CSV</span>
-    </a>
     <div class="side-status">
       <span class="dot"></span>
       <span data-site-updated>Updated ${UPDATED_HUMAN}</span>

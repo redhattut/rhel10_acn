@@ -322,12 +322,6 @@ _sidebar() {
     </div>
   </nav>
   <div class="side-bottom">
-    <a class="side-link" data-latest-inventory href="${INVENTDATACSV}" download>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>
-      </svg>
-      <span>Latest Inventory CSV</span>
-    </a>
     <div class="side-status">
       <span class="dot"></span>
       <span data-site-updated>Updated ${UPDATED_HUMAN}</span>
@@ -535,7 +529,7 @@ RPT_History() {
       <span class="sub">newest first</span>
     </div>
     <div class="history-note">
-      The newest file is also available from <strong>Latest Inventory CSV</strong> in the sidebar.
+      The newest file is also available from the <strong>Data &amp; reports</strong> section on the summary page.
     </div>
     <div class="history-wrap">
       <table class="history-table">
@@ -1143,7 +1137,8 @@ window.RHEL_CONFIG = {
   totals:       { totalHosts:0, virtual:0, physical:0, cloud:0, sshFailures:0 },
   rhelVersions: [], environments: [], locations: [],
   downloads:    { latestInventoryCsv: "../${INVENTDATACSV}" },
-  externalLinks: [],
+  externalLinks: [${EXTLINKS_JSON}
+  ],
   historicalFiles: [${HIST_ROWS}
   ]
 };
@@ -1223,12 +1218,6 @@ MMCFGEOF
     </div>
   </nav>
   <div class="side-bottom">
-    <a class="side-link" data-latest-inventory href="../${INVENTDATACSV}" download>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>
-      </svg>
-      <span>Latest Inventory CSV</span>
-    </a>
     <div class="side-status">
       <span class="dot"></span>
       <span data-site-updated>Updated ${UPDATED_HUMAN}</span>

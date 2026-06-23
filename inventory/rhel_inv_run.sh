@@ -76,6 +76,11 @@ if [[ ! -f "$CONF" ]]; then
 fi
 . "$CONF"
 
+# Set RUN_LOG here with a live timestamp — must NOT be in conf or the date
+# gets evaluated once at source time and never changes within a session.
+# Format: rhel_inventory_v2_run.YYYYMMDD_HHMMSS.log — unique per run.
+RUN_LOG="${LOGS_DIR}/rhel_inventory_v2_run.$(date +%Y%m%d_%H%M%S).log"
+
 # =============================================================================
 # Test mode path overrides
 # All production variables are overridden AFTER sourcing the config so the
@@ -163,7 +168,13 @@ log() {
 }
 
 mkdir -p "$(dirname "$MAIN_LOG")" "$(dirname "$RUN_LOG")"
-exec > >(tee -a "$MAIN_LOG") 2>&1
+
+# Every run writes to its own dated log file (RUN_LOG).
+# That file is also tee'd into the master append log (MAIN_LOG) so the
+# append log contains the full history of all runs in sequence.
+# The symlink (LATEST_LOG) is updated at the end of the run to point at
+# the current run's dated log file — making it easy to tail the latest run.
+exec > >(tee -a "$MAIN_LOG" | tee "$RUN_LOG") 2>&1
 
 # =============================================================================
 log SECTION "Starting RHEL Inventory Orchestrator"
@@ -811,7 +822,7 @@ if [[ $TEST_MODE -eq 1 ]]; then
     log INFO "Review results before promoting to production"
 fi
 
-ln -sf "$RUN_LOG" "$LATEST_LOG" 2>/dev/null
+ln -sf "$(realpath "$RUN_LOG" 2>/dev/null || echo "$RUN_LOG")" "$LATEST_LOG" 2>/dev/null
 
 # =============================================================================
 log SECTION "End-of-run Checklist"

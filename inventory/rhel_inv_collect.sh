@@ -457,10 +457,18 @@ current_file == inv_file && !/^#/ && NF >= 1 {
 
     # Cloud servers live in Azure datacenters — override type to "Cloud"
     # so the inventory page cloud count matches the index page
-    if (loc == "AZCE" || loc == "AZE2") typ = "Cloud"
+    if (typ != "SSHFAIL" && (loc == "AZCE" || loc == "AZE2")) typ = "Cloud"
 
-    # SSHFAIL stubs: type field is already "SSHFAIL" — pass through as-is
-    # (loc will be "n/a", typ stays "SSHFAIL")
+    # For SSHFAIL stubs: derive AppCode from hostname convention since
+    # rhel_remote_scan.sh never ran. Convention: strip leading letter,
+    # take lowercase letters before first digit. e.g. lmrg10ia → mrg
+    appcode = na($26)
+    if (appcode == "n/a") {
+        appcode = host
+        sub(/^[a-z]/, "", appcode)       # strip leading single letter
+        match(appcode, /^[a-z]+/)        # match leading lowercase letters
+        appcode = (RLENGTH > 0) ? substr(appcode, 1, RLENGTH) : "n/a"
+    }
 
     bdate = na($28)
     if (bdate == "n/a" && (host in deploy_date))
@@ -476,7 +484,7 @@ current_file == inv_file && !/^#/ && NF >= 1 {
         missing++
     }
 
-    print host "," typ "," loc "," na($26) "," na($27) "," bdate "," \
+    print host "," typ "," loc "," appcode "," na($27) "," bdate "," \
           na($3) "," na($4) "," na($5) "," na($6) "," na($7) "," \
           na($8) "," na($9) "," na($10) "," na($11) "," na($12) "," \
           na($13) "," na($14) "," na($15) "," na($16) "," na($17) "," \
@@ -531,18 +539,31 @@ fi
 log SECTION "Phase 8 — Rotate historical CSV copies"
 # =============================================================================
 
-# Keep 14 copies in webdir historical_data (2 weeks)
 mkdir -p "${WEBDIR}/historical_data"
-cp "${WEBDIR}/$INVENTDATACSV" \
-    "${WEBDIR}/historical_data/${INVENTDATACSV}" 2>/dev/null
+
 if [[ "${TEST_MODE:-0}" -eq 1 ]]; then
-    # Test mode — no rotation, files simply overwrite each run to save space
-    # RHEL_PACKAGES.csv can be 1.3GB — rotating compressed copies on every
-    # test run would exhaust disk space quickly
+    # Test mode — just overwrite, no rotation (saves disk space)
+    cp "${WEBDIR}/$INVENTDATACSV" \
+        "${WEBDIR}/historical_data/${INVENTDATACSV}" 2>/dev/null
     log INFO "TEST MODE — skipping CSV rotation (overwrite only)"
 else
-    rotate_plain "${WEBDIR}/historical_data/RHEL_INVENTORY" "$ROTATE_INVENTORY_CSV" -e ".csv" \
+    # Production rotation order:
+    #   1. Rotate existing copies UP first (old .1.csv → .2.csv etc.)
+    #   2. Copy current CSV to .1.csv position via rotate_plain
+    #   3. The live WEBDIR file stays as-is for the web server
+    #
+    # rotate_plain expects the BASE name without extension.
+    # INVENTDATACSV = "RHEL_INVENTORY_v2.csv" → base = "RHEL_INVENTORY_v2"
+    _CSV_BASE="${WEBDIR}/historical_data/${INVENTDATACSV%.csv}"
+
+    # Copy current CSV into historical_data under its full name first
+    # (rotate_plain will shift it to .1.csv)
+    cp "${WEBDIR}/$INVENTDATACSV" \
+        "${WEBDIR}/historical_data/$INVENTDATACSV" 2>/dev/null
+
+    rotate_plain "$_CSV_BASE" "$ROTATE_INVENTORY_CSV" -e ".csv" \
         && log INFO "Historical CSV rotation complete (keeping $ROTATE_INVENTORY_CSV copies)"
+
     rotate_compressed "${DATA_DIR}/$INVENTDATACSV" "$ROTATE_INVENTORY_CSV" \
         && log INFO "Local CSV rotation complete (keeping $ROTATE_INVENTORY_CSV copies)"
 fi
