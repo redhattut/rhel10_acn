@@ -323,6 +323,59 @@ else
 fi
 
 # =============================================================================
+log SECTION "Phase 4.5 — Fed Enclave dat merge"
+# =============================================================================
+# When running via AAP pipeline, AAP_FED_DAT points to the fed_enclave_raw.dat
+# fetched from lmrg34ba. Append it to INVENTORYDATA before Phase 7 enrichment
+# so the single awk pass covers all hosts including Fed Enclave.
+#
+# Fallback: if no fresh dat was provided, use the previous run's dat from
+# DATA_DIR (if it exists). This handles lmrg34ba being unreachable — the
+# previous successful fed scan data carries forward without TIMEOUT marking.
+#
+# Not applicable for test mode or normal cron runs (AAP_FED_DAT is empty).
+# =============================================================================
+
+_FED_DAT_FRESH=""
+_FED_DAT_FALLBACK="${DATA_DIR}/fed_enclave_raw.dat"
+
+if [[ -n "${AAP_FED_DAT:-}" ]]; then
+    if [[ -f "$AAP_FED_DAT" && -s "$AAP_FED_DAT" ]]; then
+        _FED_DAT_FRESH="$AAP_FED_DAT"
+        log INFO "Fed Enclave dat (fresh from lmrg34ba): $AAP_FED_DAT"
+        # Copy to DATA_DIR so it becomes the new fallback for next run
+        cp -p "$AAP_FED_DAT" "$_FED_DAT_FALLBACK"
+        log INFO "Fed Enclave dat saved to DATA_DIR: $_FED_DAT_FALLBACK"
+    else
+        log WARN "AAP_FED_DAT specified but file missing or empty: $AAP_FED_DAT"
+        log WARN "Falling back to previous run's fed dat (if available)"
+    fi
+fi
+
+# Determine which fed dat to use
+_FED_DAT_TO_MERGE=""
+if [[ -n "$_FED_DAT_FRESH" ]]; then
+    _FED_DAT_TO_MERGE="$_FED_DAT_FRESH"
+elif [[ -f "$_FED_DAT_FALLBACK" && -s "$_FED_DAT_FALLBACK" ]]; then
+    _FED_DAT_TO_MERGE="$_FED_DAT_FALLBACK"
+    log INFO "Using previous run's Fed Enclave dat: $_FED_DAT_FALLBACK"
+fi
+
+if [[ -n "$_FED_DAT_TO_MERGE" ]]; then
+    FED_REC=$(wc -l < "$_FED_DAT_TO_MERGE")
+    # Filter out non-RHEL (?) records before merging — same as main dat
+    awk '$3 != "?"' "$_FED_DAT_TO_MERGE" >> "$INVENTORYDATA"
+    MERGED_REC=$(awk '$3 != "?"' "$_FED_DAT_TO_MERGE" | wc -l)
+    log INFO "Fed Enclave merged: $MERGED_REC records appended to $INVENTORYDATA ($FED_REC raw, $((FED_REC - MERGED_REC)) non-RHEL skipped)"
+else
+    if [[ -n "${AAP_FED_DAT:-}" ]]; then
+        log WARN "No Fed Enclave dat available — Fed Enclave hosts will not appear in this run"
+    else
+        log INFO "AAP_FED_DAT not set — normal cron/test run, Fed Enclave merge skipped"
+    fi
+fi
+
+# =============================================================================
 log SECTION "Phase 5 — Collect UIDs and GIDs"
 # =============================================================================
 
@@ -366,6 +419,26 @@ _DEPLOY_FILE=""
 _CMDB_FILE=""
 [[ $CMDB_AVAILABLE -eq 1 ]] && _CMDB_FILE="$CMDBDATAFILE"
 
+# Previous dat file — used to carry forward yesterday's data for TIMEOUT hosts
+# (hosts pssh couldn't reach get their prior scan data preserved, matching
+# legacy RHEL_inventory_refresh.sh behavior which used RHEL_INVENTORY.dat.1.gz)
+# Phase 4 has already rotated the dat so .1.gz is yesterday's run.
+_PREV_DAT_FILE=""
+_PREV_DAT_TMP=""
+if [[ -f "${INVENTORYDATA}.1.gz" ]]; then
+    _PREV_DAT_TMP=$(mktemp /tmp/rhel_prev_dat.XXXXXX)
+    zcat "${INVENTORYDATA}.1.gz" > "$_PREV_DAT_TMP" 2>/dev/null \
+        && _PREV_DAT_FILE="$_PREV_DAT_TMP" \
+        || rm -f "$_PREV_DAT_TMP"
+    [[ -n "$_PREV_DAT_FILE" ]] && \
+        log INFO "Previous dat loaded for TIMEOUT carry-forward: ${INVENTORYDATA}.1.gz"
+elif [[ -f "${INVENTORYDATA}.1" ]]; then
+    _PREV_DAT_FILE="${INVENTORYDATA}.1"
+    log INFO "Previous dat loaded for TIMEOUT carry-forward: ${INVENTORYDATA}.1"
+else
+    log INFO "No previous dat found — TIMEOUT hosts will show n/a for scan fields (first run?)"
+fi
+
 if [[ $CMDB_AVAILABLE -eq 1 ]]; then
     log INFO "Enriching CSV with CMDB data from: $CMDBDATAFILE"
 else
@@ -376,17 +449,20 @@ fi
     log INFO "BuildDate fallback: loading deployment records from $_DEPLOY_FILE"
 
 # ---------------------------------------------------------------------------
-# Single awk pass — three input files
+# Single awk pass — up to four input files
 #
-# Pass 1 (DEPLOYMENTDATA):  build deploy_date[host] = date
-# Pass 2 (CMDBDATAFILE):    build cmdb[host] = "sg,status,opstate,fed"
-# Pass 3 (INVENTORYDATA):   join + emit 32-column CSV rows
+# Pass 0 (PREV_DAT):       build prev[host] = full 28-field dat record
+#                          Used to carry forward yesterday's data for TIMEOUT hosts
+# Pass 1 (DEPLOYMENTDATA): build deploy_date[host] = date
+# Pass 2 (CMDBDATAFILE):   build cmdb[host] = "sg,status,opstate,fed"
+# Pass 3 (INVENTORYDATA):  join + emit 32-column CSV rows
 #
 # Location normalisation (mirrors expand_location() in rhel_utils.sh):
 #   Strip "Greenfield-" prefix; all known codes pass through as-is.
 #   Add new datacenters here when they come online.
 # ---------------------------------------------------------------------------
-awk -v deploy_file="$_DEPLOY_FILE" \
+awk -v prev_dat_file="$_PREV_DAT_FILE" \
+    -v deploy_file="$_DEPLOY_FILE" \
     -v cmdb_file="$_CMDB_FILE" \
     -v inv_file="$INVENTORYDATA" \
     -v out_file="${DATA_DIR}/${INVENTDATACSV}.new" \
@@ -408,6 +484,18 @@ function na(v) { return (v == "" || v == "n/a") ? "n/a" : v }
 # Format: YYYY-MM-DD hostname Virt|Phys OSver
 # ============================================================
 BEGINFILE { current_file = FILENAME }
+
+# ============================================================
+# Pass 0 — PREV_DAT: build prev[host] lookup from yesterday
+# Stores the entire 28-field space-delimited record so TIMEOUT
+# hosts can carry forward their previous scan's real data.
+# ============================================================
+current_file == prev_dat_file && !/^#/ && NF >= 3 {
+    if ($2 != "TIMEOUT" && $2 != "SSHFAIL" && $3 != "TIMEOUT" && $3 != "SSHFAIL") {
+        prev[$1] = $0
+    }
+    next
+}
 
 current_file == deploy_file && !/^#/ && NF >= 2 {
     deploy_date[$2] = $1
@@ -445,28 +533,41 @@ current_file == inv_file && !/^#/ && NF >= 1 {
     host = $1
     typ  = $2
 
-    # Skip non-RHEL hosts entirely — OS field "?" means no /etc/redhat-release
-    # Ubuntu, Debian, other Linux variants get "?" and must not appear in output
+    # Skip non-RHEL hosts entirely — OS "?" means no /etc/redhat-release
     if ($3 == "?") { next }
 
-    loc  = expand_loc($21)
+    # For TIMEOUT hosts: overlay yesterday's dat record so real scan
+    # data (kernel, CPU, memory etc.) is preserved rather than showing n/a.
+    # This matches legacy behaviour — RHEL_INVENTORY.dat.1.gz carry-forward.
+    # Type becomes TIMEOUT_Virt or TIMEOUT_Phys based on yesterday's type.
+    if (typ == "TIMEOUT" && (host in prev)) {
+        n = split(prev[host], pf, " ")
+        # Rebuild $2-$28 from yesterday's record
+        for (i = 1; i <= n; i++) $i = pf[i]
+        # Preserve TIMEOUT prefix on type
+        prev_typ = pf[2]
+        if (prev_typ == "Virt" || prev_typ == "Cloud") typ = "TIMEOUT_Virt"
+        else if (prev_typ == "Phys") typ = "TIMEOUT_Phys"
+        else typ = "TIMEOUT_" prev_typ
+    } else if (typ == "TIMEOUT") {
+        # No previous data — use TIMEOUT with n/a fields
+        typ = "TIMEOUT_Virt"
+    }
 
-    # If location looks like an IP address (set by duplicate PNC_PROVISION_CONFIG
-    # block on repurposed servers), replace with "unknown"
+    loc = expand_loc($21)
+
+    # IP address in location field — repurposed server with duplicate config block
     if (loc ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) loc = "unknown"
 
-    # Cloud servers live in Azure datacenters — override type to "Cloud"
-    # so the inventory page cloud count matches the index page
-    if (typ != "SSHFAIL" && (loc == "AZCE" || loc == "AZE2")) typ = "Cloud"
+    # Cloud datacenter — set type to Cloud (unless TIMEOUT)
+    if (typ !~ /^TIMEOUT/ && (loc == "AZCE" || loc == "AZE2")) typ = "Cloud"
 
-    # For SSHFAIL stubs: derive AppCode from hostname convention since
-    # rhel_remote_scan.sh never ran. Convention: strip leading letter,
-    # take lowercase letters before first digit. e.g. lmrg10ia → mrg
+    # Derive AppCode from hostname if field is n/a (TIMEOUT stubs + some legacy)
     appcode = na($26)
     if (appcode == "n/a") {
         appcode = host
-        sub(/^[a-z]/, "", appcode)       # strip leading single letter
-        match(appcode, /^[a-z]+/)        # match leading lowercase letters
+        sub(/^[a-z]/, "", appcode)
+        match(appcode, /^[a-z]+/)
         appcode = (RLENGTH > 0) ? substr(appcode, 1, RLENGTH) : "n/a"
     }
 
@@ -498,9 +599,13 @@ END {
     print matched+0 ":" missing+0 > stats_file
 }
 ' \
+    ${_PREV_DAT_FILE:+"$_PREV_DAT_FILE"} \
     ${_DEPLOY_FILE:+"$_DEPLOY_FILE"} \
     ${_CMDB_FILE:+"$_CMDB_FILE"} \
     "$INVENTORYDATA"
+
+# Clean up decompressed prev dat temp file
+[[ -n "$_PREV_DAT_TMP" && -f "$_PREV_DAT_TMP" ]] && rm -f "$_PREV_DAT_TMP"
 
 # Read counts written by awk END block
 if [[ -f "${DATA_DIR}/${INVENTDATACSV}.stats" ]]; then
@@ -519,12 +624,18 @@ else
     log INFO "CSV generation complete — $_TOTAL records (no CMDB enrichment)"
 fi
 
-# Atomic promotion — eliminates the window where the CSV is incomplete
-# (the previous approach had a 5-minute window of incomplete file)
-cp "${DATA_DIR}/${INVENTDATACSV}.new" "${DATA_DIR}/$INVENTDATACSV"
-cp "${DATA_DIR}/${INVENTDATACSV}.new" "${WEBDIR}/$INVENTDATACSV"
+# Atomic promotion — sort by hostname (field 1) first so the CSV is
+# consistent across runs and history diffs are clean.
+# Header line (starts with #) is preserved at the top.
+{
+    grep "^#" "${DATA_DIR}/${INVENTDATACSV}.new"
+    grep -v "^#" "${DATA_DIR}/${INVENTDATACSV}.new" | sort -t, -k1,1
+} > "${DATA_DIR}/${INVENTDATACSV}.sorted"
+
+mv "${DATA_DIR}/${INVENTDATACSV}.sorted" "${DATA_DIR}/$INVENTDATACSV"
+cp "${DATA_DIR}/$INVENTDATACSV" "${WEBDIR}/$INVENTDATACSV"
 rm -f "${DATA_DIR}/${INVENTDATACSV}.new"
-log INFO "CSV published: $WEBDIR/$INVENTDATACSV"
+log INFO "CSV published (sorted by hostname): $WEBDIR/$INVENTDATACSV"
 
 # Generate HTML table from enriched CSV — must be after CSV is written
 if [[ -x "${PGMDIR}/rhel_convert_html.sh" ]]; then

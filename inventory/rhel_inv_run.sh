@@ -37,6 +37,8 @@ cd "$(dirname "$0")" || exit 1
 
 TEST_MODE=0
 TEST_HOSTLIST=""
+AAP_HOSTLIST=""       # --hostlist: override MASTERHOSTLIST (AAP pipeline use)
+AAP_FED_DAT=""        # --fed-dat:  path to fed enclave raw dat to merge (AAP pipeline use)
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -48,17 +50,33 @@ while [[ $# -gt 0 ]]; do
             fi
             shift
             ;;
+        --hostlist)
+            if [[ -z "$2" || "$2" == --* ]]; then
+                echo "$(date '+%Y-%m-%d %H:%M:%S')  [ERROR]   --hostlist requires a file path" >&2
+                exit 1
+            fi
+            AAP_HOSTLIST="$2"
+            shift 2
+            ;;
+        --fed-dat)
+            if [[ -z "$2" || "$2" == --* ]]; then
+                echo "$(date '+%Y-%m-%d %H:%M:%S')  [ERROR]   --fed-dat requires a file path" >&2
+                exit 1
+            fi
+            AAP_FED_DAT="$2"
+            shift 2
+            ;;
         -h|--help)
-            echo "Usage: $0 [--test [hostlist]]"
+            echo "Usage: $0 [--test [hostlist]] [--hostlist <file>] [--fed-dat <file>]"
             echo ""
-            echo "  Normal run:   $0"
-            echo "  Test run:     $0 --test /path/to/hosts.txt"
+            echo "  Normal run:    $0"
+            echo "  Test run:      $0 --test /path/to/hosts.txt"
+            echo "  AAP pipeline:  $0 --hostlist non_fed_hosts.txt --fed-dat fed_enclave_raw.dat"
             echo ""
-            echo "  --test        Run in test mode with isolated output paths."
-            echo "                All data files written under BASE_DIR/test/"
-            echo "                prefixed with TEST_ — never touches production files."
-            echo "  hostlist      Optional path to a custom host list for the test run."
-            echo "                Defaults to a single localhost entry if not specified."
+            echo "  --test          Run in test mode with isolated output paths."
+            echo "  --hostlist      Override MASTERHOSTLIST (AAP pipeline: non-fed hosts only)."
+            echo "  --fed-dat       Path to Fed Enclave raw dat file to merge before enrichment."
+            echo "                  If file is missing, previous run's dat is used automatically."
             exit 0
             ;;
         *)
@@ -75,6 +93,17 @@ if [[ ! -f "$CONF" ]]; then
     exit 1
 fi
 . "$CONF"
+
+# Apply AAP pipeline overrides (set before test mode so test mode wins if both given)
+if [[ -n "$AAP_HOSTLIST" ]]; then
+    if [[ ! -f "$AAP_HOSTLIST" ]]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S')  [ERROR]   --hostlist file not found: $AAP_HOSTLIST" >&2
+        exit 1
+    fi
+    MASTERHOSTLIST="$AAP_HOSTLIST"
+fi
+# Export fed dat path so rhel_inv_collect.sh can find it in Phase 4.5
+export AAP_FED_DAT
 
 # Set RUN_LOG here with a live timestamp — must NOT be in conf or the date
 # gets evaluated once at source time and never changes within a session.
