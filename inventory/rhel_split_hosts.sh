@@ -55,6 +55,8 @@ FED_FILE="${DATA_DIR}/fed_hosts.txt"
 # --- Split logic -------------------------------------------------------------
 # CMDB columns: hostname,SupportGroup,InstallStatus,DesiredOpState,FedEnclave
 #
+# No header row — file starts directly with data records.
+# Strip \r from last field to handle Windows/ServiceNow CRLF line endings.
 # Exclude: any line containing "Decommission" (case-insensitive)
 # Fed:     FedEnclave field (col 5) is "True"  (case-insensitive)
 # Non-Fed: FedEnclave field (col 5) is "False" (case-insensitive)
@@ -63,12 +65,12 @@ FED_FILE="${DATA_DIR}/fed_hosts.txt"
 
 # Non-fed hosts — FedEnclave = False, no Decommission anywhere in line
 grep -iv "decommission" "$CMDB" \
-    | awk -F, 'NR>1 && tolower($5)=="false" && $1!="" {print $1}' \
+    | awk -F, '{gsub(/\r/,"",$5); if (tolower($5)=="false" && $1!="") print $1}' \
     | sort > "$NON_FED_FILE"
 
 # Fed enclave hosts — FedEnclave = True, no Decommission anywhere in line
 grep -iv "decommission" "$CMDB" \
-    | awk -F, 'NR>1 && tolower($5)=="true" && $1!="" {print $1}' \
+    | awk -F, '{gsub(/\r/,"",$5); if (tolower($5)=="true" && $1!="") print $1}' \
     | sort > "$FED_FILE"
 
 NON_FED_COUNT=$(wc -l < "$NON_FED_FILE")
@@ -77,7 +79,7 @@ TOTAL=$(( NON_FED_COUNT + FED_COUNT ))
 
 log INFO "Non-Fed hosts : $NON_FED_COUNT → $NON_FED_FILE"
 log INFO "Fed hosts     : $FED_COUNT → $FED_FILE"
-log INFO "Total         : $TOTAL (excluded any with 'Decommission' in CMDB record)"
+log INFO "Total         : $TOTAL (excluded any containing Decommission in CMDB record)"
 
 if [[ $TOTAL -eq 0 ]]; then
     log ERROR "No hosts produced — CMDB file may be malformed or empty"
