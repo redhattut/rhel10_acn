@@ -60,6 +60,12 @@
     enabled: false
   when: not dual_auth_healthy or dual_auth_force_configure
 
+- name: Remove legacy AD-only krb5.conf before deploying dual auth version
+  ansible.builtin.file:
+    path: /etc/krb5.conf
+    state: absent
+  when: dual_auth_is_legacy_ad_only | default(false) | bool
+
 - name: Deploy krb5.conf
   ansible.builtin.template:
     src: "{{ playbook_dir }}/../files/krb5.conf.j2"

@@ -45,16 +45,17 @@
   ansible.builtin.assert:
     that:
       - >-
-        dual_auth_healthy
-        or dual_auth_lifecycle_action in ['rejoin', 'leave_ad']
+        dual_auth_is_legacy_ad_only | default(false) | bool
+        or dual_auth_healthy
+        or dual_auth_lifecycle_action in ['rejoin', 'leave_ad', 'recreate_keytab']
         or not dual_auth_krb5_conf_stat.stat.exists
         or dual_auth_krb5_conf_stat.stat.checksum in (dual_auth_krb5_known_md5[dual_auth_rhel_major] | default([]))
     fail_msg: >-
       /etc/krb5.conf does not match a known default for RHEL {{ dual_auth_rhel_major }}
       (checksum: {{ dual_auth_krb5_conf_stat.stat.checksum | default('n/a') }}), the host
       is not already healthily joined, and dual_auth_lifecycle_action is not
-      rejoin/leave_ad. It may be hand-customized for something else (e.g. a
-      Hadoop cluster) - refusing to overwrite. Investigate before proceeding,
-      set dual_auth_lifecycle_action=rejoin to force it, or update
+      rejoin/leave_ad/recreate_keytab. It may be hand-customized for something
+      else (e.g. a Hadoop cluster) - refusing to overwrite. Investigate before
+      proceeding, set dual_auth_lifecycle_action=rejoin to force it, or update
       dual_auth_krb5_known_md5.
-    success_msg: "krb5.conf check passed (already healthy, forced action, matches known default, or absent)."
+    success_msg: "krb5.conf check passed (already healthy, forced action, legacy AD-only, matches known default, or absent)."
