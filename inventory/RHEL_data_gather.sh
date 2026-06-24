@@ -4,28 +4,22 @@
 # Runs REMOTELY on each host via pssh (concatenated with rhel_remote_scan.sh
 # by the main inventory pipeline — no separate SSH session needed).
 #
-# Produces TWO tagged output streams via stdout:
+# Produces TWO tagged output streams via stdout — BOTH SINGLE LINE PER RECORD.
+#
+# CRITICAL: pssh --inline-stdout runs many hosts in parallel and interleaves
+# their output. All output MUST be one line per record — no multi-line output.
 #
 #   1. MID_MOD_CSV:<hostname>:<csv_fields>
-#      13-column CSV row for Midrange Mod Report
+#      Single line, 13-column CSV row for Midrange Mod Report
 #
-#   2. COMPARE_JSON_START:<hostname>
-#      <json line 1>
-#      <json line 2>
-#      ...
-#      COMPARE_JSON_END:<hostname>
-#      Full JSON object for Server Compare Tool
+#   2. COMPARE_JSON:<hostname>:<minified_json>
+#      Single line, complete JSON object for Server Compare Tool
+#      Uses printf to build the entire JSON on one line — no truncation risk
+#      because we use $(je ...) which calls printf internally.
 #
 # Tag format change from legacy (CSV_DATA / JSON_START / JSON_END):
 #   CSV_DATA:      → MID_MOD_CSV:
-#   JSON_START:    → COMPARE_JSON_START:
-#   JSON_END:      → COMPARE_JSON_END:
-#
-# Lines are prefixed with hostname so they are self-identifying even when
-# pssh --inline-stdout interleaves output from parallel host executions.
-#
-# Writing JSON as individual echo lines (not inside $()) avoids shell
-# command-substitution truncation that occurs with large single-line output.
+#   JSON_START/END → COMPARE_JSON:   (single line, no start/end markers needed)
 
 # --- default values ----------------------------------------------------------
 HOSTNAME=$(hostname -s | cut -d. -f1)
@@ -239,45 +233,47 @@ je() {
 }
 
 # =============================================================================
-# OUTPUT — both via stdout through pssh, written to log on the jumphost.
-# The filter (rhel_filter_scan.sh) splits on tag prefixes.
+# OUTPUT — both via stdout through pssh.
+# rhel_filter_scan.sh on the jumphost splits on tag prefixes.
 #
-# MID_MOD_CSV tag  → Midrange Mod Report CSV
-# COMPARE_JSON tag → Server Compare Tool JSON
+# CRITICAL: pssh --inline-stdout runs 75 hosts in parallel and INTERLEAVES
+# their output lines. Multi-line output from host A gets mixed with lines from
+# host B. Therefore ALL output must be single-line per record.
+#
+# MID_MOD_CSV:<host>:<csv_row>     — one line, Midrange Mod CSV row
+# COMPARE_JSON:<host>:<json>       — one line, full JSON object (minified)
 # =============================================================================
 
-# CSV line (13 columns, unchanged format)
+# CSV line (13 columns)
 echo "MID_MOD_CSV:${HOSTNAME}:${HOSTNAME},${LOCATION},${MNEMONIC},${ENVIRONMENT},${RHEL_RELEASE},${SSSD},${LDAP_QUERY},${AD_QUERY},${DUAL_AUTH_PKG},${NSSWITCH},${KRB5_KEYTAB},${XQVSMLINAUTHSCAN_SUDO},${XQMRGLINENG_SUDO},${XQMRGLINAAP_SUDO}"
 
-# JSON — emitted as multiple lines between start/end markers.
-# The wrapper collects lines between COMPARE_JSON_START and COMPARE_JSON_END
-# and writes the file locally. No $() capture means no truncation.
-echo "COMPARE_JSON_START:${HOSTNAME}"
-echo "{"
-echo "  \"host\":           \"$(je "$HOSTNAME")\","
-echo "  \"collected_at\":   \"$COLLECTED_AT\","
-echo "  \"reachable\":      true,"
-echo "  \"data\": {"
-echo "    \"location\":      \"$(je "$LOCATION")\","
-echo "    \"environment\":   \"$(je "$ENVIRONMENT")\","
-echo "    \"mnemonic\":      \"$(je "$MNEMONIC")\","
-echo "    \"timezone\":      \"$(je "$TIMEZONE")\","
-echo "    \"cpu\":           \"$(je "$CPU")\","
-echo "    \"cores\":         \"$(je "$CORES")\","
-echo "    \"sockets\":       \"$(je "$SOCKETS")\","
-echo "    \"memory\":        \"$(je "$MEMORY")\","
-echo "    \"rhel_version\":  \"$(je "$RHEL_RELEASE")\","
-echo "    \"kernel\":        \"$(je "$KERNEL")\","
-echo "    \"selinux\":       \"$(je "$SELINUX")\","
-echo "    \"hugepages\":     \"$(je "$HUGEPAGES")\","
-echo "    \"resolv_search\": \"$(je "$RESOLV_SEARCH")\","
-echo "    \"resolv_ns\":     \"$(je "$RESOLV_NS")\","
-echo "    \"nfs_count\":     ${NFS_COUNT},"
-echo "    \"cifs_count\":    ${CIFS_COUNT},"
-echo "    \"volumes\":       [${VOLUMES_JSON_INNER}],"
-echo "    \"auth_method\":   {\"oud\": \"$(je "$AUTH_OUD")\", \"ad\": \"$(je "$AUTH_AD")\"},"
-echo "    \"auth_query\":    {\"oud\": \"$(je "$LDAP_QUERY")\", \"ad\": \"$(je "$AD_QUERY")\"},"
-echo "    \"services\":      {\"sssd\": \"$(je "$SSSD_SVC")\", \"sshd\": \"$(je "$SSHD_SVC")\"}"
-echo "  }"
-echo "}"
-echo "COMPARE_JSON_END:${HOSTNAME}"
+# JSON — single line using printf to build the object inline.
+# Volumes array is already a single-line string from the collection above.
+# All string values are escaped via the je() function.
+printf 'COMPARE_JSON:%s:{"host":"%s","collected_at":"%s","reachable":true,"data":{"location":"%s","environment":"%s","mnemonic":"%s","timezone":"%s","cpu":"%s","cores":"%s","sockets":"%s","memory":"%s","rhel_version":"%s","kernel":"%s","selinux":"%s","hugepages":"%s","resolv_search":"%s","resolv_ns":"%s","nfs_count":%s,"cifs_count":%s,"volumes":[%s],"auth_method":{"oud":"%s","ad":"%s"},"auth_query":{"oud":"%s","ad":"%s"},"services":{"sssd":"%s","sshd":"%s"}}}\n' \
+    "$HOSTNAME" \
+    "$(je "$HOSTNAME")" \
+    "$COLLECTED_AT" \
+    "$(je "$LOCATION")" \
+    "$(je "$ENVIRONMENT")" \
+    "$(je "$MNEMONIC")" \
+    "$(je "$TIMEZONE")" \
+    "$(je "$CPU")" \
+    "$(je "$CORES")" \
+    "$(je "$SOCKETS")" \
+    "$(je "$MEMORY")" \
+    "$(je "$RHEL_RELEASE")" \
+    "$(je "$KERNEL")" \
+    "$(je "$SELINUX")" \
+    "$(je "$HUGEPAGES")" \
+    "$(je "$RESOLV_SEARCH")" \
+    "$(je "$RESOLV_NS")" \
+    "$NFS_COUNT" \
+    "$CIFS_COUNT" \
+    "$VOLUMES_JSON_INNER" \
+    "$(je "$AUTH_OUD")" \
+    "$(je "$AUTH_AD")" \
+    "$(je "$LDAP_QUERY")" \
+    "$(je "$AD_QUERY")" \
+    "$(je "$SSSD_SVC")" \
+    "$(je "$SSHD_SVC")"
