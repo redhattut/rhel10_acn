@@ -83,12 +83,15 @@ FED_DAT_OUT="${DATA_DIR}/fed_enclave_raw.dat"
 FED_ID_TMP="${DATA_DIR}/fed_enclave_id.tmp"
 FED_DB_TMP="${DATA_DIR}/fed_enclave_db.tmp"
 FED_PKG_TMP="${DATA_DIR}/fed_enclave_pkg.tmp"
+FED_MRG_CSV_TMP="${DATA_DIR}/fed_enclave_mrg.csv.tmp"
+FED_MRG_JSON_TMP="${DATA_DIR}/fed_enclave_mrg.json.tmp"
 ERRDIR="${DATA_DIR}/errdir_fed.$(date +%Y%m%d_%H%M)"
 mkdir -p "$ERRDIR"
 
 # Temp dat file — promoted atomically at end
 FED_DAT_TMP="${DATA_DIR}/fed_enclave_raw.tmp"
-rm -f "$FED_DAT_TMP" "$FED_ID_TMP" "$FED_DB_TMP" "$FED_PKG_TMP"
+rm -f "$FED_DAT_TMP" "$FED_ID_TMP" "$FED_DB_TMP" "$FED_PKG_TMP" \
+      "$FED_MRG_CSV_TMP" "$FED_MRG_JSON_TMP"
 
 # pssh settings — same as main scan
 PSSH_BATCH=75
@@ -106,7 +109,17 @@ log INFO "Launching pssh scan against Fed Enclave hosts..."
 
 START_TIME=$(date +%s)
 
-cat "${PGMDIR}/rhel_remote_scan.sh" \
+# Concatenate RHEL_data_gather.sh after rhel_remote_scan.sh — single pssh pass
+_gather="${PGMDIR}/RHEL_data_gather.sh"
+if [[ -f "$_gather" ]]; then
+    log INFO "RHEL_data_gather.sh found — Midrange Mod data will be collected"
+    _fed_pssh_input() { cat "${PGMDIR}/rhel_remote_scan.sh" "$_gather"; }
+else
+    log WARN "RHEL_data_gather.sh not found at $_gather — Midrange Mod data skipped"
+    _fed_pssh_input() { cat "${PGMDIR}/rhel_remote_scan.sh"; }
+fi
+
+_fed_pssh_input \
     | "$PSSH_BIN" $PSSH_OPTS \
         -e "$ERRDIR" \
         -h "$FED_HOSTS_FILE" \
@@ -116,7 +129,9 @@ cat "${PGMDIR}/rhel_remote_scan.sh" \
         "$FED_DAT_TMP" \
         "$FED_ID_TMP" \
         "$FED_DB_TMP" \
-        "$FED_PKG_TMP"
+        "$FED_PKG_TMP" \
+        "$FED_MRG_CSV_TMP" \
+        "$FED_MRG_JSON_TMP"
 
 SCAN_RC=$?
 END_TIME=$(date +%s)
@@ -182,11 +197,36 @@ else
     log INFO "Fed Enclave PKG csv  : empty — no package data collected"
 fi
 
+FED_MRG_CSV_OUT="${DATA_DIR}/fed_enclave_mrg.csv"
+FED_MRG_JSON_OUT="${DATA_DIR}/fed_enclave_mrg.json"
+
+if [[ -s "$FED_MRG_CSV_TMP" ]]; then
+    mv "$FED_MRG_CSV_TMP" "$FED_MRG_CSV_OUT"
+    log INFO "Fed Enclave MRG csv  : $FED_MRG_CSV_OUT ($(wc -l < "$FED_MRG_CSV_OUT") records)"
+else
+    rm -f "$FED_MRG_CSV_TMP"
+    log INFO "Fed Enclave MRG csv  : empty — check if RHEL_data_gather.sh ran"
+fi
+
+if [[ -s "$FED_MRG_JSON_TMP" ]]; then
+    mv "$FED_MRG_JSON_TMP" "$FED_MRG_JSON_OUT"
+    log INFO "Fed Enclave MRG json : $FED_MRG_JSON_OUT"
+else
+    rm -f "$FED_MRG_JSON_TMP"
+    log INFO "Fed Enclave MRG json : empty — check if RHEL_data_gather.sh ran"
+fi
+
 # Clean up stale error directories older than 7 days
 find "$PGMDIR" -type d -name "errdir_fed*" -mtime +7 \
     -exec rm -rf \'{}\' \; 2>/dev/null
 
 log INFO "=== Fed Enclave Scan complete ==="
 log INFO "Outputs ready for AAP fetch in: $DATA_DIR"
+log INFO "  INV: $FED_DAT_OUT"
+log INFO "  ID:  ${DATA_DIR}/fed_enclave_id.dat"
+log INFO "  DB:  ${DATA_DIR}/fed_enclave_db.dat"
+log INFO "  PKG: ${DATA_DIR}/fed_enclave_pkg.csv"
+log INFO "  MRG: ${DATA_DIR}/fed_enclave_mrg.csv"
+log INFO "  JSON:${DATA_DIR}/fed_enclave_mrg.json"
 
 exit 0

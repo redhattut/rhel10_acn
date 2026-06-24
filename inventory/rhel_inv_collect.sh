@@ -162,15 +162,30 @@ log INFO "Writing web data to: $WEBDIR"
 #   ID|...    user/group/netgroup records
 #
 # rhel_filter_scan.sh strips pssh status noise then splits by tag into
-# the four temp files.
+# six temp files — INV, ID, DB, PKG, MRG_CSV, and MRG_JSON.
+# RHEL_data_gather.sh is concatenated after rhel_remote_scan.sh so both
+# run in the same remote bash session — zero extra SSH connections.
 
-log INFO "Launching pssh scan..."
-log INFO "INV temp  : $INVENTORYTEMP"
-log INFO "ID temp   : $IDINVENTORYTEMP"
-log INFO "DB temp   : $DBINVENTORYTEMP"
-log INFO "PKG temp  : $PACKAGETEMP"
+log INFO "Launching pssh scan (INV + ID + DB + PKG + Midrange Mod)..."
+log INFO "INV temp     : $INVENTORYTEMP"
+log INFO "ID temp      : $IDINVENTORYTEMP"
+log INFO "DB temp      : $DBINVENTORYTEMP"
+log INFO "PKG temp     : $PACKAGETEMP"
+log INFO "MRG CSV temp : $MRGCSVTEMP"
+log INFO "MRG JSON tmp : $MRGJSONTMP"
 
-cat "${PGMDIR}/rhel_remote_scan.sh" \
+# Determine whether RHEL_data_gather.sh is available
+_gather_script="${RHEL_DATA_GATHER:-${PGMDIR}/RHEL_data_gather.sh}"
+if [[ -f "$_gather_script" ]]; then
+    log INFO "Data gather  : $\_gather_script (concatenated for single pssh pass)"
+    _pssh_input() { cat "${PGMDIR}/rhel_remote_scan.sh" "$_gather_script"; }
+else
+    log WARN "RHEL_data_gather.sh not found at $_gather_script — Midrange Mod data will not be collected"
+    log WARN "Expected path: ${PGMDIR}/RHEL_data_gather.sh"
+    _pssh_input() { cat "${PGMDIR}/rhel_remote_scan.sh"; }
+fi
+
+_pssh_input \
     | "$PSSH_BIN" $PSSH_OPTS \
         -e "$ERRDIR" \
         -h "$MASTERHOSTLIST" \
@@ -180,7 +195,9 @@ cat "${PGMDIR}/rhel_remote_scan.sh" \
         "$INVENTORYTEMP" \
         "$IDINVENTORYTEMP" \
         "$DBINVENTORYTEMP" \
-        "$PACKAGETEMP"
+        "$PACKAGETEMP" \
+        "$MRGCSVTEMP" \
+        "$MRGJSONTMP"
 
 SCAN_RC=$?
 log INFO "pssh scan completed (exit status: $SCAN_RC)"
@@ -323,6 +340,88 @@ else
 fi
 
 # =============================================================================
+log SECTION "Phase 4.6 — Midrange Mod CSV and Compare JSON promotion"
+# =============================================================================
+# Promote MRGCSVTEMP → MRGCSVDATA, write MRG CSV header, archive CSV.
+# Split MRGJSONTMP (combined JSON array) into per-host hostname.json files
+# in COMPARE_DATA_DIR for the Server Compare Tool.
+# =============================================================================
+
+mkdir -p "$MRG_ARCHIVE_DIR" "$COMPARE_DATA_DIR"
+
+# SELinux context so httpd can serve the JSON files
+chcon -R -t httpd_sys_content_t "$COMPARE_DATA_DIR" 2>/dev/null || \
+    restorecon -R "$COMPARE_DATA_DIR" 2>/dev/null || true
+
+# --- Promote MRG CSV ---------------------------------------------------------
+if [[ -s "$MRGCSVTEMP" ]]; then
+    {
+        echo "Host,Location,Mnemonic,Environment,OS Version,Authentication Method,OUD Query,AD Query,pnc_join_ad,Nsswitch,KRB5 Keytab,xqvsmlinauthscan Sudo,xqmrglineng Sudo,xqmrglinaap Sudo"
+        grep -v "^[[:space:]]*$" "$MRGCSVTEMP"
+    } > "$MRGCSVDATA"
+    MRG_ROW_COUNT=$(grep -vc "^Host," "$MRGCSVDATA" 2>/dev/null || echo 0)
+    log INFO "MRG CSV promoted: $MRGCSVDATA ($MRG_ROW_COUNT rows)"
+
+    # Archive CSV — keep DAYS_TO_KEEP_MRG days
+    MRG_ARCHIVE_FILE="${MRG_ARCHIVE_DIR}/Midrange_Mod_Report_$(date +%m-%d-%Y).csv"
+    cp "$MRGCSVDATA" "$MRG_ARCHIVE_FILE"
+    log INFO "MRG CSV archived: $MRG_ARCHIVE_FILE"
+
+    DELETED_MRG=$(find "$MRG_ARCHIVE_DIR" -name "Midrange_Mod_Report_*.csv" \
+        -type f -mtime +"${DAYS_TO_KEEP_MRG:-31}" -delete -print | wc -l)
+    [[ $DELETED_MRG -gt 0 ]] && \
+        log INFO "MRG archive pruned: $DELETED_MRG file(s) older than ${DAYS_TO_KEEP_MRG:-31} days removed"
+else
+    log WARN "MRGCSVTEMP empty — Midrange Mod CSV not generated (check if RHEL_data_gather.sh ran)"
+fi
+rm -f "$MRGCSVTEMP"
+
+# --- Split combined JSON array into per-host files ---------------------------
+if [[ -s "$MRGJSONTMP" ]]; then
+    _py_out=$(python3 << PYEOF
+import json, os, sys
+
+json_file = "${MRGJSONTMP}"
+out_dir   = "${COMPARE_DATA_DIR}"
+os.makedirs(out_dir, exist_ok=True)
+
+try:
+    with open(json_file) as f:
+        entries = json.load(f)
+except Exception as e:
+    print(f"ERROR parsing {json_file}: {e}", file=sys.stderr)
+    print("0 0")
+    sys.exit(0)
+
+written = 0
+failed  = 0
+for entry in entries:
+    host = entry.get("host", "")
+    if not host:
+        failed += 1
+        continue
+    dest = os.path.join(out_dir, f"{host}.json")
+    try:
+        with open(dest, "w") as f:
+            json.dump(entry, f, indent=2)
+        os.chmod(dest, 0o644)
+        written += 1
+    except Exception as e:
+        print(f"ERROR writing {dest}: {e}", file=sys.stderr)
+        failed += 1
+
+print(f"{written} {failed}")
+PYEOF
+)
+    MRG_JSON_COUNT=$(echo "$_py_out" | tail -1 | awk '{print $1}')
+    MRG_JSON_FAIL=$(echo "$_py_out" | tail -1 | awk '{print $2}')
+    log INFO "Compare JSON split: $MRG_JSON_COUNT host files written to $COMPARE_DATA_DIR ($MRG_JSON_FAIL failed)"
+else
+    log WARN "MRGJSONTMP empty — Compare JSON files not generated"
+fi
+rm -f "$MRGJSONTMP"
+
+# =============================================================================
 log SECTION "Phase 4.5 — Fed Enclave data merge"
 # =============================================================================
 # When running via AAP pipeline, AAP_FED_DIR points to the directory on
@@ -425,6 +524,52 @@ _fed_merge \
     "${DATA_DIR}/fed_enclave_pkg.csv" \
     "$PACKAGEDATA" \
     "csv"
+
+_fed_merge \
+    "Fed MRG CSV" \
+    "${_FED_SRC_DIR:+${_FED_SRC_DIR}/fed_enclave_mrg.csv}" \
+    "${DATA_DIR}/fed_enclave_mrg.csv" \
+    "$MRGCSVDATA" \
+    "csv"
+
+# Fed Compare JSON — merge fed combined array into main combined array.
+# Both files are JSON arrays. We strip the outer [ ] from the fed file
+# and append its entries into the main array so the split step in Phase 4.6
+# processes all hosts (main + fed) together.
+_FED_MRG_JSON_FRESH="${_FED_SRC_DIR:+${_FED_SRC_DIR}/fed_enclave_mrg.json}"
+_FED_MRG_JSON_FALLBACK="${DATA_DIR}/fed_enclave_mrg.json"
+
+_fed_json_src=""
+if [[ -n "$_FED_MRG_JSON_FRESH" && -f "$_FED_MRG_JSON_FRESH" && -s "$_FED_MRG_JSON_FRESH" ]]; then
+    _fed_json_src="$_FED_MRG_JSON_FRESH"
+    cp -p "$_FED_MRG_JSON_FRESH" "$_FED_MRG_JSON_FALLBACK"
+    log INFO "Fed Compare JSON: fresh from lmrg34ba — merging into main JSON array"
+elif [[ -f "$_FED_MRG_JSON_FALLBACK" && -s "$_FED_MRG_JSON_FALLBACK" ]]; then
+    _fed_json_src="$_FED_MRG_JSON_FALLBACK"
+    log INFO "Fed Compare JSON: using previous run file — $_FED_MRG_JSON_FALLBACK"
+fi
+
+if [[ -n "$_fed_json_src" && -s "${MRGJSONTMP:-}" ]]; then
+    # Append fed entries into main JSON array using python
+    python3 << PYEOF
+import json, sys
+
+main_file = "${MRGJSONTMP}"
+fed_file  = "${_fed_json_src}"
+
+try:
+    with open(main_file) as f:
+        main = json.load(f)
+    with open(fed_file) as f:
+        fed = json.load(f)
+    combined = main + fed
+    with open(main_file, "w") as f:
+        json.dump(combined, f)
+    print(f"Fed JSON merged: {len(fed)} entries added to main array (total {len(combined)})")
+except Exception as e:
+    print(f"ERROR merging fed JSON: {e}", file=sys.stderr)
+PYEOF
+fi
 
 if [[ -z "${AAP_FED_DIR:-}" ]]; then
     log INFO "AAP_FED_DIR not set — normal cron/test run, Fed Enclave merge skipped"

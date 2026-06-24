@@ -33,7 +33,7 @@
     - name: "Cleanup | Remove stale fed enclave temp files from previous runs (older than 1 hour)"
       ansible.builtin.find:
         paths: /tmp
-        patterns: "fed_enclave_*.dat,fed_enclave_*.csv"
+        patterns: "fed_enclave_*.dat,fed_enclave_*.csv,fed_enclave_*.json"
         age: "1h"
       register: stale_fed_files
 
@@ -50,6 +50,8 @@
         fed_id_controller_tmp:  "/tmp/fed_enclave_id_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.dat"
         fed_db_controller_tmp:  "/tmp/fed_enclave_db_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.dat"
         fed_pkg_controller_tmp: "/tmp/fed_enclave_pkg_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.csv"
+        fed_mrg_csv_controller_tmp: "/tmp/fed_enclave_mrg_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.csv"
+        fed_mrg_json_controller_tmp: "/tmp/fed_enclave_mrg_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.json"
 
     # =========================================================================
     # TASK 1 — lmrg34ja: Split CMDB into fed / non-fed host lists
@@ -196,6 +198,26 @@
       ignore_errors: yes
       when: fed_scan_ok
 
+    - name: "Task 3 | Fetch fed_enclave_mrg.csv from {{ fed_jumpbox }} to controller"
+      ansible.builtin.fetch:
+        src: "{{ rhel_fed_base_dir }}/data/fed_enclave_mrg.csv"
+        dest: "{{ fed_mrg_csv_controller_tmp }}"
+        flat: yes
+      delegate_to: "{{ fed_jumpbox }}"
+      register: fed_mrg_csv_fetch
+      ignore_errors: yes
+      when: fed_scan_ok
+
+    - name: "Task 3 | Fetch fed_enclave_mrg.json from {{ fed_jumpbox }} to controller"
+      ansible.builtin.fetch:
+        src: "{{ rhel_fed_base_dir }}/data/fed_enclave_mrg.json"
+        dest: "{{ fed_mrg_json_controller_tmp }}"
+        flat: yes
+      delegate_to: "{{ fed_jumpbox }}"
+      register: fed_mrg_json_fetch
+      ignore_errors: yes
+      when: fed_scan_ok
+
     - name: "Task 3 | Check fetched files are usable"
       ansible.builtin.set_fact:
         fed_dat_ready: >-
@@ -246,6 +268,24 @@
       ignore_errors: yes
       when: fed_dat_ready
 
+    - name: "Task 3 | Copy fed_enclave_mrg.csv from controller to {{ main_jumpbox }}"
+      ansible.builtin.copy:
+        src: "{{ fed_mrg_csv_controller_tmp }}"
+        dest: "{{ rhel_v2_base_dir }}/data/fed_stage/fed_enclave_mrg.csv"
+        mode: "0644"
+      delegate_to: "{{ main_jumpbox }}"
+      ignore_errors: yes
+      when: fed_dat_ready
+
+    - name: "Task 3 | Copy fed_enclave_mrg.json from controller to {{ main_jumpbox }}"
+      ansible.builtin.copy:
+        src: "{{ fed_mrg_json_controller_tmp }}"
+        dest: "{{ rhel_v2_base_dir }}/data/fed_stage/fed_enclave_mrg.json"
+        mode: "0644"
+      delegate_to: "{{ main_jumpbox }}"
+      ignore_errors: yes
+      when: fed_dat_ready
+
     - name: "Task 3 | Log transfer status"
       ansible.builtin.debug:
         msg: >-
@@ -268,6 +308,8 @@
         - "{{ fed_id_controller_tmp }}"
         - "{{ fed_db_controller_tmp }}"
         - "{{ fed_pkg_controller_tmp }}"
+        - "{{ fed_mrg_csv_controller_tmp }}"
+        - "{{ fed_mrg_json_controller_tmp }}"
       ignore_errors: yes
       when: fed_scan_ok
 
