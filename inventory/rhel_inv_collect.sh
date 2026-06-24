@@ -323,56 +323,111 @@ else
 fi
 
 # =============================================================================
-log SECTION "Phase 4.5 — Fed Enclave dat merge"
+log SECTION "Phase 4.5 — Fed Enclave data merge"
 # =============================================================================
-# When running via AAP pipeline, AAP_FED_DAT points to the fed_enclave_raw.dat
-# fetched from lmrg34ba. Append it to INVENTORYDATA before Phase 7 enrichment
-# so the single awk pass covers all hosts including Fed Enclave.
+# When running via AAP pipeline, AAP_FED_DIR points to the directory on
+# lmrg34ja where the AAP playbook copied all four fed enclave output files
+# fetched from lmrg34ba:
 #
-# Fallback: if no fresh dat was provided, use the previous run dat from
-# DATA_DIR (if it exists). This handles lmrg34ba being unreachable — the
-# previous successful fed scan data carries forward without TIMEOUT marking.
+#   fed_enclave_raw.dat  — appended to INVENTORYDATA before Phase 7 enrichment
+#   fed_enclave_id.dat   — appended to IDINVENTORYDATA (already promoted by Phase 4)
+#   fed_enclave_db.dat   — appended to DBINVENTORYDATA (already promoted by Phase 4)
+#   fed_enclave_pkg.csv  — appended to PACKAGEDATA with header dedup
 #
-# Not applicable for test mode or normal cron runs (AAP_FED_DAT is empty).
+# Fallback: for each file, if no fresh copy was provided, the previous run
+# file already in DATA_DIR is used. This handles lmrg34ba being unreachable.
+#
+# Not applicable for test mode or normal cron runs (AAP_FED_DIR is empty).
 # =============================================================================
 
-_FED_DAT_FRESH=""
-_FED_DAT_FALLBACK="${DATA_DIR}/fed_enclave_raw.dat"
+# Helper function — merge a fed file into a target with fallback to DATA_DIR
+# Usage: _fed_merge <label> <fed_file_in_dir> <fallback_in_data_dir> <target_file> <mode>
+# mode: "dat" = space-delimited, filter $3!="?"; "csv" = CSV, skip header line on append
+_fed_merge() {
+    local label="$1"
+    local fresh_src="$2"
+    local fallback="$3"
+    local target="$4"
+    local mode="$5"
+    local src=""
 
-if [[ -n "${AAP_FED_DAT:-}" ]]; then
-    if [[ -f "$AAP_FED_DAT" && -s "$AAP_FED_DAT" ]]; then
-        _FED_DAT_FRESH="$AAP_FED_DAT"
-        log INFO "Fed Enclave dat (fresh from lmrg34ba): $AAP_FED_DAT"
-        # Copy to DATA_DIR so it becomes the new fallback for next run
-        cp -p "$AAP_FED_DAT" "$_FED_DAT_FALLBACK"
-        log INFO "Fed Enclave dat saved to DATA_DIR: $_FED_DAT_FALLBACK"
+    if [[ -n "$fresh_src" && -f "$fresh_src" && -s "$fresh_src" ]]; then
+        src="$fresh_src"
+        # Save fresh copy to DATA_DIR as new fallback for next run
+        cp -p "$src" "$fallback" 2>/dev/null
+        log INFO "$label: fresh file from lmrg34ba — $src"
+    elif [[ -f "$fallback" && -s "$fallback" ]]; then
+        src="$fallback"
+        log INFO "$label: using previous run file — $fallback"
     else
-        log WARN "AAP_FED_DAT specified but file missing or empty: $AAP_FED_DAT"
-        log WARN "Falling back to previous run fed dat (if available)"
+        log INFO "$label: no file available — skipping"
+        return
+    fi
+
+    if [[ ! -f "$target" ]]; then
+        log INFO "$label: target not yet created — skipping append (will be created this run)"
+        return
+    fi
+
+    local before after merged skipped
+    before=$(wc -l < "$target")
+
+    if [[ "$mode" == "dat" ]]; then
+        # Space-delimited dat — skip non-RHEL (OS field = "?")
+        merged=$(awk '$3 != "?"' "$src" | tee -a "$target" | wc -l)
+        skipped=$(( $(wc -l < "$src") - merged ))
+        after=$(wc -l < "$target")
+        log INFO "$label: appended $merged records to $(basename "$target") ($skipped non-RHEL skipped, total now $after)"
+    elif [[ "$mode" == "csv" ]]; then
+        # CSV — skip header row on append (first line of fed file)
+        merged=$(tail -n +2 "$src" | tee -a "$target" | wc -l)
+        after=$(wc -l < "$target")
+        log INFO "$label: appended $merged records to $(basename "$target") (total now $after)"
+    fi
+}
+
+# Determine source directory — use AAP_FED_DIR if set and valid
+_FED_SRC_DIR=""
+if [[ -n "${AAP_FED_DIR:-}" ]]; then
+    if [[ -d "$AAP_FED_DIR" ]]; then
+        _FED_SRC_DIR="$AAP_FED_DIR"
+    else
+        log WARN "AAP_FED_DIR specified but directory not found: $AAP_FED_DIR"
+        log WARN "Falling back to previous run fed files in DATA_DIR"
     fi
 fi
 
-# Determine which fed dat to use
-_FED_DAT_TO_MERGE=""
-if [[ -n "$_FED_DAT_FRESH" ]]; then
-    _FED_DAT_TO_MERGE="$_FED_DAT_FRESH"
-elif [[ -f "$_FED_DAT_FALLBACK" && -s "$_FED_DAT_FALLBACK" ]]; then
-    _FED_DAT_TO_MERGE="$_FED_DAT_FALLBACK"
-    log INFO "Using previous run Fed Enclave dat: $_FED_DAT_FALLBACK"
-fi
+# Merge each file — fresh from AAP_FED_DIR if available, else fallback in DATA_DIR
+_fed_merge \
+    "Fed INV dat" \
+    "${_FED_SRC_DIR:+${_FED_SRC_DIR}/fed_enclave_raw.dat}" \
+    "${DATA_DIR}/fed_enclave_raw.dat" \
+    "$INVENTORYDATA" \
+    "dat"
 
-if [[ -n "$_FED_DAT_TO_MERGE" ]]; then
-    FED_REC=$(wc -l < "$_FED_DAT_TO_MERGE")
-    # Filter out non-RHEL (?) records before merging — same as main dat
-    awk '$3 != "?"' "$_FED_DAT_TO_MERGE" >> "$INVENTORYDATA"
-    MERGED_REC=$(awk '$3 != "?"' "$_FED_DAT_TO_MERGE" | wc -l)
-    log INFO "Fed Enclave merged: $MERGED_REC records appended to $INVENTORYDATA ($FED_REC raw, $((FED_REC - MERGED_REC)) non-RHEL skipped)"
-else
-    if [[ -n "${AAP_FED_DAT:-}" ]]; then
-        log WARN "No Fed Enclave dat available — Fed Enclave hosts will not appear in this run"
-    else
-        log INFO "AAP_FED_DAT not set — normal cron/test run, Fed Enclave merge skipped"
-    fi
+_fed_merge \
+    "Fed ID dat" \
+    "${_FED_SRC_DIR:+${_FED_SRC_DIR}/fed_enclave_id.dat}" \
+    "${DATA_DIR}/fed_enclave_id.dat" \
+    "$IDINVENTORYDATA" \
+    "dat"
+
+_fed_merge \
+    "Fed DB dat" \
+    "${_FED_SRC_DIR:+${_FED_SRC_DIR}/fed_enclave_db.dat}" \
+    "${DATA_DIR}/fed_enclave_db.dat" \
+    "$DBINVENTORYDATA" \
+    "dat"
+
+_fed_merge \
+    "Fed PKG csv" \
+    "${_FED_SRC_DIR:+${_FED_SRC_DIR}/fed_enclave_pkg.csv}" \
+    "${DATA_DIR}/fed_enclave_pkg.csv" \
+    "$PACKAGEDATA" \
+    "csv"
+
+if [[ -z "${AAP_FED_DIR:-}" ]]; then
+    log INFO "AAP_FED_DIR not set — normal cron/test run, Fed Enclave merge skipped"
 fi
 
 # =============================================================================

@@ -30,9 +30,26 @@
 
   tasks:
 
-    - name: "Set controller temp path for fed dat — evaluated once, reused throughout"
+    - name: "Cleanup | Remove stale fed enclave temp files from previous runs (older than 1 hour)"
+      ansible.builtin.find:
+        paths: /tmp
+        patterns: "fed_enclave_*.dat,fed_enclave_*.csv"
+        age: "1h"
+      register: stale_fed_files
+
+    - name: "Cleanup | Delete stale fed enclave temp files"
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ stale_fed_files.files }}"
+      when: stale_fed_files.files | length > 0
+
+    - name: "Set controller temp dir for fed files — evaluated once, reused throughout"
       ansible.builtin.set_fact:
         fed_dat_controller_tmp: "/tmp/fed_enclave_raw_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.dat"
+        fed_id_controller_tmp:  "/tmp/fed_enclave_id_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.dat"
+        fed_db_controller_tmp:  "/tmp/fed_enclave_db_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.dat"
+        fed_pkg_controller_tmp: "/tmp/fed_enclave_pkg_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.csv"
 
     # =========================================================================
     # TASK 1 — lmrg34ja: Split CMDB into fed / non-fed host lists
@@ -149,43 +166,113 @@
       ignore_errors: yes
       when: fed_scan_ok
 
-    - name: "Task 3 | Check fetched dat file is usable"
+    - name: "Task 3 | Fetch fed_enclave_id.dat from {{ fed_jumpbox }} to controller"
+      ansible.builtin.fetch:
+        src: "{{ rhel_fed_base_dir }}/data/fed_enclave_id.dat"
+        dest: "{{ fed_id_controller_tmp }}"
+        flat: yes
+      delegate_to: "{{ fed_jumpbox }}"
+      register: fed_id_fetch
+      ignore_errors: yes
+      when: fed_scan_ok
+
+    - name: "Task 3 | Fetch fed_enclave_db.dat from {{ fed_jumpbox }} to controller"
+      ansible.builtin.fetch:
+        src: "{{ rhel_fed_base_dir }}/data/fed_enclave_db.dat"
+        dest: "{{ fed_db_controller_tmp }}"
+        flat: yes
+      delegate_to: "{{ fed_jumpbox }}"
+      register: fed_db_fetch
+      ignore_errors: yes
+      when: fed_scan_ok
+
+    - name: "Task 3 | Fetch fed_enclave_pkg.csv from {{ fed_jumpbox }} to controller"
+      ansible.builtin.fetch:
+        src: "{{ rhel_fed_base_dir }}/data/fed_enclave_pkg.csv"
+        dest: "{{ fed_pkg_controller_tmp }}"
+        flat: yes
+      delegate_to: "{{ fed_jumpbox }}"
+      register: fed_pkg_fetch
+      ignore_errors: yes
+      when: fed_scan_ok
+
+    - name: "Task 3 | Check fetched files are usable"
       ansible.builtin.set_fact:
         fed_dat_ready: >-
           {{ fed_scan_ok and
              fed_dat_fetch is not skipped and
              fed_dat_fetch is not failed }}
 
+    - name: "Task 3 | Create fed enclave staging dir on {{ main_jumpbox }}"
+      ansible.builtin.file:
+        path: "{{ rhel_v2_base_dir }}/data/fed_stage"
+        state: directory
+        mode: "0755"
+      delegate_to: "{{ main_jumpbox }}"
+      when: fed_dat_ready
+
     - name: "Task 3 | Copy fed_enclave_raw.dat from controller to {{ main_jumpbox }}"
       ansible.builtin.copy:
         src: "{{ fed_dat_controller_tmp }}"
-        dest: "{{ rhel_v2_base_dir }}/data/fed_enclave_raw.dat"
+        dest: "{{ rhel_v2_base_dir }}/data/fed_stage/fed_enclave_raw.dat"
         mode: "0644"
       delegate_to: "{{ main_jumpbox }}"
       when: fed_dat_ready
 
-    - name: "Task 3 | Log fed dat transfer status"
+    - name: "Task 3 | Copy fed_enclave_id.dat from controller to {{ main_jumpbox }}"
+      ansible.builtin.copy:
+        src: "{{ fed_id_controller_tmp }}"
+        dest: "{{ rhel_v2_base_dir }}/data/fed_stage/fed_enclave_id.dat"
+        mode: "0644"
+      delegate_to: "{{ main_jumpbox }}"
+      ignore_errors: yes
+      when: fed_dat_ready
+
+    - name: "Task 3 | Copy fed_enclave_db.dat from controller to {{ main_jumpbox }}"
+      ansible.builtin.copy:
+        src: "{{ fed_db_controller_tmp }}"
+        dest: "{{ rhel_v2_base_dir }}/data/fed_stage/fed_enclave_db.dat"
+        mode: "0644"
+      delegate_to: "{{ main_jumpbox }}"
+      ignore_errors: yes
+      when: fed_dat_ready
+
+    - name: "Task 3 | Copy fed_enclave_pkg.csv from controller to {{ main_jumpbox }}"
+      ansible.builtin.copy:
+        src: "{{ fed_pkg_controller_tmp }}"
+        dest: "{{ rhel_v2_base_dir }}/data/fed_stage/fed_enclave_pkg.csv"
+        mode: "0644"
+      delegate_to: "{{ main_jumpbox }}"
+      ignore_errors: yes
+      when: fed_dat_ready
+
+    - name: "Task 3 | Log transfer status"
       ansible.builtin.debug:
         msg: >-
           {% if fed_dat_ready %}
-          Fresh fed_enclave_raw.dat transferred to {{ main_jumpbox }}:
-          {{ rhel_v2_base_dir }}/data/fed_enclave_raw.dat
+          All available fed enclave files transferred to
+          {{ main_jumpbox }}:{{ rhel_v2_base_dir }}/data/fed_stage/
           {% elif fed_scan_needed %}
-          Fed scan failed or dat transfer failed —
-          rhel_inv_run.sh will use previous fed_enclave_raw.dat from DATA_DIR.
+          Fed scan failed or transfer failed —
+          rhel_inv_run.sh will use previous fed files from DATA_DIR as fallback.
           {% else %}
           No Fed Enclave hosts in CMDB — fed scan skipped entirely.
           {% endif %}
 
-    - name: "Task 3 | Clean up controller temp file"
+    - name: "Task 3 | Clean up all controller temp fed files"
       ansible.builtin.file:
-        path: "{{ fed_dat_controller_tmp }}"
+        path: "{{ item }}"
         state: absent
-      when: fed_scan_ok
+      loop:
+        - "{{ fed_dat_controller_tmp }}"
+        - "{{ fed_id_controller_tmp }}"
+        - "{{ fed_db_controller_tmp }}"
+        - "{{ fed_pkg_controller_tmp }}"
       ignore_errors: yes
+      when: fed_scan_ok
 
     # =========================================================================
-    # TASK 4 — lmrg34ja: Run main inventory with non-fed hosts + fed dat merge
+    # TASK 4 — lmrg34ja: Run main inventory with non-fed hosts + fed dir merge
     # =========================================================================
 
     - name: "Task 4 | Run rhel_inv_run.sh on {{ main_jumpbox }}"
@@ -193,7 +280,7 @@
         {{ rhel_v2_base_dir }}/rhel_inv_run.sh
         --hostlist {{ rhel_v2_base_dir }}/data/non_fed_hosts.txt
         {% if fed_dat_ready %}
-        --fed-dat {{ rhel_v2_base_dir }}/data/fed_enclave_raw.dat
+        --fed-dir {{ rhel_v2_base_dir }}/data/fed_stage
         {% endif %}
       delegate_to: "{{ main_jumpbox }}"
       register: main_run_result
@@ -215,6 +302,6 @@
           - "======================================================"
           - "Fed Enclave hosts:    {{ fed_host_list | length }}"
           - "Fed scan ran:         {{ fed_scan_ok }}"
-          - "Fed dat transferred:  {{ fed_dat_ready }}"
+          - "Fed files transferred: {{ fed_dat_ready }}"
           - "Main run exit code:   {{ main_run_result.rc }}"
           - "======================================================"

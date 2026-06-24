@@ -38,7 +38,11 @@ cd "$(dirname "$0")" || exit 1
 TEST_MODE=0
 TEST_HOSTLIST=""
 AAP_HOSTLIST=""       # --hostlist: override MASTERHOSTLIST (AAP pipeline use)
-AAP_FED_DAT=""        # --fed-dat:  path to fed enclave raw dat to merge (AAP pipeline use)
+AAP_FED_DIR=""        # --fed-dir:  directory containing all four fed enclave output files
+                      #             (fed_enclave_raw.dat, fed_enclave_id.dat,
+                      #              fed_enclave_db.dat, fed_enclave_pkg.csv)
+                      #             produced by rhel_fed_scan.sh on lmrg34ba and
+                      #             copied to DATA_DIR on lmrg34ja by the AAP playbook
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -58,25 +62,30 @@ while [[ $# -gt 0 ]]; do
             AAP_HOSTLIST="$2"
             shift 2
             ;;
-        --fed-dat)
+        --fed-dir)
             if [[ -z "$2" || "$2" == --* ]]; then
-                echo "$(date '+%Y-%m-%d %H:%M:%S')  [ERROR]   --fed-dat requires a file path" >&2
+                echo "$(date '+%Y-%m-%d %H:%M:%S')  [ERROR]   --fed-dir requires a directory path" >&2
                 exit 1
             fi
-            AAP_FED_DAT="$2"
+            AAP_FED_DIR="$2"
             shift 2
             ;;
         -h|--help)
-            echo "Usage: $0 [--test [hostlist]] [--hostlist <file>] [--fed-dat <file>]"
+            echo "Usage: $0 [--test [hostlist]] [--hostlist <file>] [--fed-dir <dir>]"
             echo ""
             echo "  Normal run:    $0"
             echo "  Test run:      $0 --test /path/to/hosts.txt"
-            echo "  AAP pipeline:  $0 --hostlist non_fed_hosts.txt --fed-dat fed_enclave_raw.dat"
+            echo "  AAP pipeline:  $0 --hostlist non_fed_hosts.txt --fed-dir /path/to/fed/data"
             echo ""
             echo "  --test          Run in test mode with isolated output paths."
             echo "  --hostlist      Override MASTERHOSTLIST (AAP pipeline: non-fed hosts only)."
-            echo "  --fed-dat       Path to Fed Enclave raw dat file to merge before enrichment."
-            echo "                  If file is missing, previous run's dat is used automatically."
+            echo "  --fed-dir       Directory containing fed enclave output files from lmrg34ba:"
+            echo "                    fed_enclave_raw.dat  — INV scan data"
+            echo "                    fed_enclave_id.dat   — UID/GID data"
+            echo "                    fed_enclave_db.dat   — Oracle DB data"
+            echo "                    fed_enclave_pkg.csv  — Package data"
+            echo "                  If directory or files are missing, previous run files"
+            echo "                  in DATA_DIR are used automatically as fallback."
             exit 0
             ;;
         *)
@@ -102,8 +111,8 @@ if [[ -n "$AAP_HOSTLIST" ]]; then
     fi
     MASTERHOSTLIST="$AAP_HOSTLIST"
 fi
-# Export fed dat path so rhel_inv_collect.sh can find it in Phase 4.5
-export AAP_FED_DAT
+# Export fed dir path so rhel_inv_collect.sh can find all four fed files in Phase 4.5
+export AAP_FED_DIR
 
 # Set RUN_LOG here with a live timestamp — must NOT be in conf or the date
 # gets evaluated once at source time and never changes within a session.

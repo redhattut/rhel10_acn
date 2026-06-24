@@ -141,18 +141,52 @@ fi
 INV_COUNT=$(wc -l < "$FED_DAT_TMP")
 log INFO "Collected $INV_COUNT INV records from Fed Enclave hosts"
 
-# --- Promote output ----------------------------------------------------------
-mv "$FED_DAT_TMP" "$FED_DAT_OUT"
-log INFO "Fed Enclave dat promoted: $FED_DAT_OUT"
+# --- Promote output files ----------------------------------------------------
+# All four streams are kept for AAP to fetch back to lmrg34ja.
+# rhel_inv_collect.sh merges each one in the appropriate phase.
 
-# Clean up temp files — ID/DB/PKG data not used from fed scan
-rm -f "$FED_ID_TMP" "$FED_DB_TMP" "$FED_PKG_TMP"
+FED_ID_OUT="${DATA_DIR}/fed_enclave_id.dat"
+FED_DB_OUT="${DATA_DIR}/fed_enclave_db.dat"
+FED_PKG_OUT="${DATA_DIR}/fed_enclave_pkg.csv"
+
+mv "$FED_DAT_TMP" "$FED_DAT_OUT"
+log INFO "Fed Enclave INV dat  : $FED_DAT_OUT ($(wc -l < "$FED_DAT_OUT") records)"
+
+if [[ -s "$FED_ID_TMP" ]]; then
+    mv "$FED_ID_TMP" "$FED_ID_OUT"
+    log INFO "Fed Enclave ID dat   : $FED_ID_OUT ($(wc -l < "$FED_ID_OUT") records)"
+else
+    rm -f "$FED_ID_TMP"
+    log INFO "Fed Enclave ID dat   : empty — no ID data collected"
+fi
+
+if [[ -s "$FED_DB_TMP" ]]; then
+    mv "$FED_DB_TMP" "$FED_DB_OUT"
+    log INFO "Fed Enclave DB dat   : $FED_DB_OUT ($(wc -l < "$FED_DB_OUT") records)"
+else
+    rm -f "$FED_DB_TMP"
+    log INFO "Fed Enclave DB dat   : empty — normal if no Oracle hosts in Fed Enclave"
+fi
+
+if [[ -s "$FED_PKG_TMP" ]]; then
+    if ! grep -q "^Host,Package" "$FED_PKG_TMP" 2>/dev/null; then
+        { echo "Host,Package,Version,Release,Install date"; cat "$FED_PKG_TMP"; } \
+            > "${FED_PKG_TMP}.h"
+        mv "${FED_PKG_TMP}.h" "$FED_PKG_OUT"
+    else
+        mv "$FED_PKG_TMP" "$FED_PKG_OUT"
+    fi
+    log INFO "Fed Enclave PKG csv  : $FED_PKG_OUT ($(wc -l < "$FED_PKG_OUT") records)"
+else
+    rm -f "$FED_PKG_TMP"
+    log INFO "Fed Enclave PKG csv  : empty — no package data collected"
+fi
 
 # Clean up stale error directories older than 7 days
 find "$PGMDIR" -type d -name "errdir_fed*" -mtime +7 \
-    -exec rm -rf '{}' \; 2>/dev/null
+    -exec rm -rf \'{}\' \; 2>/dev/null
 
 log INFO "=== Fed Enclave Scan complete ==="
-log INFO "Output ready for AAP fetch: $FED_DAT_OUT"
+log INFO "Outputs ready for AAP fetch in: $DATA_DIR"
 
 exit 0
