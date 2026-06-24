@@ -230,13 +230,19 @@ SSHD_SVC=$(systemctl is-active sshd 2>/dev/null || echo "inactive")
 COLLECTED_AT=$(date '+%Y-%m-%dT%H:%M:%S')
 
 # --- JSON escape helper ------------------------------------------------------
+# _NL, _CR, _TB: used by je() for bash 4.x compatible substitution.
+# $'...' inside ${var//pattern} is unreliable on bash 4.4 (RHEL 7).
+_NL=$'\n'
+_CR=$'\r'
+_TB=$'\t'
+
 je() {
     local s="$1"
     s="${s//\\/\\\\}"
     s="${s//\"/\\\"}"
-    s="${s//$'\n'/\\n}"
-    s="${s//$'\r'/\\r}"
-    s="${s//$'\t'/\\t}"
+    s="${s//${_NL}/\\n}"
+    s="${s//${_CR}/\\r}"
+    s="${s//${_TB}/\\t}"
     printf '%s' "$s"
 }
 
