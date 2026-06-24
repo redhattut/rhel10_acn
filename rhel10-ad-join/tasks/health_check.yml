@@ -1,7 +1,7 @@
 ---
 - name: Default health flag to false
   ansible.builtin.set_fact:
-    mrg_dual_auth_healthy: false
+    dual_auth_healthy: false
 
 - name: Gather service facts
   ansible.builtin.service_facts: {}
@@ -15,46 +15,46 @@
 # within a bounded time and being correctly reported as "not healthy".
 - name: Validate the existing keytab is readable and non-empty
   ansible.builtin.command: "klist -k -t /etc/krb5.keytab"
-  register: mrg_dual_auth_keytab_check
+  register: dual_auth_keytab_check
   changed_when: false
   failed_when: false
-  when: mrg_dual_auth_krb5_keytab_stat.stat.exists
+  when: dual_auth_krb5_keytab_stat.stat.exists
 
 - name: Check AD domain online status via sssctl
-  ansible.builtin.command: "timeout 30 sssctl domain-status {{ mrg_dual_auth_domain }} -o"
-  register: mrg_dual_auth_domain_status
+  ansible.builtin.command: "timeout 30 sssctl domain-status {{ dual_auth_domain }} -o"
+  register: dual_auth_domain_status
   changed_when: false
   failed_when: false
-  when: mrg_dual_auth_krb5_keytab_stat.stat.exists
+  when: dual_auth_krb5_keytab_stat.stat.exists
 
 - name: Mark AD join as healthy when keytab valid, domain online, sssd running, and AUTHMETHOD set
   ansible.builtin.set_fact:
-    mrg_dual_auth_healthy: true
+    dual_auth_healthy: true
   when:
-    - mrg_dual_auth_krb5_keytab_stat.stat.exists
-    - mrg_dual_auth_keytab_check.rc == 0
-    - mrg_dual_auth_domain_status.rc == 0
+    - dual_auth_krb5_keytab_stat.stat.exists
+    - dual_auth_keytab_check.rc == 0
+    - dual_auth_domain_status.rc == 0
     - ansible_facts.services['sssd.service'].state | default('') == 'running'
-    - mrg_dual_auth_current_authmethod == mrg_dual_auth_target_authmethod
+    - dual_auth_current_authmethod == dual_auth_target_authmethod
 
 - name: Report current AD join health
   ansible.builtin.debug:
-    msg: "AD join healthy: {{ mrg_dual_auth_healthy }}"
+    msg: "AD join healthy: {{ dual_auth_healthy }}"
 
 - name: Validate krb5.conf is a known default before modifying it
   ansible.builtin.assert:
     that:
       - >-
-        mrg_dual_auth_healthy
-        or mrg_dual_auth_lifecycle_action in ['rejoin', 'leave_ad']
-        or not mrg_dual_auth_krb5_conf_stat.stat.exists
-        or mrg_dual_auth_krb5_conf_stat.stat.checksum in (mrg_dual_auth_krb5_known_md5[mrg_dual_auth_rhel_major] | default([]))
+        dual_auth_healthy
+        or dual_auth_lifecycle_action in ['rejoin', 'leave_ad']
+        or not dual_auth_krb5_conf_stat.stat.exists
+        or dual_auth_krb5_conf_stat.stat.checksum in (dual_auth_krb5_known_md5[dual_auth_rhel_major] | default([]))
     fail_msg: >-
-      /etc/krb5.conf does not match a known default for RHEL {{ mrg_dual_auth_rhel_major }}
-      (checksum: {{ mrg_dual_auth_krb5_conf_stat.stat.checksum | default('n/a') }}), the host
-      is not already healthily joined, and mrg_dual_auth_lifecycle_action is not
+      /etc/krb5.conf does not match a known default for RHEL {{ dual_auth_rhel_major }}
+      (checksum: {{ dual_auth_krb5_conf_stat.stat.checksum | default('n/a') }}), the host
+      is not already healthily joined, and dual_auth_lifecycle_action is not
       rejoin/leave_ad. It may be hand-customized for something else (e.g. a
       Hadoop cluster) - refusing to overwrite. Investigate before proceeding,
-      set mrg_dual_auth_lifecycle_action=rejoin to force it, or update
-      mrg_dual_auth_krb5_known_md5.
+      set dual_auth_lifecycle_action=rejoin to force it, or update
+      dual_auth_krb5_known_md5.
     success_msg: "krb5.conf check passed (already healthy, forced action, matches known default, or absent)."

@@ -1,0 +1,124 @@
+---
+# Handles /etc/sssd/sssd.conf for two cases:
+#
+# 1. EXISTING host (sssd.conf already present from a prior OUD or pnc_auth_config
+#    setup): rename [domain/default] -> [domain/OUD] and domains=default -> OUD
+#    in-place. This is idempotent - if already renamed, the regex matches nothing.
+#
+# 2. NEW BUILD (sssd.conf absent): generate from scratch using sssd.conf.j2,
+#    which includes the OUD LDAP hostId bind DN and password. This requires:
+#    - Creating/updating the host bind account in OUD LDAP (via ldapmodify,
+#      delegated to dual_auth_oud_delegate_host since target hosts may not have
+#      openldap-clients, and the admin bind password should not leave the jumpbox)
+#    - dual_auth_oud_admin_password_<env> set via AAP Survey (Password type)
+#      or -e on CLI - never hard-coded in vars
+
+- name: Check whether /etc/sssd/sssd.conf already exists
+  ansible.builtin.stat:
+    path: /etc/sssd/sssd.conf
+  register: dual_auth_sssd_conf_stat
+
+# ── Existing host path (in-place rename) ─────────────────────────────────────
+- name: Rename legacy [domain/default] stanza to [domain/OUD] in existing sssd.conf
+  ansible.builtin.replace:
+    path: /etc/sssd/sssd.conf
+    regexp: '^\[domain/default\]'
+    replace: '[domain/OUD]'
+  when: dual_auth_sssd_conf_stat.stat.exists
+
+- name: Rename bare "default" domain reference to "OUD" in existing sssd.conf
+  ansible.builtin.replace:
+    path: /etc/sssd/sssd.conf
+    regexp: '(domains\s*=.*?)\bdefault\b'
+    replace: '\1OUD'
+  when: dual_auth_sssd_conf_stat.stat.exists
+
+# ── New build path (generate from scratch) ───────────────────────────────────
+- name: Generate sssd.conf from scratch for new build
+  when: not dual_auth_sssd_conf_stat.stat.exists
+  block:
+    - name: Validate OUD admin password is set for this environment
+      ansible.builtin.assert:
+        that:
+          - dual_auth_oud_admin_password | length > 0
+        fail_msg: >-
+          dual_auth_oud_admin_password_{{ dual_auth_target_env }} is empty.
+          Set it via AAP Survey (Password type) or -e on CLI.
+
+    - name: Generate random host bind password
+      ansible.builtin.shell: |
+        head /dev/urandom | md5sum | base64 | head -c 16
+      register: dual_auth_host_pwd_result
+      changed_when: false
+      no_log: true
+
+    - name: Set host bind credential facts
+      ansible.builtin.set_fact:
+        dual_auth_host_cn: "{{ ansible_hostname }}-hostid"
+        dual_auth_host_dn: "cn={{ ansible_hostname }}-hostid,ou=amm,ou=TrustedApplications,ou=FrameworkSystems,o=pnc"
+        dual_auth_host_pwd: "{{ dual_auth_host_pwd_result.stdout }}"
+      no_log: true
+
+    - name: Render hostId LDIF to temp file on jumpbox
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../files/hostid.ldif.j2"
+        dest: "/tmp/{{ ansible_hostname }}.ldif"
+        mode: "0600"
+      delegate_to: "{{ dual_auth_oud_delegate_host }}"
+      no_log: true
+
+    - name: Check if OUD hostId account already exists
+      ansible.builtin.shell: >-
+        ldapsearch -LLL
+        -H "{{ dual_auth_oud_ldap_uri }}"
+        -x -D "{{ dual_auth_oud_admin_dn }}"
+        -w "{{ dual_auth_oud_admin_password }}"
+        -b "ou=TrustedApplications,ou=FrameworkSystems,o=pnc"
+        "cn={{ dual_auth_host_cn }}" dn
+        | grep -q "^dn:"
+      register: dual_auth_oud_hostid_check
+      changed_when: false
+      failed_when: false
+      delegate_to: "{{ dual_auth_oud_delegate_host }}"
+      no_log: true
+
+    - name: Create OUD hostId account (does not exist yet)
+      ansible.builtin.command: >-
+        ldapmodify
+        -H "{{ dual_auth_oud_ldap_uri }}"
+        -x -D "{{ dual_auth_oud_admin_dn }}"
+        -w "{{ dual_auth_oud_admin_password }}"
+        -c -f /tmp/{{ ansible_hostname }}.ldif
+      delegate_to: "{{ dual_auth_oud_delegate_host }}"
+      no_log: true
+      when: dual_auth_oud_hostid_check.rc != 0
+
+    - name: Update OUD hostId account password (account already exists)
+      ansible.builtin.shell: |
+        ldapmodify \
+          -H "{{ dual_auth_oud_ldap_uri }}" \
+          -x -D "{{ dual_auth_oud_admin_dn }}" \
+          -w "{{ dual_auth_oud_admin_password }}" << EOLDIFF
+        dn: {{ dual_auth_host_dn }}
+        changetype: modify
+        replace: userPassword
+        userPassword: {{ dual_auth_host_pwd }}
+        EOLDIFF
+      delegate_to: "{{ dual_auth_oud_delegate_host }}"
+      no_log: true
+      when: dual_auth_oud_hostid_check.rc == 0
+
+    - name: Remove temp LDIF from jumpbox
+      ansible.builtin.file:
+        path: "/tmp/{{ ansible_hostname }}.ldif"
+        state: absent
+      delegate_to: "{{ dual_auth_oud_delegate_host }}"
+
+    - name: Deploy sssd.conf from template
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../files/sssd.conf.j2"
+        dest: /etc/sssd/sssd.conf
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true

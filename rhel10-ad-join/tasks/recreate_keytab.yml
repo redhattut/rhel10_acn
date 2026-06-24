@@ -1,0 +1,13 @@
+---
+# Restages the AD bind keytab from the static file and restarts sssd.
+# Use this when the keytab on disk is stale, corrupted, or missing without
+# needing to redo the full configure/rejoin cycle.
+# Requires the correct static keytab file to be present in files/.
+
+- name: Stage the AD bind keytab
+  ansible.builtin.import_tasks: stage_static_keytab.yml
+
+- name: Restart sssd to pick up the refreshed keytab
+  ansible.builtin.systemd:
+    name: sssd
+    state: restarted

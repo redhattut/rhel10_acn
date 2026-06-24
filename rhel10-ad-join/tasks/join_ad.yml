@@ -7,11 +7,11 @@
     timeout 90 adcli join -C
     --service-name=host --service-name=nfs
     --host-fqdn={{ ansible_fqdn }}
-    --user-principal=host/{{ ansible_fqdn }}@{{ mrg_dual_auth_realm }}
-    --domain-ou={{ mrg_dual_auth_base_ou }},{{ mrg_dual_auth_dc_ou }}
-    --domain={{ mrg_dual_auth_domain }}
+    --user-principal=host/{{ ansible_fqdn }}@{{ dual_auth_realm }}
+    --domain-ou={{ dual_auth_base_ou }},{{ dual_auth_dc_ou }}
+    --domain={{ dual_auth_domain }}
     --show-details -K /etc/krb5.keytab
-  register: mrg_dual_auth_adcli_join
+  register: dual_auth_adcli_join
   changed_when: true
 
 - name: Clean up transient keytab and ticket cache
@@ -30,6 +30,6 @@
 
 - name: Record AUTHMETHOD in PNC provision config
   ansible.builtin.lineinfile:
-    path: "{{ mrg_dual_auth_provision_config_path }}"
+    path: "{{ dual_auth_provision_config_path }}"
     regexp: '^AUTHMETHOD='
-    line: "AUTHMETHOD={{ mrg_dual_auth_target_authmethod }}"
+    line: "AUTHMETHOD={{ dual_auth_target_authmethod }}"

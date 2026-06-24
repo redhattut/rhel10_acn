@@ -1,12 +1,12 @@
 ---
-- name: Validate mrg_dual_auth_lifecycle_action is a known value
+- name: Validate dual_auth_lifecycle_action is a known value
   ansible.builtin.assert:
     that:
-      - mrg_dual_auth_lifecycle_action in ['configure', 'rejoin', 'leave_ad']
+      - dual_auth_lifecycle_action in ['configure', 'rejoin', 'leave_ad', 'convert_ad_only', 'recreate_keytab', 'recreate_sssd']
     fail_msg: >-
-      mrg_dual_auth_lifecycle_action={{ mrg_dual_auth_lifecycle_action }} is not
-      one of configure/rejoin/leave_ad - check the Survey choice value or -e override.
-    success_msg: "mrg_dual_auth_lifecycle_action value is valid."
+      dual_auth_lifecycle_action={{ dual_auth_lifecycle_action }} is not
+      one of configure/rejoin/leave_ad/convert_ad_only/recreate_keytab/recreate_sssd - check the Survey choice value or -e override.
+    success_msg: "dual_auth_lifecycle_action value is valid."
 
 - name: Determine current sssd id_provider configuration
   ansible.builtin.shell:
@@ -14,33 +14,33 @@
       set -o pipefail;
       cat /etc/sssd/sssd.conf /etc/sssd/conf.d/* 2>/dev/null
       | grep '^id_provider' | cut -d '=' -f2 | tr -d ' ' | paste -sd '+'
-  register: mrg_dual_auth_current_auth
+  register: dual_auth_current_auth
   changed_when: false
   failed_when: false
 
 - name: Read current AUTHMETHOD from PNC provision config
-  ansible.builtin.command: "grep -m1 ^AUTHMETHOD= {{ mrg_dual_auth_provision_config_path }}"
-  register: mrg_dual_auth_authmethod_raw
+  ansible.builtin.command: "grep -m1 ^AUTHMETHOD= {{ dual_auth_provision_config_path }}"
+  register: dual_auth_authmethod_raw
   changed_when: false
   failed_when: false
 
 - name: Normalize current AUTHMETHOD value
   ansible.builtin.set_fact:
-    mrg_dual_auth_current_authmethod: "{{ mrg_dual_auth_authmethod_raw.stdout.split('=')[1] | default('') | trim }}"
+    dual_auth_current_authmethod: "{{ dual_auth_authmethod_raw.stdout.split('=')[1] | default('') | trim }}"
 
 - name: Check whether a krb5 keytab already exists
   ansible.builtin.stat:
     path: /etc/krb5.keytab
-  register: mrg_dual_auth_krb5_keytab_stat
+  register: dual_auth_krb5_keytab_stat
 
 - name: Check current krb5.conf checksum
   ansible.builtin.stat:
     path: /etc/krb5.conf
     checksum_algorithm: md5
-  register: mrg_dual_auth_krb5_conf_stat
+  register: dual_auth_krb5_conf_stat
 
 # The "is krb5.conf safe to overwrite" check lives in health_check.yml, not
-# here - it needs to know mrg_dual_auth_healthy first (an already-healthy
+# here - it needs to know dual_auth_healthy first (an already-healthy
 # host's krb5.conf is *our own* templated output, not the pristine OS
 # default, so checking it here against the pristine-default checksum list
 # would always wrongly fail). See health_check.yml.
@@ -49,11 +49,11 @@
   ansible.builtin.assert:
     that:
       - >-
-        'AD' not in (mrg_dual_auth_current_auth.stdout | upper)
-        or mrg_dual_auth_current_authmethod == mrg_dual_auth_target_authmethod
+        'AD' not in (dual_auth_current_auth.stdout | upper)
+        or dual_auth_current_authmethod == dual_auth_target_authmethod
     fail_msg: >-
-      sssd already reports an AD id_provider but {{ mrg_dual_auth_provision_config_path }}
-      does not show AUTHMETHOD={{ mrg_dual_auth_target_authmethod }}. This host may be on
+      sssd already reports an AD id_provider but {{ dual_auth_provision_config_path }}
+      does not show AUTHMETHOD={{ dual_auth_target_authmethod }}. This host may be on
       the legacy pure-AD path that this role does not manage - investigate
       before running it here.
     success_msg: "Auth method pre-check passed."

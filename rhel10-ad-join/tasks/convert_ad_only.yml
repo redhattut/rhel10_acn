@@ -1,0 +1,103 @@
+---
+# Converts a host currently running OUD+AD dual auth to AD-only by
+# removing OUD domain references from the sssd conf.d files.
+#
+# Intended for hosts where pnc_join_ad + pnc_auth_config (or this role in
+# configure mode) is already in place and OUD is being decommissioned.
+#
+# Optional extra variable:
+#   dual_auth_additional_gsgu_groups - newline or space-separated GSGu group
+#   names to add to login-access.conf via pnc-add-access. Not a Survey field;
+#   use -e on CLI for ad-hoc additions, or the dedicated convert playbook
+#   for bulk work.
+
+- name: Back up existing sssd conf.d files before AD-only conversion
+  ansible.builtin.copy:
+    src: "/etc/sssd/conf.d/{{ item }}"
+    dest: "{{ dual_auth_auth_backup_dir }}/{{ item }}.pre_ad_only"
+    remote_src: true
+    mode: "0600"
+  loop:
+    - 40-pncbank.conf
+    - 50-pncad.conf
+    - 55-pncad.conf
+    - 60-pnc-OUD-AD.conf
+  failed_when: false
+
+- name: Comment out use_fully_qualified_names = true in 40-pncbank.conf (prod only)
+  ansible.builtin.replace:
+    path: /etc/sssd/conf.d/40-pncbank.conf
+    regexp: '(?i)(?!#)(use_fully_qualified_names\s*=\s*true)'
+    replace: '# \1'
+  when: dual_auth_target_env == 'prod'
+
+- name: Remove OUD from domains line in 60-pnc-OUD-AD.conf
+  ansible.builtin.replace:
+    path: /etc/sssd/conf.d/60-pnc-OUD-AD.conf
+    regexp: '(domains\s*=\s*)OUD,\s*'
+    replace: '\1'
+
+- name: Comment out use_fully_qualified_names = True in 50-pncad.conf (non-prod)
+  ansible.builtin.replace:
+    path: /etc/sssd/conf.d/50-pncad.conf
+    regexp: '(?i)(?!#)(use_fully_qualified_names\s*=\s*true)'
+    replace: '# \1'
+  when: dual_auth_target_env != 'prod'
+
+- name: Comment out use_fully_qualified_names = False in 55-pncad.conf (non-prod)
+  ansible.builtin.replace:
+    path: /etc/sssd/conf.d/55-pncad.conf
+    regexp: '(?i)(?!#)(use_fully_qualified_names\s*=\s*false)'
+    replace: '# \1'
+  when: dual_auth_target_env != 'prod'
+
+- name: Remove pncint.net domain entry from 60-pnc-OUD-AD.conf (non-prod)
+  ansible.builtin.replace:
+    path: /etc/sssd/conf.d/60-pnc-OUD-AD.conf
+    regexp: ',\s*[a-zA-Z]+\.pncint\.net'
+    replace: ''
+  when: dual_auth_target_env != 'prod'
+
+- name: Run pnc-run-discovery to refresh login-access.conf
+  ansible.builtin.command: "{{ dual_auth_rbin_dir }}/pnc-run-discovery"
+  changed_when: true
+
+- name: Parse additional GSGu groups list from extra var
+  ansible.builtin.set_fact:
+    dual_auth_gsgu_list: >-
+      {{ (dual_auth_additional_gsgu_groups | default(''))
+         .split('\n') | map('trim') | select('truthy') | list }}
+
+- name: Add additional GSGu groups to login-access.conf
+  ansible.builtin.command: >-
+    {{ dual_auth_rbin_dir }}/pnc-add-access "({{ item }})"
+  loop: "{{ dual_auth_gsgu_list }}"
+  when: dual_auth_gsgu_list | length > 0
+
+- name: Stop sssd before cache wipe
+  ansible.builtin.systemd:
+    name: sssd
+    state: stopped
+
+- name: Clear sssd log files
+  ansible.builtin.shell: "rm -rf /var/log/sssd/*"
+  changed_when: true
+
+- name: Clear sssd database and memory cache
+  ansible.builtin.shell: "rm -rf /var/lib/sss/{db,mc}/*"
+  changed_when: true
+
+- name: Clear sssd kdc info files
+  ansible.builtin.shell: "rm -rf /var/lib/sss/pubconf/kdcinfo.*"
+  changed_when: true
+  failed_when: false
+
+- name: Start sssd
+  ansible.builtin.systemd:
+    name: sssd
+    state: started
+
+- name: Expire sssd cache
+  ansible.builtin.command: "sss_cache -E"
+  changed_when: true
+  failed_when: false

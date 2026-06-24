@@ -7,8 +7,8 @@
   ansible.builtin.import_tasks: stage_static_keytab.yml
 
 - name: Remove existing computer account from Active Directory
-  ansible.builtin.command: "adcli delete-computer -C --domain={{ mrg_dual_auth_domain }} {{ ansible_hostname }}"
-  register: mrg_dual_auth_adcli_delete
+  ansible.builtin.command: "adcli delete-computer -C --domain={{ dual_auth_domain }} {{ ansible_hostname }}"
+  register: dual_auth_adcli_delete
   changed_when: true
   failed_when: false
 

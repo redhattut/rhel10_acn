@@ -11,23 +11,23 @@
 
 - name: Stage the static AD bind-account keytab and obtain TGT for removal
   ansible.builtin.import_tasks: stage_static_keytab.yml
-  when: mrg_dual_auth_krb5_keytab_stat.stat.exists | default(false)
+  when: dual_auth_krb5_keytab_stat.stat.exists | default(false)
 
 - name: Remove computer account from Active Directory
-  ansible.builtin.command: "timeout 60 adcli delete-computer -C --domain={{ mrg_dual_auth_domain }} {{ ansible_hostname }}"
-  register: mrg_dual_auth_adcli_delete
+  ansible.builtin.command: "timeout 60 adcli delete-computer -C --domain={{ dual_auth_domain }} {{ ansible_hostname }}"
+  register: dual_auth_adcli_delete
   changed_when: true
   failed_when: false
-  when: mrg_dual_auth_krb5_keytab_stat.stat.exists | default(false)
+  when: dual_auth_krb5_keytab_stat.stat.exists | default(false)
 
 - name: Clean up transient keytab and ticket cache after removal
   ansible.builtin.import_tasks: destroy_transient_keytab.yml
-  when: mrg_dual_auth_krb5_keytab_stat.stat.exists | default(false)
+  when: dual_auth_krb5_keytab_stat.stat.exists | default(false)
 
 - name: Check existence of backup files to restore
   ansible.builtin.stat:
-    path: "{{ mrg_dual_auth_auth_backup_dir }}/{{ item | basename }}.pnc_auth_config"
-  register: mrg_dual_auth_restore_candidates
+    path: "{{ dual_auth_auth_backup_dir }}/{{ item | basename }}.pnc_auth_config"
+  register: dual_auth_restore_candidates
   loop:
     - /etc/nsswitch.conf
     - /etc/disable.passwd
@@ -39,13 +39,13 @@
 
 - name: Restore backed-up configuration files
   ansible.builtin.copy:
-    src: "{{ mrg_dual_auth_auth_backup_dir }}/{{ item.item | basename }}.pnc_auth_config"
+    src: "{{ dual_auth_auth_backup_dir }}/{{ item.item | basename }}.pnc_auth_config"
     dest: "{{ item.item }}"
     remote_src: true
     owner: root
     group: root
     mode: preserve
-  loop: "{{ mrg_dual_auth_restore_candidates.results }}"
+  loop: "{{ dual_auth_restore_candidates.results }}"
   when: item.stat.exists
   loop_control:
     label: "{{ item.item }}"
@@ -53,6 +53,11 @@
 - name: Remove the Kerberos keytab
   ansible.builtin.file:
     path: /etc/krb5.keytab
+    state: absent
+
+- name: Remove /etc/krb5.conf deployed by this role
+  ansible.builtin.file:
+    path: /etc/krb5.conf
     state: absent
 
 - name: Remove AD-specific sssd conf.d fragments
@@ -92,13 +97,13 @@
           echo "moved $d"
         fi
       done
-  register: mrg_dual_auth_home_restore
-  changed_when: "'moved' in mrg_dual_auth_home_restore.stdout"
+  register: dual_auth_home_restore
+  changed_when: "'moved' in dual_auth_home_restore.stdout"
   failed_when: false
 
 - name: Remove AUTHMETHOD line from PNC provision config
   ansible.builtin.lineinfile:
-    path: "{{ mrg_dual_auth_provision_config_path }}"
+    path: "{{ dual_auth_provision_config_path }}"
     regexp: '^AUTHMETHOD='
     state: absent
 

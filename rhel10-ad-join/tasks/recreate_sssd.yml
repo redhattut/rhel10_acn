@@ -1,0 +1,31 @@
+---
+# Regenerates /etc/sssd/sssd.conf with a fresh authtok and restarts sssd.
+# Use this when the OUD bind password has rotated or the authtok in sssd.conf
+# is stale/incorrect without needing to redo the full configure cycle.
+#
+# Requires dual_auth_oud_admin_password_<env> to be set (AAP credential or -e).
+# Delegates ldapmodify to dual_auth_oud_delegate_host (lmrg34ja).
+#
+# This forces the new-build generation path in generate_oud_config.yml even
+# though sssd.conf already exists - the existing file is backed up first.
+
+- name: Back up existing sssd.conf before regeneration
+  ansible.builtin.copy:
+    src: /etc/sssd/sssd.conf
+    dest: "{{ dual_auth_auth_backup_dir }}/sssd.conf.pre_recreate"
+    remote_src: true
+    mode: "0600"
+  failed_when: false
+
+- name: Remove existing sssd.conf so generate_oud_config runs the full generation path
+  ansible.builtin.file:
+    path: /etc/sssd/sssd.conf
+    state: absent
+
+- name: Generate fresh sssd.conf with new authtok
+  ansible.builtin.import_tasks: generate_oud_config.yml
+
+- name: Restart sssd to apply the new sssd.conf
+  ansible.builtin.systemd:
+    name: sssd
+    state: restarted
