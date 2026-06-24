@@ -97,7 +97,7 @@ rm -f "$FED_DAT_TMP" "$FED_ID_TMP" "$FED_DB_TMP" "$FED_PKG_TMP" \
 
 # pssh settings — same as main scan
 PSSH_BATCH=75
-PSSH_TIMEOUT=30
+PSSH_TIMEOUT=90   # Increased from 30 — combined rhel_remote_scan.sh + RHEL_data_gather.sh
 PSSH_LOGIN="root"
 PSSH_OPTS="-I --inline-stdout -p ${PSSH_BATCH} -t ${PSSH_TIMEOUT} -l ${PSSH_LOGIN}"
 

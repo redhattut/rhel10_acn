@@ -120,7 +120,7 @@ fi
 
 # --- Sudo checks -------------------------------------------------------------
 if id xqvsmlinauthscan >/dev/null 2>&1; then
-    if sudo -u xqvsmlinauthscan sudo -n true >/dev/null 2>&1; then
+    if timeout 5 sudo -u xqvsmlinauthscan sudo -n true >/dev/null 2>&1; then
         XQVSMLINAUTHSCAN_SUDO="PASS"
     else
         XQVSMLINAUTHSCAN_SUDO="FAIL"
@@ -130,7 +130,7 @@ else
 fi
 
 if id xqmrglineng >/dev/null 2>&1; then
-    if sudo -u xqmrglineng sudo -n true >/dev/null 2>&1; then
+    if timeout 5 sudo -u xqmrglineng sudo -n true >/dev/null 2>&1; then
         XQMRGLINENG_SUDO="PASS"
     else
         XQMRGLINENG_SUDO="FAIL"
@@ -140,7 +140,7 @@ else
 fi
 
 if id xqmrglinaap >/dev/null 2>&1; then
-    if sudo -u xqmrglinaap sudo -n true >/dev/null 2>&1; then
+    if timeout 5 sudo -u xqmrglinaap sudo -n true >/dev/null 2>&1; then
         XQMRGLINAAP_SUDO="PASS"
     else
         XQMRGLINAAP_SUDO="FAIL"
@@ -150,7 +150,7 @@ else
 fi
 
 if id xqlrplinauto >/dev/null 2>&1; then
-    if sudo -u xqlrplinauto sudo -n true >/dev/null 2>&1; then
+    if timeout 5 sudo -u xqlrplinauto sudo -n true >/dev/null 2>&1; then
         XQLRPLINAUTO_SUDO="PASS"
     else
         XQLRPLINAUTO_SUDO="FAIL"
@@ -160,14 +160,22 @@ else
 fi
 
 # --- Hardware ----------------------------------------------------------------
-CPU=$(lscpu 2>/dev/null | grep -E '^CPU\(' | awk -F': +' '{print $2}' | tr -d '\n')
-[ -z "$CPU" ] && CPU="n/a"
+# Use values already set by rhel_remote_scan.sh if available in this session,
+# otherwise collect independently (standalone execution).
+if [[ -z "${CPU:-}" ]]; then
+    CPU=$(lscpu 2>/dev/null | grep -E '^CPU\(' | awk -F': +' '{print $2}' | tr -d '\n')
+    [ -z "$CPU" ] && CPU="n/a"
+fi
 
-CORES=$(lscpu 2>/dev/null | grep 'Core(s) per socket' | awk '{print $NF}')
-[ -z "$CORES" ] && CORES="n/a"
+if [[ -z "${CORES:-}" ]]; then
+    CORES=$(lscpu 2>/dev/null | grep 'Core(s) per socket' | awk '{print $NF}')
+    [ -z "$CORES" ] && CORES="n/a"
+fi
 
-SOCKETS=$(lscpu 2>/dev/null | grep 'Socket(s)' | awk '{print $NF}')
-[ -z "$SOCKETS" ] && SOCKETS="n/a"
+if [[ -z "${SOCKETS:-}" ]]; then
+    SOCKETS=$(lscpu 2>/dev/null | grep 'Socket(s)' | awk '{print $NF}')
+    [ -z "$SOCKETS" ] && SOCKETS="n/a"
+fi
 
 MEMORY=$(grep MemTotal /proc/meminfo 2>/dev/null \
     | awk '{printf "%.0f GB", $2/1024/1024}')
