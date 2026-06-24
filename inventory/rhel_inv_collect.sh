@@ -144,6 +144,18 @@ log INFO "Cleared stale temp files"
 # =============================================================================
 log SECTION "Phase 3 — Parallel SSH scan (single hop, all data streams)"
 # =============================================================================
+# TWO separate pssh calls — matching the legacy architecture:
+#
+# Phase 3a: INV + ID + DB + Midrange Mod (small output per host)
+#   rhel_remote_scan.sh + RHEL_data_gather.sh concatenated.
+#   PKG lines routed to /dev/null — not collected here.
+#   Reason: PKG output (~160KB per host x 75 parallel) causes SIGPIPE
+#   on the remote bash when combined with other streams, killing the
+#   session before RHEL_data_gather.sh output can be emitted.
+#
+# Phase 3b: PKG only (large output — separate pssh pass)
+#   rhel_pkginventory.sh runs its own pssh sweep for packages only.
+# =============================================================================
 
 LINES=$(grep -v "^#" "$MASTERHOSTLIST" | wc -l)
 log INFO "Scanning $LINES hosts from $MASTERHOSTLIST"
@@ -151,28 +163,6 @@ log INFO "pssh batch size : $PSSH_BATCH"
 log INFO "pssh timeout    : ${PSSH_TIMEOUT}s per host"
 log INFO "pssh error dir  : $ERRDIR"
 log INFO "Writing web data to: $WEBDIR"
-
-# style.css is written by rhel_inv_run.sh Phase 0 before this script runs.
-# No action needed here.
-
-# The remote script outputs tagged lines:
-#   INV|...   system inventory record
-#   PKG|...   one line per installed RPM
-#   DB|...    Oracle SID list
-#   ID|...    user/group/netgroup records
-#
-# rhel_filter_scan.sh strips pssh status noise then splits by tag into
-# six temp files — INV, ID, DB, PKG, MRG_CSV, and MRG_JSON.
-# RHEL_data_gather.sh is concatenated after rhel_remote_scan.sh so both
-# run in the same remote bash session — zero extra SSH connections.
-
-log INFO "Launching pssh scan (INV + ID + DB + PKG + Midrange Mod)..."
-log INFO "INV temp     : $INVENTORYTEMP"
-log INFO "ID temp      : $IDINVENTORYTEMP"
-log INFO "DB temp      : $DBINVENTORYTEMP"
-log INFO "PKG temp     : $PACKAGETEMP"
-log INFO "MRG CSV temp : $MRGCSVTEMP"
-log INFO "MRG JSON tmp : $MRGJSONTMP"
 
 # Determine whether RHEL_data_gather.sh is available
 _gather_script="${RHEL_DATA_GATHER:-${PGMDIR}/RHEL_data_gather.sh}"
@@ -185,6 +175,16 @@ else
     _pssh_input() { cat "${PGMDIR}/rhel_remote_scan.sh"; }
 fi
 
+# =============================================================================
+log SECTION "Phase 3a — INV / ID / DB / Midrange Mod scan"
+# =============================================================================
+log INFO "INV temp     : $INVENTORYTEMP"
+log INFO "ID temp      : $IDINVENTORYTEMP"
+log INFO "DB temp      : $DBINVENTORYTEMP"
+log INFO "MRG CSV temp : $MRGCSVTEMP"
+log INFO "MRG JSON tmp : $MRGJSONTMP"
+log INFO "PKG          : suppressed in this pass (Phase 3b)"
+
 _pssh_input \
     | "$PSSH_BIN" $PSSH_OPTS \
         -e "$ERRDIR" \
@@ -195,14 +195,14 @@ _pssh_input \
         "$INVENTORYTEMP" \
         "$IDINVENTORYTEMP" \
         "$DBINVENTORYTEMP" \
-        "$PACKAGETEMP" \
+        "/dev/null" \
         "$MRGCSVTEMP" \
         "$MRGJSONTMP"
 
 SCAN_RC=$?
-log INFO "pssh scan completed (exit status: $SCAN_RC)"
+log INFO "Phase 3a scan completed (exit status: $SCAN_RC)"
 
-# Remove zero-size error files — only keep hosts that actually had errors
+# Remove zero-size error files
 if [[ -d "$ERRDIR" && "$ERRDIR" =~ errdir ]]; then
     ERRCOUNT_BEFORE=$(find "$ERRDIR" -type f | wc -l)
     find "$ERRDIR" -type f -size 0 | xargs rm -f
@@ -210,34 +210,49 @@ if [[ -d "$ERRDIR" && "$ERRDIR" =~ errdir ]]; then
     log INFO "Error dir cleanup: removed $((ERRCOUNT_BEFORE - ERRCOUNT_AFTER)) empty files, $ERRCOUNT_AFTER hosts had errors"
 fi
 
-log INFO "Scan complete"
-
-# Validate we actually got output
+# Validate Phase 3a outputs
 for tmpfile in "$INVENTORYTEMP" "$IDINVENTORYTEMP"; do
     if [[ ! -s "$tmpfile" ]]; then
         log WARN "Output file is empty or missing: $tmpfile"
     else
-        COUNT=$(wc -l < "$tmpfile")
-        log INFO "$(basename "$tmpfile"): $COUNT lines collected"
+        log INFO "$(basename "$tmpfile"): $(wc -l < "$tmpfile") lines collected"
     fi
 done
-# DB is optional — empty is normal when no database hosts are in the scan list
 if [[ -s "$DBINVENTORYTEMP" ]]; then
-    COUNT=$(wc -l < "$DBINVENTORYTEMP")
-    log INFO "$(basename "$DBINVENTORYTEMP"): $COUNT lines collected"
+    log INFO "$(basename "$DBINVENTORYTEMP"): $(wc -l < "$DBINVENTORYTEMP") lines collected"
 else
     log INFO "$(basename "$DBINVENTORYTEMP"): empty — normal if no DB hosts in host list"
 fi
-# Package temp — only warn if RUN_PACKAGES_ON_MAIN=1 and it is empty
+if [[ -s "$MRGCSVTEMP" ]]; then
+    log INFO "$(basename "$MRGCSVTEMP"): $(wc -l < "$MRGCSVTEMP") lines collected"
+else
+    log WARN "$(basename "$MRGCSVTEMP"): empty — check if RHEL_data_gather.sh ran"
+fi
+
+# =============================================================================
+log SECTION "Phase 3b — Package inventory scan (separate pssh pass)"
+# =============================================================================
+
 if [[ "${RUN_PACKAGES_ON_MAIN:-1}" -eq 1 ]]; then
-    if [[ -s "$PACKAGETEMP" ]]; then
-        COUNT=$(wc -l < "$PACKAGETEMP")
-        log INFO "$(basename "$PACKAGETEMP"): $COUNT lines collected"
+    if [[ -x "${PGMDIR}/rhel_pkginventory.sh" ]]; then
+        log INFO "PKG temp     : $PACKAGETEMP"
+        log INFO "Launching package-only pssh scan..."
+        # rhel_pkginventory.sh reads MASTERHOSTLIST and PACKAGETEMP from
+        # the exported environment set by rhel_inv_run.sh — no args needed.
+        "${PGMDIR}/rhel_pkginventory.sh"
+        PKG_RC=$?
+        log INFO "Phase 3b scan completed (exit status: $PKG_RC)"
+        if [[ -s "$PACKAGETEMP" ]]; then
+            log INFO "$(basename "$PACKAGETEMP"): $(wc -l < "$PACKAGETEMP") lines collected"
+        else
+            log WARN "$(basename "$PACKAGETEMP"): empty — package scan may have failed"
+        fi
     else
-        log WARN "$(basename "$PACKAGETEMP"): empty — package scan may have failed (check pssh errors)"
+        log WARN "rhel_pkginventory.sh not found or not executable — package inventory skipped"
     fi
 else
-    log INFO "$(basename "$PACKAGETEMP"): package scan runs from secondary jumpbox (RUN_PACKAGES_ON_MAIN=0)"
+    log INFO "RUN_PACKAGES_ON_MAIN=0 — package inventory handled by secondary jumpbox"
+    rm -f "$PACKAGETEMP"
 fi
 
 # --- Delta check — compare new inventory count against prior run -------------
