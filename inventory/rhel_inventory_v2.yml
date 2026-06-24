@@ -27,9 +27,12 @@
     fed_jumpbox:      "lmrg34ba"
     rhel_v2_base_dir: "/usr/local/pnc/bin/RHEL_Inventory_v2"
     rhel_fed_base_dir: "/usr/local/pnc/bin"
-    fed_dat_controller_tmp: "/tmp/fed_enclave_raw_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.dat"
 
   tasks:
+
+    - name: "Set controller temp path for fed dat — evaluated once, reused throughout"
+      ansible.builtin.set_fact:
+        fed_dat_controller_tmp: "/tmp/fed_enclave_raw_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.dat"
 
     # =========================================================================
     # TASK 1 — lmrg34ja: Split CMDB into fed / non-fed host lists
