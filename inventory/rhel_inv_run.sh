@@ -119,6 +119,13 @@ export AAP_FED_DIR
 # Format: rhel_inventory_v2_run.YYYYMMDD_HHMMSS.log — unique per run.
 RUN_LOG="${LOGS_DIR}/rhel_inventory_v2_run.$(date +%Y%m%d_%H%M%S).log"
 
+# Set dated MRG temp filenames here for the same reason — evaluated fresh
+# each run. MRGCSVTEMP uses the archive date format so it is self-documenting
+# while it grows during pssh. MRGJSONTMP is cleaned up after the split step.
+_MRG_DATE="$(date +%m-%d-%Y)"
+MRGCSVTEMP="${DATA_DIR}/Midrange_Mod_Report_${_MRG_DATE}.csv.tmp"
+MRGJSONTMP="${DATA_DIR}/compare_data_${_MRG_DATE}.json.tmp"
+
 # =============================================================================
 # Test mode path overrides
 # All production variables are overridden AFTER sourcing the config so the
@@ -158,8 +165,8 @@ if [[ $TEST_MODE -eq 1 ]]; then
     DBINVENTORYTEMP="${TEST_DATA}/TEST_RHEL_DBINVENTORY.tmp"
     DBINVENTORYDATA="${TEST_DATA}/TEST_RHEL_DBINVENTORY.dat"
     PACKAGETEMP="${TEST_DATA}/TEST_RHEL_PACKAGES.tmp"
-    MRGCSVTEMP="${TEST_DATA}/TEST_mrg_report.csv.tmp"
-    MRGJSONTMP="${TEST_DATA}/TEST_mrg_compare.json.tmp"
+    MRGCSVTEMP="${TEST_DATA}/Midrange_Mod_Report_${_MRG_DATE}.csv.tmp"
+    MRGJSONTMP="${TEST_DATA}/compare_data_${_MRG_DATE}.json.tmp"
     MRG_ARCHIVE_DIR="${TEST_WEBDIR}/Midrange_Mod/archive"
     COMPARE_DATA_DIR="${TEST_WEBDIR}/compare/data"
     PACKAGEDATA="${TEST_DATA}/TEST_RHEL_PACKAGES.csv"

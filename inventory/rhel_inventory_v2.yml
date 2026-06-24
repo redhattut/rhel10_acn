@@ -33,7 +33,7 @@
     - name: "Cleanup | Remove stale fed enclave temp files from previous runs (older than 1 hour)"
       ansible.builtin.find:
         paths: /tmp
-        patterns: "fed_enclave_*.dat,fed_enclave_*.csv,fed_enclave_*.json"
+        patterns: "fed_enclave_*.dat,fed_enclave_midrange_mod.*,fed_enclave_compare_data.*"
         age: "1h"
       register: stale_fed_files
 
@@ -50,8 +50,8 @@
         fed_id_controller_tmp:  "/tmp/fed_enclave_id_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.dat"
         fed_db_controller_tmp:  "/tmp/fed_enclave_db_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.dat"
         fed_pkg_controller_tmp: "/tmp/fed_enclave_pkg_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.csv"
-        fed_mrg_csv_controller_tmp: "/tmp/fed_enclave_mrg_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.csv"
-        fed_mrg_json_controller_tmp: "/tmp/fed_enclave_mrg_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.json"
+        fed_mid_mod_controller_tmp: "/tmp/fed_enclave_midrange_mod_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.dat"
+        fed_cmp_data_controller_tmp: "/tmp/fed_enclave_compare_data_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.dat"
 
     # =========================================================================
     # TASK 1 — lmrg34ja: Split CMDB into fed / non-fed host lists
@@ -114,6 +114,14 @@
       delegate_to: "{{ main_jumpbox }}"
       when: fed_scan_needed
 
+    - name: "Task 2 | Copy RHEL_data_gather.sh to {{ fed_jumpbox }}"
+      ansible.posix.synchronize:
+        src: "{{ rhel_v2_base_dir }}/RHEL_data_gather.sh"
+        dest: "{{ rhel_fed_base_dir }}/RHEL_data_gather.sh"
+        mode: push
+      delegate_to: "{{ main_jumpbox }}"
+      when: fed_scan_needed
+
     - name: "Task 2 | Set execute permissions on scripts at {{ fed_jumpbox }}"
       ansible.builtin.file:
         path: "{{ rhel_fed_base_dir }}/{{ item }}"
@@ -122,6 +130,7 @@
         - rhel_remote_scan.sh
         - rhel_filter_scan.sh
         - rhel_fed_scan.sh
+        - RHEL_data_gather.sh
       delegate_to: "{{ fed_jumpbox }}"
       when: fed_scan_needed
 
@@ -198,23 +207,23 @@
       ignore_errors: yes
       when: fed_scan_ok
 
-    - name: "Task 3 | Fetch fed_enclave_mrg.csv from {{ fed_jumpbox }} to controller"
+    - name: "Task 3 | Fetch fed_enclave_midrange_mod.dat from {{ fed_jumpbox }} to controller"
       ansible.builtin.fetch:
-        src: "{{ rhel_fed_base_dir }}/data/fed_enclave_mrg.csv"
-        dest: "{{ fed_mrg_csv_controller_tmp }}"
+        src: "{{ rhel_fed_base_dir }}/data/fed_enclave_midrange_mod.dat"
+        dest: "{{ fed_mid_mod_controller_tmp }}"
         flat: yes
       delegate_to: "{{ fed_jumpbox }}"
-      register: fed_mrg_csv_fetch
+      register: fed_mid_mod_fetch
       ignore_errors: yes
       when: fed_scan_ok
 
-    - name: "Task 3 | Fetch fed_enclave_mrg.json from {{ fed_jumpbox }} to controller"
+    - name: "Task 3 | Fetch fed_enclave_compare_data.dat from {{ fed_jumpbox }} to controller"
       ansible.builtin.fetch:
-        src: "{{ rhel_fed_base_dir }}/data/fed_enclave_mrg.json"
-        dest: "{{ fed_mrg_json_controller_tmp }}"
+        src: "{{ rhel_fed_base_dir }}/data/fed_enclave_compare_data.dat"
+        dest: "{{ fed_cmp_data_controller_tmp }}"
         flat: yes
       delegate_to: "{{ fed_jumpbox }}"
-      register: fed_mrg_json_fetch
+      register: fed_cmp_data_fetch
       ignore_errors: yes
       when: fed_scan_ok
 
@@ -268,19 +277,19 @@
       ignore_errors: yes
       when: fed_dat_ready
 
-    - name: "Task 3 | Copy fed_enclave_mrg.csv from controller to {{ main_jumpbox }}"
+    - name: "Task 3 | Copy fed_enclave_midrange_mod.dat from controller to {{ main_jumpbox }}"
       ansible.builtin.copy:
-        src: "{{ fed_mrg_csv_controller_tmp }}"
-        dest: "{{ rhel_v2_base_dir }}/data/fed_stage/fed_enclave_mrg.csv"
+        src: "{{ fed_mid_mod_controller_tmp }}"
+        dest: "{{ rhel_v2_base_dir }}/data/fed_stage/fed_enclave_midrange_mod.dat"
         mode: "0644"
       delegate_to: "{{ main_jumpbox }}"
       ignore_errors: yes
       when: fed_dat_ready
 
-    - name: "Task 3 | Copy fed_enclave_mrg.json from controller to {{ main_jumpbox }}"
+    - name: "Task 3 | Copy fed_enclave_compare_data.dat from controller to {{ main_jumpbox }}"
       ansible.builtin.copy:
-        src: "{{ fed_mrg_json_controller_tmp }}"
-        dest: "{{ rhel_v2_base_dir }}/data/fed_stage/fed_enclave_mrg.json"
+        src: "{{ fed_cmp_data_controller_tmp }}"
+        dest: "{{ rhel_v2_base_dir }}/data/fed_stage/fed_enclave_compare_data.dat"
         mode: "0644"
       delegate_to: "{{ main_jumpbox }}"
       ignore_errors: yes
@@ -308,8 +317,8 @@
         - "{{ fed_id_controller_tmp }}"
         - "{{ fed_db_controller_tmp }}"
         - "{{ fed_pkg_controller_tmp }}"
-        - "{{ fed_mrg_csv_controller_tmp }}"
-        - "{{ fed_mrg_json_controller_tmp }}"
+        - "{{ fed_mid_mod_controller_tmp }}"
+        - "{{ fed_cmp_data_controller_tmp }}"
       ignore_errors: yes
       when: fed_scan_ok
 

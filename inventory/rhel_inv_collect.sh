@@ -355,6 +355,10 @@ chcon -R -t httpd_sys_content_t "$COMPARE_DATA_DIR" 2>/dev/null || \
 
 # --- Promote MRG CSV ---------------------------------------------------------
 if [[ -s "$MRGCSVTEMP" ]]; then
+    # The temp file is already named Midrange_Mod_Report_MM-DD-YYYY.csv.tmp
+    # Strip .tmp to get the archive filename directly
+    MRG_ARCHIVE_FILE="${MRG_ARCHIVE_DIR}/$(basename "${MRGCSVTEMP%.tmp}")"
+
     {
         echo "Host,Location,Mnemonic,Environment,OS Version,Authentication Method,OUD Query,AD Query,pnc_join_ad,Nsswitch,KRB5 Keytab,xqvsmlinauthscan Sudo,xqmrglineng Sudo,xqmrglinaap Sudo"
         grep -v "^[[:space:]]*$" "$MRGCSVTEMP"
@@ -362,8 +366,6 @@ if [[ -s "$MRGCSVTEMP" ]]; then
     MRG_ROW_COUNT=$(grep -vc "^Host," "$MRGCSVDATA" 2>/dev/null || echo 0)
     log INFO "MRG CSV promoted: $MRGCSVDATA ($MRG_ROW_COUNT rows)"
 
-    # Archive CSV — keep DAYS_TO_KEEP_MRG days
-    MRG_ARCHIVE_FILE="${MRG_ARCHIVE_DIR}/Midrange_Mod_Report_$(date +%m-%d-%Y).csv"
     cp "$MRGCSVDATA" "$MRG_ARCHIVE_FILE"
     log INFO "MRG CSV archived: $MRG_ARCHIVE_FILE"
 
@@ -527,8 +529,8 @@ _fed_merge \
 
 _fed_merge \
     "Fed MRG CSV" \
-    "${_FED_SRC_DIR:+${_FED_SRC_DIR}/fed_enclave_mrg.csv}" \
-    "${DATA_DIR}/fed_enclave_mrg.csv" \
+    "${_FED_SRC_DIR:+${_FED_SRC_DIR}/fed_enclave_midrange_mod.dat}" \
+    "${DATA_DIR}/fed_enclave_midrange_mod.dat" \
     "$MRGCSVDATA" \
     "csv"
 
@@ -536,8 +538,8 @@ _fed_merge \
 # Both files are JSON arrays. We strip the outer [ ] from the fed file
 # and append its entries into the main array so the split step in Phase 4.6
 # processes all hosts (main + fed) together.
-_FED_MRG_JSON_FRESH="${_FED_SRC_DIR:+${_FED_SRC_DIR}/fed_enclave_mrg.json}"
-_FED_MRG_JSON_FALLBACK="${DATA_DIR}/fed_enclave_mrg.json"
+_FED_MRG_JSON_FRESH="${_FED_SRC_DIR:+${_FED_SRC_DIR}/fed_enclave_compare_data.dat}"
+_FED_MRG_JSON_FALLBACK="${DATA_DIR}/fed_enclave_compare_data.dat"
 
 _fed_json_src=""
 if [[ -n "$_FED_MRG_JSON_FRESH" && -f "$_FED_MRG_JSON_FRESH" && -s "$_FED_MRG_JSON_FRESH" ]]; then
