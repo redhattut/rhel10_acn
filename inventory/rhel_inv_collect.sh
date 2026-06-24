@@ -408,7 +408,8 @@ rm -f "$MRGCSVTEMP"
 
 # --- Split combined JSON array into per-host files ---------------------------
 if [[ -s "$MRGJSONTMP" ]]; then
-    _py_out=$(python3 << PYEOF
+    log INFO "Compare JSON: splitting $(wc -c < \"$MRGJSONTMP\") bytes -> $COMPARE_DATA_DIR"
+    _py_out=$(python3 2>&1 << PYEOF
 import json, os, sys
 
 json_file = "${MRGJSONTMP}"
