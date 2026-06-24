@@ -1,13 +1,86 @@
 ---
-# Only runs with an explicit `--tags rejoin`. Use this when the host shows
-# as joined but broken (e.g. corrupt keytab, stale machine account password,
-# domain unreachable from sssd's perspective) and a clean rejoin is needed.
+# Removes the existing computer account from AD and rejoins cleanly.
+# Use when the host shows as joined but broken (corrupt keytab, stale
+# machine account password, domain unreachable from sssd).
+#
+# For OUD+AD hosts: authenticates using the static pre-built .dat keytab.
+# For legacy AD-only hosts: authenticates using ad_bind_password_<env>
+# since there is no valid keytab available.
 
-- name: Stage the static AD bind-account keytab and obtain TGT for removal
+- name: Get authentication for AD operations (legacy AD-only - build from password)
+  when: dual_auth_is_legacy_ad_only | default(false) | bool
+  block:
+    - name: Validate AD bind password is set
+      ansible.builtin.assert:
+        that:
+          - dual_auth_ad_bind_password | length > 0
+        fail_msg: >-
+          ad_bind_password_{{ dual_auth_target_env }} is empty.
+          Required for rejoin on legacy AD-only hosts.
+          Set it via the PNC MRG AD Bind AAP credential or -e on CLI.
+      no_log: true
+
+    - name: Create secure temp directory for transient keytab
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: pnc_ad_join
+      register: dual_auth_keytab_tmpdir
+      changed_when: false
+
+    - name: Set transient keytab path and principal facts
+      ansible.builtin.set_fact:
+        dual_auth_tmp_keytab_path: "{{ dual_auth_keytab_tmpdir.path }}/{{ dual_auth_username }}.keytab"
+        dual_auth_principal: "{{ dual_auth_username }}@{{ dual_auth_realm }}"
+        dual_auth_salt: "{{ dual_auth_realm }}{{ dual_auth_username }}"
+
+    - name: Build transient bind account keytab via ktutil (kvno 1-5)
+      ansible.builtin.command:
+        cmd: ktutil
+        stdin: |
+          addent -password -p {{ dual_auth_principal }} -k 1 -e aes256-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
+          {{ dual_auth_ad_bind_password }}
+          addent -password -p {{ dual_auth_principal }} -k 1 -e aes128-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
+          {{ dual_auth_ad_bind_password }}
+          addent -password -p {{ dual_auth_principal }} -k 2 -e aes256-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
+          {{ dual_auth_ad_bind_password }}
+          addent -password -p {{ dual_auth_principal }} -k 2 -e aes128-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
+          {{ dual_auth_ad_bind_password }}
+          addent -password -p {{ dual_auth_principal }} -k 3 -e aes256-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
+          {{ dual_auth_ad_bind_password }}
+          addent -password -p {{ dual_auth_principal }} -k 3 -e aes128-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
+          {{ dual_auth_ad_bind_password }}
+          addent -password -p {{ dual_auth_principal }} -k 4 -e aes256-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
+          {{ dual_auth_ad_bind_password }}
+          addent -password -p {{ dual_auth_principal }} -k 4 -e aes128-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
+          {{ dual_auth_ad_bind_password }}
+          addent -password -p {{ dual_auth_principal }} -k 5 -e aes256-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
+          {{ dual_auth_ad_bind_password }}
+          addent -password -p {{ dual_auth_principal }} -k 5 -e aes128-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
+          {{ dual_auth_ad_bind_password }}
+          wkt {{ dual_auth_tmp_keytab_path }}
+          quit
+      no_log: true
+      changed_when: true
+
+    - name: Restrict permissions on transient keytab
+      ansible.builtin.file:
+        path: "{{ dual_auth_tmp_keytab_path }}"
+        mode: "0600"
+
+    - name: Obtain TGT using transient bind account keytab
+      ansible.builtin.command: >-
+        timeout 30 kinit -k -t {{ dual_auth_tmp_keytab_path }} {{ dual_auth_principal }}
+      no_log: true
+      changed_when: true
+
+- name: Get authentication for AD operations (OUD+AD - use static keytab)
   ansible.builtin.import_tasks: stage_static_keytab.yml
+  when: not (dual_auth_is_legacy_ad_only | default(false) | bool)
 
 - name: Remove existing computer account from Active Directory
-  ansible.builtin.command: "adcli delete-computer -C --domain={{ dual_auth_domain }} {{ ansible_hostname }}"
+  ansible.builtin.command: >-
+    timeout 60 adcli delete-computer -C
+    --domain={{ dual_auth_domain }} {{ ansible_hostname }}
   register: dual_auth_adcli_delete
   changed_when: true
   failed_when: false

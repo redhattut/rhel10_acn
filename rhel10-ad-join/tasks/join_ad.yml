@@ -1,6 +1,7 @@
 ---
 - name: Stage the static AD bind-account keytab and obtain TGT
   ansible.builtin.import_tasks: stage_static_keytab.yml
+  when: not (dual_auth_is_legacy_ad_only | default(false) | bool)
 
 - name: Join the server to Active Directory
   ansible.builtin.command: >-
