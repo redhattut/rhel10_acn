@@ -2,24 +2,24 @@
 # RHEL_data_gather.sh
 #
 # Runs REMOTELY on each host via pssh (concatenated with rhel_remote_scan.sh
-# by the main inventory pipeline — no separate SSH session needed).
+# by the main inventory pipeline -- no separate SSH session needed).
 #
-# Produces TWO tagged output streams via stdout — BOTH SINGLE LINE PER RECORD.
+# Produces TWO tagged output streams via stdout -- BOTH SINGLE LINE PER RECORD.
 #
 # CRITICAL: pssh --inline-stdout runs many hosts in parallel and interleaves
-# their output. All output MUST be one line per record — no multi-line output.
+# their output. All output MUST be one line per record -- no multi-line output.
 #
 #   1. MID_MOD_CSV:<hostname>:<csv_fields>
 #      Single line, 13-column CSV row for Midrange Mod Report
 #
 #   2. COMPARE_JSON:<hostname>:<minified_json>
 #      Single line, complete JSON object for Server Compare Tool
-#      Uses printf to build the entire JSON on one line — no truncation risk
+#      Uses printf to build the entire JSON on one line -- no truncation risk
 #      because we use $(je ...) which calls printf internally.
 #
 # Tag format change from legacy (CSV_DATA / JSON_START / JSON_END):
-#   CSV_DATA:      → MID_MOD_CSV:
-#   JSON_START/END → COMPARE_JSON:   (single line, no start/end markers needed)
+#   CSV_DATA:      -> MID_MOD_CSV:
+#   JSON_START/END -> COMPARE_JSON:   (single line, no start/end markers needed)
 
 # --- default values ----------------------------------------------------------
 HOSTNAME=$(hostname -s | cut -d. -f1)
@@ -247,21 +247,21 @@ je() {
 }
 
 # =============================================================================
-# OUTPUT — both via stdout through pssh.
+# OUTPUT -- both via stdout through pssh.
 # rhel_filter_scan.sh on the jumphost splits on tag prefixes.
 #
 # CRITICAL: pssh --inline-stdout runs 75 hosts in parallel and INTERLEAVES
 # their output lines. Multi-line output from host A gets mixed with lines from
 # host B. Therefore ALL output must be single-line per record.
 #
-# MID_MOD_CSV:<host>:<csv_row>     — one line, Midrange Mod CSV row
-# COMPARE_JSON:<host>:<json>       — one line, full JSON object (minified)
+# MID_MOD_CSV:<host>:<csv_row>     -- one line, Midrange Mod CSV row
+# COMPARE_JSON:<host>:<json>       -- one line, full JSON object (minified)
 # =============================================================================
 
 # CSV line (13 columns)
 echo "MID_MOD_CSV:${HOSTNAME}:${HOSTNAME},${LOCATION},${MNEMONIC},${ENVIRONMENT},${RHEL_RELEASE},${SSSD},${LDAP_QUERY},${AD_QUERY},${DUAL_AUTH_PKG},${NSSWITCH},${KRB5_KEYTAB},${XQVSMLINAUTHSCAN_SUDO},${XQMRGLINENG_SUDO},${XQMRGLINAAP_SUDO}"
 
-# JSON — pre-compute all escaped values into plain variables first.
+# JSON -- pre-compute all escaped values into plain variables first.
 # This avoids "$(je "$VAR")" nested-quote patterns which cause bash 4.4
 # (RHEL 7) to report "unexpected end of file" during script parsing.
 _jHOST=$(je "$HOSTNAME")
