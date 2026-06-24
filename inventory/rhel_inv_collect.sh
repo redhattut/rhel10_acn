@@ -244,7 +244,7 @@ if [[ -f "$INVENTORYDATA" && -s "$INVENTORYDATA" ]]; then
             DROP_PCT=$(( (DIFF * 100) / PREV_COUNT ))
             if [[ $DROP_PCT -ge $INV_DELTA_WARN_PCT ]]; then
                 log WARN "Inventory count dropped ${DROP_PCT}% vs prior run — previous: ${PREV_COUNT}  new: ${NEW_COUNT}  delta: -${DIFF}"
-                log WARN "Threshold is ${INV_DELTA_WARN_PCT}% — verify scan health before trusting this run's output"
+                log WARN "Threshold is ${INV_DELTA_WARN_PCT}% — verify scan health before trusting this run output"
                 log WARN "Check error dir: $ERRDIR"
             else
                 log INFO "Inventory delta check passed — previous: ${PREV_COUNT}  new: ${NEW_COUNT}  delta: -${DIFF} (${DROP_PCT}% drop, within ${INV_DELTA_WARN_PCT}% threshold)"
@@ -329,7 +329,7 @@ log SECTION "Phase 4.5 — Fed Enclave dat merge"
 # fetched from lmrg34ba. Append it to INVENTORYDATA before Phase 7 enrichment
 # so the single awk pass covers all hosts including Fed Enclave.
 #
-# Fallback: if no fresh dat was provided, use the previous run's dat from
+# Fallback: if no fresh dat was provided, use the previous run dat from
 # DATA_DIR (if it exists). This handles lmrg34ba being unreachable — the
 # previous successful fed scan data carries forward without TIMEOUT marking.
 #
@@ -348,7 +348,7 @@ if [[ -n "${AAP_FED_DAT:-}" ]]; then
         log INFO "Fed Enclave dat saved to DATA_DIR: $_FED_DAT_FALLBACK"
     else
         log WARN "AAP_FED_DAT specified but file missing or empty: $AAP_FED_DAT"
-        log WARN "Falling back to previous run's fed dat (if available)"
+        log WARN "Falling back to previous run fed dat (if available)"
     fi
 fi
 
@@ -358,7 +358,7 @@ if [[ -n "$_FED_DAT_FRESH" ]]; then
     _FED_DAT_TO_MERGE="$_FED_DAT_FRESH"
 elif [[ -f "$_FED_DAT_FALLBACK" && -s "$_FED_DAT_FALLBACK" ]]; then
     _FED_DAT_TO_MERGE="$_FED_DAT_FALLBACK"
-    log INFO "Using previous run's Fed Enclave dat: $_FED_DAT_FALLBACK"
+    log INFO "Using previous run Fed Enclave dat: $_FED_DAT_FALLBACK"
 fi
 
 if [[ -n "$_FED_DAT_TO_MERGE" ]]; then
@@ -419,10 +419,10 @@ _DEPLOY_FILE=""
 _CMDB_FILE=""
 [[ $CMDB_AVAILABLE -eq 1 ]] && _CMDB_FILE="$CMDBDATAFILE"
 
-# Previous dat file — used to carry forward yesterday's data for TIMEOUT hosts
-# (hosts pssh couldn't reach get their prior scan data preserved, matching
+# Previous dat file — used to carry forward yesterday data for TIMEOUT hosts
+# (hosts pssh could not reach get their prior scan data preserved, matching
 # legacy RHEL_inventory_refresh.sh behavior which used RHEL_INVENTORY.dat.1.gz)
-# Phase 4 has already rotated the dat so .1.gz is yesterday's run.
+# Phase 4 has already rotated the dat so .1.gz is yesterday run.
 _PREV_DAT_FILE=""
 _PREV_DAT_TMP=""
 if [[ -f "${INVENTORYDATA}.1.gz" ]]; then
@@ -452,7 +452,7 @@ fi
 # Single awk pass — up to four input files
 #
 # Pass 0 (PREV_DAT):       build prev[host] = full 28-field dat record
-#                          Used to carry forward yesterday's data for TIMEOUT hosts
+#                          Used to carry forward yesterday data for TIMEOUT hosts
 # Pass 1 (DEPLOYMENTDATA): build deploy_date[host] = date
 # Pass 2 (CMDBDATAFILE):   build cmdb[host] = "sg,status,opstate,fed"
 # Pass 3 (INVENTORYDATA):  join + emit 32-column CSV rows
@@ -488,7 +488,7 @@ BEGINFILE { current_file = FILENAME }
 # ============================================================
 # Pass 0 — PREV_DAT: build prev[host] lookup from yesterday
 # Stores the entire 28-field space-delimited record so TIMEOUT
-# hosts can carry forward their previous scan's real data.
+# hosts can carry forward their previous scan real data.
 # ============================================================
 current_file == prev_dat_file && !/^#/ && NF >= 3 {
     if ($2 != "TIMEOUT" && $2 != "SSHFAIL" && $3 != "TIMEOUT" && $3 != "SSHFAIL") {
@@ -536,13 +536,13 @@ current_file == inv_file && !/^#/ && NF >= 1 {
     # Skip non-RHEL hosts entirely — OS "?" means no /etc/redhat-release
     if ($3 == "?") { next }
 
-    # For TIMEOUT hosts: overlay yesterday's dat record so real scan
+    # For TIMEOUT hosts: overlay yesterday dat record so real scan
     # data (kernel, CPU, memory etc.) is preserved rather than showing n/a.
     # This matches legacy behaviour — RHEL_INVENTORY.dat.1.gz carry-forward.
-    # Type becomes TIMEOUT_Virt or TIMEOUT_Phys based on yesterday's type.
+    # Type becomes TIMEOUT_Virt or TIMEOUT_Phys based on yesterday type.
     if (typ == "TIMEOUT" && (host in prev)) {
         n = split(prev[host], pf, " ")
-        # Rebuild $2-$28 from yesterday's record
+        # Rebuild $2-$28 from yesterday record
         for (i = 1; i <= n; i++) $i = pf[i]
         # Preserve TIMEOUT prefix on type
         prev_typ = pf[2]
