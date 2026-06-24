@@ -177,11 +177,11 @@ log INFO "MRG JSON tmp : $MRGJSONTMP"
 # Determine whether RHEL_data_gather.sh is available
 _gather_script="${RHEL_DATA_GATHER:-${PGMDIR}/RHEL_data_gather.sh}"
 if [[ -f "$_gather_script" ]]; then
-    log INFO "Data gather  : $\_gather_script (concatenated for single pssh pass)"
+    log INFO "Data gather  : $_gather_script (concatenated for single pssh pass)"
     _pssh_input() { cat "${PGMDIR}/rhel_remote_scan.sh" "$_gather_script"; }
 else
     log WARN "RHEL_data_gather.sh not found at $_gather_script — Midrange Mod data will not be collected"
-    log WARN "Expected path: ${PGMDIR}/RHEL_data_gather.sh"
+    log WARN "Copy RHEL_data_gather.sh to: $PGMDIR"
     _pssh_input() { cat "${PGMDIR}/rhel_remote_scan.sh"; }
 fi
 

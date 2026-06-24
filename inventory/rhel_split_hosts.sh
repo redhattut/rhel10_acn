@@ -64,13 +64,17 @@ FED_FILE="${DATA_DIR}/fed_hosts.txt"
 # Output: just the hostname (field 1), one per line, sorted.
 
 # Non-fed hosts — FedEnclave = False, no Decommission anywhere in line
+# grep ^l ensures only valid PNC Linux hostnames (start with lowercase l)
+# This excludes IP addresses, blank lines, and non-Linux CI records
 grep -iv "decommission" "$CMDB" \
     | awk -F, '{gsub(/\r/,"",$5); if (tolower($5)=="false" && $1!="") print $1}' \
+    | grep "^l" \
     | sort > "$NON_FED_FILE"
 
 # Fed enclave hosts — FedEnclave = True, no Decommission anywhere in line
 grep -iv "decommission" "$CMDB" \
     | awk -F, '{gsub(/\r/,"",$5); if (tolower($5)=="true" && $1!="") print $1}' \
+    | grep "^l" \
     | sort > "$FED_FILE"
 
 NON_FED_COUNT=$(wc -l < "$NON_FED_FILE")

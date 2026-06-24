@@ -43,6 +43,15 @@ if [[ $# -ne 6 ]]; then
     exit 1
 fi
 
+# Validate no empty paths — an empty arg causes silent data loss
+for _arg in "$1" "$2" "$3" "$4" "$5" "$6"; do
+    if [[ -z "$_arg" ]]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S')  [ERROR]   rhel_filter_scan.sh: one or more output path arguments is empty" >&2
+        echo "  Check that MRGCSVTEMP and MRGJSONTMP are set before calling rhel_inv_collect.sh" >&2
+        exit 1
+    fi
+done
+
 INV_OUT="$1"
 ID_OUT="$2"
 DB_OUT="$3"
