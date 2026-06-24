@@ -142,19 +142,16 @@ rm -f "$INVENTORYTEMP" "$DBINVENTORYTEMP" "$IDINVENTORYTEMP" "$PACKAGETEMP"
 log INFO "Cleared stale temp files"
 
 # =============================================================================
-log SECTION "Phase 3 — Parallel SSH scan (single hop, all data streams)"
+log SECTION "Phase 3 -- Parallel SSH scan"
 # =============================================================================
-# TWO separate pssh calls — matching the legacy architecture:
+# THREE separate pssh calls -- one script per pass, no concatenation.
 #
-# Phase 3a: INV + ID + DB + Midrange Mod (small output per host)
-#   rhel_remote_scan.sh + RHEL_data_gather.sh concatenated.
-#   PKG lines routed to /dev/null — not collected here.
-#   Reason: PKG output (~160KB per host x 75 parallel) causes SIGPIPE
-#   on the remote bash when combined with other streams, killing the
-#   session before RHEL_data_gather.sh output can be emitted.
+# Concatenating scripts causes bash 4.4 (RHEL 7) to fail with
+# "unexpected end of file" at parse time. Each script runs cleanly alone.
 #
-# Phase 3b: PKG only (large output — separate pssh pass)
-#   rhel_pkginventory.sh runs its own pssh sweep for packages only.
+# Phase 3a: INV + ID + DB  (rhel_remote_scan.sh only)
+# Phase 3b: MRG CSV + JSON (RHEL_data_gather.sh only -- already confirmed working)
+# Phase 3c: PKG only       (rhel_pkginventory.sh -- large output, separate pass)
 # =============================================================================
 
 LINES=$(grep -v "^#" "$MASTERHOSTLIST" | wc -l)
@@ -164,28 +161,14 @@ log INFO "pssh timeout    : ${PSSH_TIMEOUT}s per host"
 log INFO "pssh error dir  : $ERRDIR"
 log INFO "Writing web data to: $WEBDIR"
 
-# Determine whether RHEL_data_gather.sh is available
-_gather_script="${RHEL_DATA_GATHER:-${PGMDIR}/RHEL_data_gather.sh}"
-if [[ -f "$_gather_script" ]]; then
-    log INFO "Data gather  : $_gather_script (concatenated for single pssh pass)"
-    _pssh_input() { cat "${PGMDIR}/rhel_remote_scan.sh" "$_gather_script"; }
-else
-    log WARN "RHEL_data_gather.sh not found at $_gather_script — Midrange Mod data will not be collected"
-    log WARN "Copy RHEL_data_gather.sh to: $PGMDIR"
-    _pssh_input() { cat "${PGMDIR}/rhel_remote_scan.sh"; }
-fi
-
 # =============================================================================
-log SECTION "Phase 3a — INV / ID / DB / Midrange Mod scan"
+log SECTION "Phase 3a -- INV / ID / DB scan"
 # =============================================================================
-log INFO "INV temp     : $INVENTORYTEMP"
-log INFO "ID temp      : $IDINVENTORYTEMP"
-log INFO "DB temp      : $DBINVENTORYTEMP"
-log INFO "MRG CSV temp : $MRGCSVTEMP"
-log INFO "MRG JSON tmp : $MRGJSONTMP"
-log INFO "PKG          : suppressed in this pass (Phase 3b)"
+log INFO "INV temp : $INVENTORYTEMP"
+log INFO "ID temp  : $IDINVENTORYTEMP"
+log INFO "DB temp  : $DBINVENTORYTEMP"
 
-_pssh_input \
+cat "${PGMDIR}/rhel_remote_scan.sh" \
     | "$PSSH_BIN" $PSSH_OPTS \
         -e "$ERRDIR" \
         -h "$MASTERHOSTLIST" \
@@ -196,24 +179,21 @@ _pssh_input \
         "$IDINVENTORYTEMP" \
         "$DBINVENTORYTEMP" \
         "/dev/null" \
-        "$MRGCSVTEMP" \
-        "$MRGJSONTMP"
+        "/dev/null" \
+        "/dev/null"
 
 SCAN_RC=$?
-log INFO "Phase 3a scan completed (exit status: $SCAN_RC)"
+log INFO "Phase 3a completed (exit status: $SCAN_RC)"
 
-# Remove zero-size error files
 if [[ -d "$ERRDIR" && "$ERRDIR" =~ errdir ]]; then
-    ERRCOUNT_BEFORE=$(find "$ERRDIR" -type f | wc -l)
-    find "$ERRDIR" -type f -size 0 | xargs rm -f
-    ERRCOUNT_AFTER=$(find "$ERRDIR" -type f | wc -l)
-    log INFO "Error dir cleanup: removed $((ERRCOUNT_BEFORE - ERRCOUNT_AFTER)) empty files, $ERRCOUNT_AFTER hosts had errors"
+    find "$ERRDIR" -type f -size 0 | xargs rm -f 2>/dev/null
+    ERRCOUNT=$(find "$ERRDIR" -type f | wc -l)
+    log INFO "Error dir: $ERRCOUNT hosts had errors"
 fi
 
-# Validate Phase 3a outputs
 for tmpfile in "$INVENTORYTEMP" "$IDINVENTORYTEMP"; do
     if [[ ! -s "$tmpfile" ]]; then
-        log WARN "Output file is empty or missing: $tmpfile"
+        log WARN "$(basename "$tmpfile"): empty or missing"
     else
         log INFO "$(basename "$tmpfile"): $(wc -l < "$tmpfile") lines collected"
     fi
@@ -221,16 +201,49 @@ done
 if [[ -s "$DBINVENTORYTEMP" ]]; then
     log INFO "$(basename "$DBINVENTORYTEMP"): $(wc -l < "$DBINVENTORYTEMP") lines collected"
 else
-    log INFO "$(basename "$DBINVENTORYTEMP"): empty — normal if no DB hosts in host list"
-fi
-if [[ -s "$MRGCSVTEMP" ]]; then
-    log INFO "$(basename "$MRGCSVTEMP"): $(wc -l < "$MRGCSVTEMP") lines collected"
-else
-    log WARN "$(basename "$MRGCSVTEMP"): empty — check if RHEL_data_gather.sh ran"
+    log INFO "$(basename "$DBINVENTORYTEMP"): empty (no DB hosts or none found)"
 fi
 
 # =============================================================================
-log SECTION "Phase 3b — Package inventory scan (separate pssh pass)"
+log SECTION "Phase 3b -- Midrange Mod / Compare JSON scan"
+# =============================================================================
+# RHEL_data_gather.sh runs alone -- confirmed working via pssh in testing.
+# Produces MID_MOD_CSV: and COMPARE_JSON: tagged lines only.
+# =============================================================================
+
+_gather_script="${RHEL_DATA_GATHER:-${PGMDIR}/RHEL_data_gather.sh}"
+if [[ -f "$_gather_script" ]]; then
+    log INFO "MRG CSV temp : $MRGCSVTEMP"
+    log INFO "MRG JSON tmp : $MRGJSONTMP"
+    log INFO "Script       : $_gather_script"
+
+    cat "$_gather_script" \
+        | "$PSSH_BIN" $PSSH_OPTS \
+            -e "$ERRDIR" \
+            -h "$MASTERHOSTLIST" \
+            -x "-q -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o ConnectTimeout=30" \
+            bash \
+        | "${PGMDIR}/rhel_filter_scan.sh" \
+            "/dev/null" \
+            "/dev/null" \
+            "/dev/null" \
+            "/dev/null" \
+            "$MRGCSVTEMP" \
+            "$MRGJSONTMP"
+
+    MRG_RC=$?
+    log INFO "Phase 3b completed (exit status: $MRG_RC)"
+
+    if [[ -s "$MRGCSVTEMP" ]]; then
+        log INFO "$(basename "$MRGCSVTEMP"): $(wc -l < "$MRGCSVTEMP") lines collected"
+    else
+        log WARN "$(basename "$MRGCSVTEMP"): empty -- check RHEL_data_gather.sh"
+    fi
+else
+    log WARN "RHEL_data_gather.sh not found at $_gather_script -- skipping Midrange Mod scan"
+fi
+
+log SECTION "Phase 3c -- Package inventory scan"
 # =============================================================================
 
 if [[ "${RUN_PACKAGES_ON_MAIN:-1}" -eq 1 ]]; then
@@ -241,7 +254,7 @@ if [[ "${RUN_PACKAGES_ON_MAIN:-1}" -eq 1 ]]; then
         # the exported environment set by rhel_inv_run.sh — no args needed.
         "${PGMDIR}/rhel_pkginventory.sh"
         PKG_RC=$?
-        log INFO "Phase 3b scan completed (exit status: $PKG_RC)"
+        log INFO "Phase 3c scan completed (exit status: $PKG_RC)"
         if [[ -s "$PACKAGETEMP" ]]; then
             log INFO "$(basename "$PACKAGETEMP"): $(wc -l < "$PACKAGETEMP") lines collected"
         else
