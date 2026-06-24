@@ -261,33 +261,29 @@ je() {
 # CSV line (13 columns)
 echo "MID_MOD_CSV:${HOSTNAME}:${HOSTNAME},${LOCATION},${MNEMONIC},${ENVIRONMENT},${RHEL_RELEASE},${SSSD},${LDAP_QUERY},${AD_QUERY},${DUAL_AUTH_PKG},${NSSWITCH},${KRB5_KEYTAB},${XQVSMLINAUTHSCAN_SUDO},${XQMRGLINENG_SUDO},${XQMRGLINAAP_SUDO}"
 
-# JSON — single line using printf to build the object inline.
-# Volumes array is already a single-line string from the collection above.
-# All string values are escaped via the je() function.
-printf 'COMPARE_JSON:%s:{"host":"%s","collected_at":"%s","reachable":true,"data":{"location":"%s","environment":"%s","mnemonic":"%s","timezone":"%s","cpu":"%s","cores":"%s","sockets":"%s","memory":"%s","rhel_version":"%s","kernel":"%s","selinux":"%s","hugepages":"%s","resolv_search":"%s","resolv_ns":"%s","nfs_count":%s,"cifs_count":%s,"volumes":[%s],"auth_method":{"oud":"%s","ad":"%s"},"auth_query":{"oud":"%s","ad":"%s"},"services":{"sssd":"%s","sshd":"%s"}}}\n' \
-    "$HOSTNAME" \
-    "$(je "$HOSTNAME")" \
-    "$COLLECTED_AT" \
-    "$(je "$LOCATION")" \
-    "$(je "$ENVIRONMENT")" \
-    "$(je "$MNEMONIC")" \
-    "$(je "$TIMEZONE")" \
-    "$(je "$CPU")" \
-    "$(je "$CORES")" \
-    "$(je "$SOCKETS")" \
-    "$(je "$MEMORY")" \
-    "$(je "$RHEL_RELEASE")" \
-    "$(je "$KERNEL")" \
-    "$(je "$SELINUX")" \
-    "$(je "$HUGEPAGES")" \
-    "$(je "$RESOLV_SEARCH")" \
-    "$(je "$RESOLV_NS")" \
-    "$NFS_COUNT" \
-    "$CIFS_COUNT" \
-    "$VOLUMES_JSON_INNER" \
-    "$(je "$AUTH_OUD")" \
-    "$(je "$AUTH_AD")" \
-    "$(je "$LDAP_QUERY")" \
-    "$(je "$AD_QUERY")" \
-    "$(je "$SSSD_SVC")" \
-    "$(je "$SSHD_SVC")"
+# JSON — pre-compute all escaped values into plain variables first.
+# This avoids "$(je "$VAR")" nested-quote patterns which cause bash 4.4
+# (RHEL 7) to report "unexpected end of file" during script parsing.
+_jHOST=$(je "$HOSTNAME")
+_jLOC=$(je "$LOCATION")
+_jENV=$(je "$ENVIRONMENT")
+_jMNEM=$(je "$MNEMONIC")
+_jTZ=$(je "$TIMEZONE")
+_jCPU=$(je "$CPU")
+_jCORES=$(je "$CORES")
+_jSOCK=$(je "$SOCKETS")
+_jMEM=$(je "$MEMORY")
+_jREL=$(je "$RHEL_RELEASE")
+_jKERN=$(je "$KERNEL")
+_jSEL=$(je "$SELINUX")
+_jHUGE=$(je "$HUGEPAGES")
+_jRSRCH=$(je "$RESOLV_SEARCH")
+_jRNS=$(je "$RESOLV_NS")
+_jOUD=$(je "$AUTH_OUD")
+_jAD=$(je "$AUTH_AD")
+_jLDAP=$(je "$LDAP_QUERY")
+_jADQ=$(je "$AD_QUERY")
+_jSSD=$(je "$SSSD_SVC")
+_jSSH=$(je "$SSHD_SVC")
+
+printf 'COMPARE_JSON:%s:{"host":"%s","collected_at":"%s","reachable":true,"data":{"location":"%s","environment":"%s","mnemonic":"%s","timezone":"%s","cpu":"%s","cores":"%s","sockets":"%s","memory":"%s","rhel_version":"%s","kernel":"%s","selinux":"%s","hugepages":"%s","resolv_search":"%s","resolv_ns":"%s","nfs_count":%s,"cifs_count":%s,"volumes":[%s],"auth_method":{"oud":"%s","ad":"%s"},"auth_query":{"oud":"%s","ad":"%s"},"services":{"sssd":"%s","sshd":"%s"}}}\n'     "$HOSTNAME" "$_jHOST" "$COLLECTED_AT"     "$_jLOC" "$_jENV" "$_jMNEM" "$_jTZ"     "$_jCPU" "$_jCORES" "$_jSOCK" "$_jMEM"     "$_jREL" "$_jKERN" "$_jSEL" "$_jHUGE"     "$_jRSRCH" "$_jRNS"     "$NFS_COUNT" "$CIFS_COUNT" "$VOLUMES_JSON_INNER"     "$_jOUD" "$_jAD" "$_jLDAP" "$_jADQ"     "$_jSSD" "$_jSSH"
