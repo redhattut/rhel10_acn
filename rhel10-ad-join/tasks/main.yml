@@ -23,11 +23,13 @@
 
 - name: Ensure OUD sssd.conf is in place (generate for new builds, rename for existing)
   ansible.builtin.import_tasks: generate_oud_config.yml
-  when: dual_auth_lifecycle_action in ['configure', 'rejoin']
+  when: dual_auth_lifecycle_action == 'configure'
 
 - name: Apply PNC auth configuration (sssd conf.d / krb5 / authselect / sudoers)
   ansible.builtin.import_tasks: configure_auth.yml
-  when: dual_auth_lifecycle_action in ['configure', 'rejoin']
+  when:
+    - dual_auth_lifecycle_action in ['configure', 'rejoin']
+    - not (dual_auth_lifecycle_action == 'rejoin' and dual_auth_is_legacy_ad_only | default(false) | bool)
 
 - name: Join server to Active Directory if not already healthily joined
   ansible.builtin.import_tasks: join_ad.yml
@@ -43,14 +45,32 @@
   ansible.builtin.import_tasks: leave_ad.yml
   when: dual_auth_lifecycle_action == 'leave_ad'
 
+- name: Warn and skip convert_ad_only - host is already AD-only
+  ansible.builtin.debug:
+    msg: "Host is already on the legacy pure-AD path - convert_ad_only is not applicable."
+  when:
+    - dual_auth_lifecycle_action == 'convert_ad_only'
+    - dual_auth_is_legacy_ad_only | default(false) | bool
+
 - name: Convert from OUD+AD dual auth to AD-only
   ansible.builtin.import_tasks: convert_ad_only.yml
-  when: dual_auth_lifecycle_action == 'convert_ad_only'
+  when:
+    - dual_auth_lifecycle_action == 'convert_ad_only'
+    - not (dual_auth_is_legacy_ad_only | default(false) | bool)
 
 - name: Rebuild and restage the AD bind keytab only
   ansible.builtin.import_tasks: recreate_keytab.yml
   when: dual_auth_lifecycle_action == 'recreate_keytab'
 
+- name: Warn and skip recreate_sssd - no OUD sssd.conf on legacy AD-only host
+  ansible.builtin.debug:
+    msg: "Host is on the legacy pure-AD path - recreate_sssd is not applicable. Run configure to set up dual auth."
+  when:
+    - dual_auth_lifecycle_action == 'recreate_sssd'
+    - dual_auth_is_legacy_ad_only | default(false) | bool
+
 - name: Regenerate sssd.conf with a fresh authtok
   ansible.builtin.import_tasks: recreate_sssd.yml
-  when: dual_auth_lifecycle_action == 'recreate_sssd'
+  when:
+    - dual_auth_lifecycle_action == 'recreate_sssd'
+    - not (dual_auth_is_legacy_ad_only | default(false) | bool)
