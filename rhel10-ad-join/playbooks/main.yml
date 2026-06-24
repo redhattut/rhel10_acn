@@ -2,14 +2,14 @@
 # Entry point for AAP: point the Job Template's "Playbook" field at this
 # file (playbooks/main.yml) directly - no roles/ directory needed anywhere.
 #
-# This deliberately does NOT use `roles: - role: mrg-dual-auth-keytab`.
+# This deliberately does NOT use `roles: - role: mrg-join-ad-keytab`.
 # Ansible only searches for a role named X in a directory literally called
 # roles/X - and only in a few fixed locations (a roles/ folder *adjacent to
 # this playbook file*, i.e. playbooks/roles/, plus the global
 # ~/.ansible/roles, /usr/share/ansible/roles, /etc/ansible/roles). It does
 # NOT check the project root, even though tasks/, vars/, and files/ live
 # there. Since this repo's layout deliberately keeps those as top-level
-# folders (not nested under playbooks/roles/mrg-dual-auth-keytab/), the
+# folders (not nested under playbooks/roles/mrg-join-ad-keytab/), the
 # `roles:` keyword would fail with "role not found" when AAP runs this.
 #
 # Instead, we import vars/main.yml and tasks/main.yml directly, using the
@@ -28,18 +28,18 @@
   connection: local
   gather_facts: false
   vars:
-    mrg_dual_auth_dynamic_lines: "{{ (dynamic_hosts_input | default('')).split('\n') | map('trim') | select('truthy') | list }}"
+    dual_auth_dynamic_lines: "{{ (dynamic_hosts_input | default('')).split('\n') | map('trim') | select('truthy') | list }}"
   tasks:
     - name: Show parsed host list
       ansible.builtin.debug:
-        msg: "{{ mrg_dual_auth_dynamic_lines }}"
-      when: mrg_dual_auth_dynamic_lines | length > 0
+        msg: "{{ dual_auth_dynamic_lines }}"
+      when: dual_auth_dynamic_lines | length > 0
 
     - name: Register each provided hostname into dynamic_group
       ansible.builtin.add_host:
         name: "{{ item }}"
         groups: dynamic_group
-      loop: "{{ mrg_dual_auth_dynamic_lines }}"
+      loop: "{{ dual_auth_dynamic_lines }}"
 
 - name: Configure PNC dual auth (OUD+AD) and join servers to Active Directory (static keytab variant)
   hosts: "{{ 'dynamic_group' if (dynamic_hosts_input | default('') | length > 0) else 'all' }}"
@@ -47,5 +47,5 @@
   vars_files:
     - "{{ playbook_dir }}/../vars/main.yml"
   tasks:
-    - name: Run mrg-dual-auth-keytab task logic
+    - name: Run mrg-join-ad-keytab task logic
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../tasks/main.yml"
