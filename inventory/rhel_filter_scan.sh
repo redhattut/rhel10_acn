@@ -80,6 +80,13 @@ count_skip=0
 echo "[" > "$MRG_JSON_OUT"
 _json_first=true
 
+# --- Diagnostic: log first 50 raw lines to understand stream format ----------
+# Remove this block after confirming routing works correctly
+DIAG_LOG="$(dirname "$INV_OUT")/filter_diag.$(date +%Y%m%d_%H%M%S).log"
+DIAG_COUNT=0
+DIAG_MAX=50
+_seen_inv=false; _seen_pkg=false; _seen_mrg=false; _seen_json=false
+
 # =============================================================================
 # Main filter loop — fully stateless, one line at a time
 # =============================================================================
@@ -87,6 +94,12 @@ _json_first=true
 while IFS= read -r raw; do
 
     (( ${#raw} == 0 )) && continue
+
+    # --- Diagnostic logging --------------------------------------------------
+    if (( DIAG_COUNT < DIAG_MAX )); then
+        echo "RAW[$DIAG_COUNT]: $raw" >> "$DIAG_LOG"
+        (( DIAG_COUNT++ ))
+    fi
 
     # Strip pssh inline-stdout host prefix "hostname: "
     if [[ "$raw" == *": "* ]]; then
@@ -149,6 +162,11 @@ while IFS= read -r raw; do
     # --- Route MID_MOD_CSV (colon-delimited) ---------------------------------
     # Format: MID_MOD_CSV:<host>:<csv_row>
     if [[ "$line" == MID_MOD_CSV:*:* ]]; then
+        if [[ "$_seen_mrg" == false ]]; then
+            echo "FIRST_MRG_LINE: $line" >> "$DIAG_LOG"
+            echo "FIRST_MRG_RAW:  $raw"  >> "$DIAG_LOG"
+            _seen_mrg=true
+        fi
         _csv_row="${line#MID_MOD_CSV:}"
         _csv_row="${_csv_row#*:}"
         echo "$_csv_row" >> "$MRG_CSV_OUT"
@@ -159,6 +177,11 @@ while IFS= read -r raw; do
     # --- Route COMPARE_JSON (single-line minified JSON) ----------------------
     # Format: COMPARE_JSON:<host>:<json_object>
     if [[ "$line" == COMPARE_JSON:*:* ]]; then
+        if [[ "$_seen_json" == false ]]; then
+            echo "FIRST_JSON_LINE: ${line:0:120}" >> "$DIAG_LOG"
+            echo "FIRST_JSON_RAW:  ${raw:0:120}"  >> "$DIAG_LOG"
+            _seen_json=true
+        fi
         # Extract just the JSON part (everything after second colon)
         _json_part="${line#COMPARE_JSON:}"
         _json_part="${_json_part#*:}"
@@ -178,6 +201,11 @@ while IFS= read -r raw; do
 
     case "$tag" in
         INV)
+            if [[ "$_seen_inv" == false ]]; then
+                echo "FIRST_INV_LINE: $line" >> "$DIAG_LOG"
+                echo "FIRST_INV_RAW:  $raw"  >> "$DIAG_LOG"
+                _seen_inv=true
+            fi
             echo "$data" >> "$INV_OUT"
             (( count_inv++ ))
             ;;
@@ -190,6 +218,11 @@ while IFS= read -r raw; do
             (( count_db++ ))
             ;;
         PKG)
+            if [[ "$_seen_pkg" == false ]]; then
+                echo "FIRST_PKG_LINE: $line" >> "$DIAG_LOG"
+                echo "FIRST_PKG_RAW:  $raw"  >> "$DIAG_LOG"
+                _seen_pkg=true
+            fi
             [[ "$data" == Inventory* ]] && continue
             echo "$data" >> "$PKG_OUT"
             (( count_pkg++ ))
@@ -218,5 +251,8 @@ if [[ -f "$ERR_LOG" && -s "$ERR_LOG" ]]; then
 else
     rm -f "$ERR_LOG"
 fi
+
+printf '%s  [DIAG]    Diagnostic log (first %d raw lines + first tag occurrences): %s\n' \
+    "$(date '+%Y-%m-%d %H:%M:%S')" "$DIAG_MAX" "$DIAG_LOG"
 
 exit 0
