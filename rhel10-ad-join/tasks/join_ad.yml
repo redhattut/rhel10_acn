@@ -1,36 +1,83 @@
 ---
-- name: Stage the static AD bind-account keytab and obtain TGT
-  ansible.builtin.import_tasks: stage_static_keytab.yml
+# Joins the server to Active Directory.
+#
+# For OUD+AD hosts: uses the static pre-built keytab (stage_static_keytab.yml)
+# to get a TGT, then adcli join uses the ccache.
+#
+# For legacy AD-only hosts (configure action): passes the bind account
+# password directly to adcli via --stdin-password to avoid kinit/ccache/
+# GSSAPI issues on hosts with non-standard ccache configurations.
+
+- name: Join AD - legacy AD-only (password via stdin, no kinit/ccache)
+  when: dual_auth_is_legacy_ad_only | default(false) | bool
+  block:
+    - name: Join the server to Active Directory using bind account password
+      ansible.builtin.shell: >-
+        echo "{{ dual_auth_ad_bind_password }}" |
+        timeout 90 adcli join
+        --login-user={{ dual_auth_username }}
+        --stdin-password
+        --service-name=host --service-name=nfs
+        --host-fqdn={{ ansible_fqdn }}
+        --user-principal=host/{{ ansible_fqdn }}@{{ dual_auth_realm }}
+        --domain-ou={{ dual_auth_base_ou }},{{ dual_auth_dc_ou }}
+        --domain={{ dual_auth_domain }}
+        --show-details -K /etc/krb5.keytab
+      no_log: true
+      register: dual_auth_adcli_join
+      changed_when: true
+
+    - name: Restart sssd-kcm service
+      ansible.builtin.systemd_service:
+        name: sssd-kcm.service
+        state: restarted
+
+    - name: Enable and start sssd
+      ansible.builtin.systemd_service:
+        name: sssd.service
+        enabled: true
+        state: started
+
+    - name: Record AUTHMETHOD in PNC provision config
+      ansible.builtin.lineinfile:
+        path: "{{ dual_auth_provision_config_path }}"
+        regexp: '^AUTHMETHOD='
+        line: "AUTHMETHOD={{ dual_auth_target_authmethod }}"
+
+- name: Join AD - OUD+AD (keytab TGT via ccache)
   when: not (dual_auth_is_legacy_ad_only | default(false) | bool)
+  block:
+    - name: Stage the static AD bind-account keytab and obtain TGT
+      ansible.builtin.import_tasks: stage_static_keytab.yml
 
-- name: Join the server to Active Directory
-  ansible.builtin.command: >-
-    timeout 90 adcli join -C
-    --service-name=host --service-name=nfs
-    --host-fqdn={{ ansible_fqdn }}
-    --user-principal=host/{{ ansible_fqdn }}@{{ dual_auth_realm }}
-    --domain-ou={{ dual_auth_base_ou }},{{ dual_auth_dc_ou }}
-    --domain={{ dual_auth_domain }}
-    --show-details -K /etc/krb5.keytab
-  register: dual_auth_adcli_join
-  changed_when: true
+    - name: Join the server to Active Directory
+      ansible.builtin.command: >-
+        timeout 90 adcli join -C
+        --service-name=host --service-name=nfs
+        --host-fqdn={{ ansible_fqdn }}
+        --user-principal=host/{{ ansible_fqdn }}@{{ dual_auth_realm }}
+        --domain-ou={{ dual_auth_base_ou }},{{ dual_auth_dc_ou }}
+        --domain={{ dual_auth_domain }}
+        --show-details -K /etc/krb5.keytab
+      register: dual_auth_adcli_join
+      changed_when: true
 
-- name: Clean up transient keytab and ticket cache
-  ansible.builtin.import_tasks: destroy_transient_keytab.yml
+    - name: Clean up transient keytab and ticket cache
+      ansible.builtin.import_tasks: destroy_transient_keytab.yml
 
-- name: Restart sssd-kcm service
-  ansible.builtin.systemd_service:
-    name: sssd-kcm.service
-    state: restarted
+    - name: Restart sssd-kcm service
+      ansible.builtin.systemd_service:
+        name: sssd-kcm.service
+        state: restarted
 
-- name: Enable and start sssd
-  ansible.builtin.systemd_service:
-    name: sssd.service
-    enabled: true
-    state: started
+    - name: Enable and start sssd
+      ansible.builtin.systemd_service:
+        name: sssd.service
+        enabled: true
+        state: started
 
-- name: Record AUTHMETHOD in PNC provision config
-  ansible.builtin.lineinfile:
-    path: "{{ dual_auth_provision_config_path }}"
-    regexp: '^AUTHMETHOD='
-    line: "AUTHMETHOD={{ dual_auth_target_authmethod }}"
+    - name: Record AUTHMETHOD in PNC provision config
+      ansible.builtin.lineinfile:
+        path: "{{ dual_auth_provision_config_path }}"
+        regexp: '^AUTHMETHOD='
+        line: "AUTHMETHOD={{ dual_auth_target_authmethod }}"

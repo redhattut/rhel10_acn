@@ -1,12 +1,12 @@
 ---
 # Rebuilds /etc/krb5.keytab (the machine account HOST keytab used by sssd)
-# by authenticating to AD using the bind account password, then running
-# adcli join which updates/recreates the computer account and writes the
-# correct host/fqdn@REALM keytab to /etc/krb5.keytab.
+# by passing the bind account password directly to adcli join, which updates
+# or recreates the computer account and writes the correct host/fqdn@REALM
+# keytab to /etc/krb5.keytab.
 #
-# Note: /etc/krb5.keytab must contain the HOST machine account keytab
-# (host/hostname@REALM), NOT the bind service account keytab. The bind
-# account keytab is only used transiently here to authenticate to AD.
+# Uses adcli's --stdin-password instead of kinit/ccache to avoid GSSAPI
+# SPNEGO negotiation failures that occur on hosts with non-standard ccache
+# configurations (e.g. Hadoop servers with default_ccache_name set).
 #
 # Requires: ad_bind_password_<env> via PNC MRG AD Bind AAP credential
 #           or -e ad_bind_password_<env>=<value> on CLI.
@@ -20,79 +20,32 @@
       Set it via the PNC MRG AD Bind AAP credential or -e on CLI.
   no_log: true
 
-- name: Create a secure temporary directory for transient keytab
-  ansible.builtin.tempfile:
-    state: directory
-    suffix: pnc_ad_join
-  register: dual_auth_keytab_tmpdir
-  changed_when: false
-
-- name: Set transient keytab path and principal facts
-  ansible.builtin.set_fact:
-    dual_auth_tmp_keytab_path: "{{ dual_auth_keytab_tmpdir.path }}/{{ dual_auth_username }}.keytab"
-    dual_auth_principal: "{{ dual_auth_username }}@{{ dual_auth_realm }}"
-    dual_auth_salt: "{{ dual_auth_realm }}{{ dual_auth_username }}"
-
-- name: Build transient bind account keytab via ktutil (kvno 1-5)
-  ansible.builtin.command:
-    cmd: ktutil
-    stdin: |
-      addent -password -p {{ dual_auth_principal }} -k 1 -e aes256-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-      {{ dual_auth_ad_bind_password }}
-      addent -password -p {{ dual_auth_principal }} -k 1 -e aes128-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-      {{ dual_auth_ad_bind_password }}
-      addent -password -p {{ dual_auth_principal }} -k 2 -e aes256-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-      {{ dual_auth_ad_bind_password }}
-      addent -password -p {{ dual_auth_principal }} -k 2 -e aes128-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-      {{ dual_auth_ad_bind_password }}
-      addent -password -p {{ dual_auth_principal }} -k 3 -e aes256-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-      {{ dual_auth_ad_bind_password }}
-      addent -password -p {{ dual_auth_principal }} -k 3 -e aes128-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-      {{ dual_auth_ad_bind_password }}
-      addent -password -p {{ dual_auth_principal }} -k 4 -e aes256-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-      {{ dual_auth_ad_bind_password }}
-      addent -password -p {{ dual_auth_principal }} -k 4 -e aes128-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-      {{ dual_auth_ad_bind_password }}
-      addent -password -p {{ dual_auth_principal }} -k 5 -e aes256-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-      {{ dual_auth_ad_bind_password }}
-      addent -password -p {{ dual_auth_principal }} -k 5 -e aes128-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-      {{ dual_auth_ad_bind_password }}
-      wkt {{ dual_auth_tmp_keytab_path }}
-      quit
-  no_log: true
-  changed_when: true
-
-- name: Restrict permissions on transient keytab
-  ansible.builtin.file:
-    path: "{{ dual_auth_tmp_keytab_path }}"
-    mode: "0600"
-
-- name: Obtain TGT using transient bind account keytab
-  ansible.builtin.command: >-
-    timeout 30 kinit -k -t {{ dual_auth_tmp_keytab_path }} {{ dual_auth_principal }}
-  no_log: true
-  changed_when: true
-
-- name: Run adcli join to update computer account and write HOST keytab to /etc/krb5.keytab
-  ansible.builtin.command: >-
-    timeout 90 adcli join -C
+- name: Update computer account and write HOST keytab via adcli join
+  ansible.builtin.shell: >-
+    echo "{{ dual_auth_ad_bind_password }}" |
+    timeout 90 adcli join
+    --login-user={{ dual_auth_username }}
+    --stdin-password
     --service-name=host --service-name=nfs
     --host-fqdn={{ ansible_fqdn }}
     --user-principal=host/{{ ansible_fqdn }}@{{ dual_auth_realm }}
     --domain-ou={{ dual_auth_base_ou }},{{ dual_auth_dc_ou }}
     --domain={{ dual_auth_domain }}
     --show-details -K /etc/krb5.keytab
+  no_log: true
   register: dual_auth_adcli_join
   changed_when: true
 
-- name: Remove transient keytab and clear ticket cache
-  ansible.builtin.import_tasks: destroy_transient_keytab.yml
-
-- name: Verify HOST keytab works
+- name: Verify HOST keytab was written correctly
   ansible.builtin.command: >-
-    timeout 30 kinit -k -t /etc/krb5.keytab
-    host/{{ ansible_fqdn }}@{{ dual_auth_realm }}
+    klist -k /etc/krb5.keytab
   changed_when: false
+  register: dual_auth_keytab_verify
+  failed_when: dual_auth_keytab_verify.rc != 0
+
+- name: Show keytab principals written
+  ansible.builtin.debug:
+    msg: "{{ dual_auth_keytab_verify.stdout_lines }}"
 
 - name: Restart sssd to pick up the refreshed keytab
   ansible.builtin.systemd:

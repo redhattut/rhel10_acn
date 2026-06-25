@@ -4,29 +4,14 @@
 # machine account password, domain unreachable from sssd).
 #
 # For OUD+AD hosts: authenticates using the static pre-built .dat keytab.
-# For legacy AD-only hosts: authenticates using ad_bind_password_<env>
-# since there is no valid keytab available.
+# For legacy AD-only hosts: passes the bind account password directly to
+# adcli via --stdin-password. This avoids the kinit/ccache/GSSAPI path
+# entirely, which is unreliable when the ccache is empty or the host has
+# a non-standard ccache location (e.g. Hadoop servers).
 
-- name: Get authentication for AD operations (legacy AD-only - build from password)
+- name: Get authentication for AD operations (legacy AD-only - password via stdin)
   when: dual_auth_is_legacy_ad_only | default(false) | bool
   block:
-    - name: Check whether krb5.conf exists before deploying
-      ansible.builtin.stat:
-        path: /etc/krb5.conf
-      register: dual_auth_krb5_stat_rejoin
-
-    - name: Deploy krb5.conf so GSSAPI can locate the KDC for adcli join
-      # leave_ad removes /etc/krb5.conf. Without it, GSSAPI cannot negotiate
-      # Kerberos authentication and adcli join fails with SPNEGO error even
-      # if kinit succeeds via DNS fallback. Deploy it only if absent.
-      ansible.builtin.template:
-        src: "{{ playbook_dir }}/../files/krb5.conf.j2"
-        dest: /etc/krb5.conf
-        owner: root
-        group: root
-        mode: "0644"
-      when: not dual_auth_krb5_stat_rejoin.stat.exists
-
     - name: Validate AD bind password is set
       ansible.builtin.assert:
         that:
@@ -37,78 +22,74 @@
           Set it via the PNC MRG AD Bind AAP credential or -e on CLI.
       no_log: true
 
-    - name: Create secure temp directory for transient keytab
-      ansible.builtin.tempfile:
-        state: directory
-        suffix: pnc_ad_join
-      register: dual_auth_keytab_tmpdir
-      changed_when: false
-
-    - name: Set transient keytab path and principal facts
-      ansible.builtin.set_fact:
-        dual_auth_tmp_keytab_path: "{{ dual_auth_keytab_tmpdir.path }}/{{ dual_auth_username }}.keytab"
-        dual_auth_principal: "{{ dual_auth_username }}@{{ dual_auth_realm }}"
-        dual_auth_salt: "{{ dual_auth_realm }}{{ dual_auth_username }}"
-
-    - name: Build transient bind account keytab via ktutil (kvno 1-5)
-      ansible.builtin.command:
-        cmd: ktutil
-        stdin: |
-          addent -password -p {{ dual_auth_principal }} -k 1 -e aes256-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-          {{ dual_auth_ad_bind_password }}
-          addent -password -p {{ dual_auth_principal }} -k 1 -e aes128-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-          {{ dual_auth_ad_bind_password }}
-          addent -password -p {{ dual_auth_principal }} -k 2 -e aes256-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-          {{ dual_auth_ad_bind_password }}
-          addent -password -p {{ dual_auth_principal }} -k 2 -e aes128-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-          {{ dual_auth_ad_bind_password }}
-          addent -password -p {{ dual_auth_principal }} -k 3 -e aes256-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-          {{ dual_auth_ad_bind_password }}
-          addent -password -p {{ dual_auth_principal }} -k 3 -e aes128-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-          {{ dual_auth_ad_bind_password }}
-          addent -password -p {{ dual_auth_principal }} -k 4 -e aes256-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-          {{ dual_auth_ad_bind_password }}
-          addent -password -p {{ dual_auth_principal }} -k 4 -e aes128-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-          {{ dual_auth_ad_bind_password }}
-          addent -password -p {{ dual_auth_principal }} -k 5 -e aes256-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-          {{ dual_auth_ad_bind_password }}
-          addent -password -p {{ dual_auth_principal }} -k 5 -e aes128-cts-hmac-sha1-96 -s "{{ dual_auth_salt }}"
-          {{ dual_auth_ad_bind_password }}
-          wkt {{ dual_auth_tmp_keytab_path }}
-          quit
+    - name: Remove existing computer account from AD
+      ansible.builtin.shell: >-
+        echo "{{ dual_auth_ad_bind_password }}" |
+        timeout 60 adcli delete-computer
+        --login-user={{ dual_auth_username }}
+        --stdin-password
+        --domain={{ dual_auth_domain }}
+        {{ ansible_hostname }}
       no_log: true
+      register: dual_auth_adcli_delete
       changed_when: true
+      failed_when: false
 
-    - name: Restrict permissions on transient keytab
+    - name: Remove the existing host keytab before rejoining
       ansible.builtin.file:
-        path: "{{ dual_auth_tmp_keytab_path }}"
-        mode: "0600"
+        path: /etc/krb5.keytab
+        state: absent
 
-    - name: Obtain TGT using transient bind account keytab
-      ansible.builtin.command: >-
-        timeout 30 kinit -k -t {{ dual_auth_tmp_keytab_path }} {{ dual_auth_principal }}
+    - name: Rejoin AD using bind account password directly
+      ansible.builtin.shell: >-
+        echo "{{ dual_auth_ad_bind_password }}" |
+        timeout 90 adcli join
+        --login-user={{ dual_auth_username }}
+        --stdin-password
+        --service-name=host --service-name=nfs
+        --host-fqdn={{ ansible_fqdn }}
+        --user-principal=host/{{ ansible_fqdn }}@{{ dual_auth_realm }}
+        --domain-ou={{ dual_auth_base_ou }},{{ dual_auth_dc_ou }}
+        --domain={{ dual_auth_domain }}
+        --show-details -K /etc/krb5.keytab
       no_log: true
+      register: dual_auth_adcli_join
       changed_when: true
+
+    - name: Restart sssd-kcm service
+      ansible.builtin.systemd_service:
+        name: sssd-kcm.service
+        state: restarted
+
+    - name: Enable and start sssd
+      ansible.builtin.systemd_service:
+        name: sssd.service
+        enabled: true
+        state: started
 
 - name: Get authentication for AD operations (OUD+AD - use static keytab)
   ansible.builtin.import_tasks: stage_static_keytab.yml
   when: not (dual_auth_is_legacy_ad_only | default(false) | bool)
 
-- name: Remove existing computer account from Active Directory
+- name: Remove existing computer account from AD (OUD+AD)
   ansible.builtin.command: >-
     timeout 60 adcli delete-computer -C
     --domain={{ dual_auth_domain }} {{ ansible_hostname }}
   register: dual_auth_adcli_delete
   changed_when: true
   failed_when: false
+  when: not (dual_auth_is_legacy_ad_only | default(false) | bool)
 
-- name: Clean up transient keytab and ticket cache after removal
+- name: Clean up transient keytab and ticket cache (OUD+AD)
   ansible.builtin.import_tasks: destroy_transient_keytab.yml
+  when: not (dual_auth_is_legacy_ad_only | default(false) | bool)
 
-- name: Remove the existing host keytab before rejoining
+- name: Remove the existing host keytab before rejoining (OUD+AD)
   ansible.builtin.file:
     path: /etc/krb5.keytab
     state: absent
+  when: not (dual_auth_is_legacy_ad_only | default(false) | bool)
 
-- name: Rejoin the server to Active Directory
+- name: Rejoin AD (OUD+AD)
   ansible.builtin.import_tasks: join_ad.yml
+  when: not (dual_auth_is_legacy_ad_only | default(false) | bool)
