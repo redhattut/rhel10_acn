@@ -139,6 +139,7 @@ log SECTION "Phase 2 — Cleanup before scan"
 # =============================================================================
 
 rm -f "$INVENTORYTEMP" "$DBINVENTORYTEMP" "$IDINVENTORYTEMP" "$PACKAGETEMP"
+rm -f "$MRGCSVTEMP" "$MRGJSONTMP"
 log INFO "Cleared stale temp files"
 
 # =============================================================================
