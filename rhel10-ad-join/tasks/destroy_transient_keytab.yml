@@ -6,7 +6,7 @@
 
 - name: Remove the transient keytab directory
   ansible.builtin.file:
-    path: "{{ dual_auth_keytab_tmpdir.path }}"
+    path: "{{ dual_auth_tmp_keytab_path | dirname }}"
     state: absent
   no_log: true
-  when: dual_auth_keytab_tmpdir is defined
+  when: dual_auth_tmp_keytab_path is defined
