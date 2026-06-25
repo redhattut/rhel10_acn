@@ -13,7 +13,7 @@
 #           INV|  → RHEL_INVENTORY.tmp      (system inventory)
 #           ID|   → RHEL_IDINVENTORY.tmp    (users/groups/netgroups)
 #           DB|   → RHEL_DBINVENTORY.tmp    (Oracle SIDs)
-#           PKG|  → RHEL_PACKAGES.tmp       (RPM package list)
+#           PKG|  → RHEL_PACKAGES_v2.tmp    (RPM package list, collected in Phase 3a)
 #   5.  Strip pssh status lines via rhel_filter_scan.sh
 #   6.  Rotate prior data files, promote temps to current
 #   7.  Collect UIDs/GIDs
@@ -150,9 +150,9 @@ log SECTION "Phase 3 -- Parallel SSH scan"
 # Concatenating scripts causes bash 4.4 (RHEL 7) to fail with
 # "unexpected end of file" at parse time. Each script runs cleanly alone.
 #
-# Phase 3a: INV + ID + DB  (rhel_remote_scan.sh only)
-# Phase 3b: MRG CSV + JSON (RHEL_data_gather.sh only -- already confirmed working)
-# Phase 3c: PKG only       (rhel_pkginventory.sh -- large output, separate pass)
+# Phase 3a: INV + ID + DB + PKG  (rhel_remote_scan.sh -- single pass, no duplication)
+# Phase 3b: MRG CSV + JSON        (RHEL_data_gather.sh only)
+# Phase 3c: eliminated -- PKG now collected in Phase 3a alongside INV/ID/DB
 # =============================================================================
 
 LINES=$(grep -v "^#" "$MASTERHOSTLIST" | wc -l)
@@ -168,6 +168,10 @@ log SECTION "Phase 3a -- INV / ID / DB scan"
 log INFO "INV temp : $INVENTORYTEMP"
 log INFO "ID temp  : $IDINVENTORYTEMP"
 log INFO "DB temp  : $DBINVENTORYTEMP"
+log INFO "PKG temp : $PACKAGETEMP"
+
+# Write PKG CSV header before pssh populates the file
+echo "Host,Package,Version,Release,Install date" > "$PACKAGETEMP"
 
 cat "${PGMDIR}/rhel_remote_scan.sh" \
     | "$PSSH_BIN" $PSSH_OPTS \
@@ -179,7 +183,7 @@ cat "${PGMDIR}/rhel_remote_scan.sh" \
         "$INVENTORYTEMP" \
         "$IDINVENTORYTEMP" \
         "$DBINVENTORYTEMP" \
-        "/dev/null" \
+        "$PACKAGETEMP" \
         "/dev/null" \
         "/dev/null"
 
@@ -244,68 +248,12 @@ else
     log WARN "RHEL_data_gather.sh not found at $_gather_script -- skipping Midrange Mod scan"
 fi
 
-log SECTION "Phase 3c -- Package inventory scan"
-# =============================================================================
-
-if [[ "${RUN_PACKAGES_ON_MAIN:-1}" -eq 1 ]]; then
-    if [[ -x "${PGMDIR}/rhel_pkginventory.sh" ]]; then
-        log INFO "PKG temp     : $PACKAGETEMP"
-        log INFO "Launching package-only pssh scan..."
-        # rhel_pkginventory.sh reads MASTERHOSTLIST and PACKAGETEMP from
-        # the exported environment set by rhel_inv_run.sh — no args needed.
-        "${PGMDIR}/rhel_pkginventory.sh"
-        PKG_RC=$?
-        log INFO "Phase 3c scan completed (exit status: $PKG_RC)"
-        if [[ -s "$PACKAGETEMP" ]]; then
-            log INFO "$(basename "$PACKAGETEMP"): $(wc -l < "$PACKAGETEMP") lines collected"
-        else
-            log WARN "$(basename "$PACKAGETEMP"): empty — package scan may have failed"
-        fi
-    else
-        log WARN "rhel_pkginventory.sh not found or not executable — package inventory skipped"
-    fi
-else
-    log INFO "RUN_PACKAGES_ON_MAIN=0 — package inventory handled by secondary jumpbox"
-    rm -f "$PACKAGETEMP"
-fi
-
-# --- Delta check — compare new inventory count against prior run -------------
-# Warns if the number of responding hosts drops by more than INV_DELTA_WARN_PCT
-# percent versus the previous dat file. Catches partial scan failures, pssh
-# misconfigurations, or mass SSH outages before the bad data is promoted.
-# Set INV_DELTA_WARN_PCT in rhel_inv.conf to tune the threshold (default 5%).
-
-INV_DELTA_WARN_PCT="${INV_DELTA_WARN_PCT:-5}"
-
-if [[ -f "$INVENTORYDATA" && -s "$INVENTORYDATA" ]]; then
-    PREV_COUNT=$(grep -v "^#" "$INVENTORYDATA" | wc -l)
-    NEW_COUNT=$(wc -l < "$INVENTORYTEMP")
-
-    if [[ $PREV_COUNT -gt 0 && $NEW_COUNT -gt 0 ]]; then
-        # Calculate percentage drop using integer arithmetic (bash has no float)
-        # DROP_PCT = ((PREV - NEW) * 100) / PREV
-        DIFF=$(( PREV_COUNT - NEW_COUNT ))
-
-        if [[ $DIFF -gt 0 ]]; then
-            DROP_PCT=$(( (DIFF * 100) / PREV_COUNT ))
-            if [[ $DROP_PCT -ge $INV_DELTA_WARN_PCT ]]; then
-                log WARN "Inventory count dropped ${DROP_PCT}% vs prior run — previous: ${PREV_COUNT}  new: ${NEW_COUNT}  delta: -${DIFF}"
-                log WARN "Threshold is ${INV_DELTA_WARN_PCT}% — verify scan health before trusting this run output"
-                log WARN "Check error dir: $ERRDIR"
-            else
-                log INFO "Inventory delta check passed — previous: ${PREV_COUNT}  new: ${NEW_COUNT}  delta: -${DIFF} (${DROP_PCT}% drop, within ${INV_DELTA_WARN_PCT}% threshold)"
-            fi
-        elif [[ $DIFF -lt 0 ]]; then
-            # Count went up — new hosts added, always fine
-            log INFO "Inventory delta check — previous: ${PREV_COUNT}  new: ${NEW_COUNT}  delta: +$(( NEW_COUNT - PREV_COUNT )) (growth)"
-        else
-            log INFO "Inventory delta check — count unchanged at ${NEW_COUNT}"
-        fi
-    fi
-else
-    log INFO "No prior inventory data found — skipping delta check (first run)"
-fi
-
+log SECTION "Phase 3c -- Package inventory (collected in Phase 3a)"
+# PKG lines are collected by rhel_remote_scan.sh in Phase 3a alongside INV/ID/DB.
+# rhel_remote_scan.sh already runs rpm -qa -- routing PKG| lines to PACKAGETEMP
+# in Phase 3a means zero duplicate collection and Phase 3c is no longer needed.
+# This eliminates the 109-minute second pssh pass that was previously required.
+log INFO "PKG collection: handled in Phase 3a (see PACKAGETEMP above)"
 # =============================================================================
 log SECTION "Phase 4 — Rotate prior data files, promote temps"
 # =============================================================================
@@ -723,6 +671,11 @@ BEGINFILE { current_file = FILENAME }
 # hosts can carry forward their previous scan real data.
 # ============================================================
 current_file == prev_dat_file && !/^#/ && NF >= 3 {
+    # Store previous record for TIMEOUT carry-forward.
+    # Include TIMEOUT_ records (multi-day unreachable) so the carry-forward
+    # chain persists — a host unreachable for 3 consecutive days still carries
+    # its last known good data rather than collapsing to all n/a.
+    # Exclude bare TIMEOUT/SSHFAIL (no real data) and header lines.
     if ($2 != "TIMEOUT" && $2 != "SSHFAIL" && $3 != "TIMEOUT" && $3 != "SSHFAIL") {
         prev[$1] = $0
     }
@@ -776,13 +729,15 @@ current_file == inv_file && !/^#/ && NF >= 1 {
         n = split(prev[host], pf, " ")
         # Rebuild $2-$28 from yesterday record
         for (i = 1; i <= n; i++) $i = pf[i]
-        # Preserve TIMEOUT prefix on type
+        # Strip TIMEOUT_ prefix from prev type to avoid compounding
+        # (TIMEOUT_Virt from yesterday → Virt → TIMEOUT_Virt today, not TIMEOUT_TIMEOUT_Virt)
         prev_typ = pf[2]
-        if (prev_typ == "Virt" || prev_typ == "Cloud") typ = "TIMEOUT_Virt"
+        sub(/^TIMEOUT_/, "", prev_typ)
+        if (prev_typ == "Virt" || prev_typ == "Cloud" || prev_typ == "TIMEOUT") typ = "TIMEOUT_Virt"
         else if (prev_typ == "Phys") typ = "TIMEOUT_Phys"
         else typ = "TIMEOUT_" prev_typ
     } else if (typ == "TIMEOUT") {
-        # No previous data — use TIMEOUT with n/a fields
+        # No previous data — use TIMEOUT_Virt with n/a fields
         typ = "TIMEOUT_Virt"
     }
 
@@ -791,8 +746,11 @@ current_file == inv_file && !/^#/ && NF >= 1 {
     # IP address in location field — repurposed server with duplicate config block
     if (loc ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) loc = "unknown"
 
-    # Cloud datacenter — set type to Cloud (unless TIMEOUT)
-    if (typ !~ /^TIMEOUT/ && (loc == "AZCE" || loc == "AZE2")) typ = "Cloud"
+    # Cloud datacenter — set type to Cloud or TIMEOUT_Cloud based on location
+    if (loc == "AZCE" || loc == "AZE2") {
+        if (typ ~ /^TIMEOUT/) typ = "TIMEOUT_Cloud"
+        else typ = "Cloud"
+    }
 
     # Derive AppCode from hostname if field is n/a (TIMEOUT stubs + some legacy)
     appcode = na($26)
