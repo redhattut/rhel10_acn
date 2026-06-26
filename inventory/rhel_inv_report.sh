@@ -69,6 +69,7 @@ rm -f "$APPDATAPLAT" "$APPDATAREL" "$LOCDATAPLAT" "$LOCDATAREL"
 awk -v lp="$LOCDATAPLAT" -v lr="$LOCDATAREL" \
     -v ap="$APPDATAPLAT" -v ar="$APPDATAREL" \
     '!/^#/ {
+        if ($3 == "?") next
         print $21 " " $2  >> lp
         print $21 " " $3  >> lr
         print $26 " " $2  >> ap
@@ -98,6 +99,7 @@ eval "$(awk \
            ernd=0;euat=0;eqa=0;eprod=0
            lgf0=0;lgf1=0;lgf2=0;lazce=0;laze2=0}
     !/^#/{
+        if ($3 == "?") next
         total++
         loc=$21
         sub(/^Greenfield-/,"",loc)
@@ -132,7 +134,7 @@ eval "$(awk \
         printf "LOC_AZE2=%d\n", laze2
     }' "$INVENTORYDATA")"
 
-eval "$(awk '{
+eval "$(awk '!/^#/ && $3 != "?" {
 '"$OS_AWK_COUNTS"'
 }
 END{
