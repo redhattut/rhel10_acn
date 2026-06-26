@@ -317,91 +317,6 @@ else
 fi
 
 # =============================================================================
-log SECTION "Phase 4.6 — Midrange Mod CSV and Compare JSON promotion"
-# =============================================================================
-# Promote MRGCSVTEMP → MRGCSVDATA, write MRG CSV header, archive CSV.
-# Split MRGJSONTMP (combined JSON array) into per-host hostname.json files
-# in COMPARE_DATA_DIR for the Server Compare Tool.
-# =============================================================================
-
-mkdir -p "$MRG_ARCHIVE_DIR" "$COMPARE_DATA_DIR"
-
-# SELinux context so httpd can serve the JSON files
-chcon -R -t httpd_sys_content_t "$COMPARE_DATA_DIR" 2>/dev/null || \
-    restorecon -R "$COMPARE_DATA_DIR" 2>/dev/null || true
-
-# --- Promote MRG CSV ---------------------------------------------------------
-if [[ -s "$MRGCSVTEMP" ]]; then
-    # The temp file is already named Midrange_Mod_Report_MM-DD-YYYY.csv.tmp
-    # Strip .tmp to get the archive filename directly
-    MRG_ARCHIVE_FILE="${MRG_ARCHIVE_DIR}/$(basename "${MRGCSVTEMP%.tmp}")"
-
-    {
-        echo "Host,Location,Mnemonic,Environment,OS Version,Authentication Method,OUD Query,AD Query,pnc_join_ad,Nsswitch,KRB5 Keytab,xqvsmlinauthscan Sudo,xqmrglineng Sudo,xqmrglinaap Sudo"
-        grep -v "^[[:space:]]*$" "$MRGCSVTEMP"
-    } > "$MRGCSVDATA"
-    MRG_ROW_COUNT=$(grep -vc "^Host," "$MRGCSVDATA" 2>/dev/null || echo 0)
-    log INFO "MRG CSV promoted: $MRGCSVDATA ($MRG_ROW_COUNT rows)"
-
-    cp "$MRGCSVDATA" "$MRG_ARCHIVE_FILE"
-    log INFO "MRG CSV archived: $MRG_ARCHIVE_FILE"
-
-    DELETED_MRG=$(find "$MRG_ARCHIVE_DIR" -name "Midrange_Mod_Report_*.csv" \
-        -type f -mtime +"${DAYS_TO_KEEP_MRG:-31}" -delete -print | wc -l)
-    [[ $DELETED_MRG -gt 0 ]] && \
-        log INFO "MRG archive pruned: $DELETED_MRG file(s) older than ${DAYS_TO_KEEP_MRG:-31} days removed"
-else
-    log WARN "MRGCSVTEMP empty — Midrange Mod CSV not generated (check if RHEL_data_gather.sh ran)"
-fi
-rm -f "$MRGCSVTEMP"
-
-# --- Split combined JSON array into per-host files ---------------------------
-if [[ -s "$MRGJSONTMP" ]]; then
-    log INFO "Compare JSON: splitting $MRGJSONTMP -> $COMPARE_DATA_DIR"
-    _py_out=$(python3 2>&1 << PYEOF
-import json, os, sys
-
-json_file = "${MRGJSONTMP}"
-out_dir   = "${COMPARE_DATA_DIR}"
-os.makedirs(out_dir, exist_ok=True)
-
-try:
-    with open(json_file) as f:
-        entries = json.load(f)
-except Exception as e:
-    print(f"ERROR parsing {json_file}: {e}", file=sys.stderr)
-    print("0 0")
-    sys.exit(0)
-
-written = 0
-failed  = 0
-for entry in entries:
-    host = entry.get("host", "")
-    if not host:
-        failed += 1
-        continue
-    dest = os.path.join(out_dir, f"{host}.json")
-    try:
-        with open(dest, "w") as f:
-            json.dump(entry, f, indent=2)
-        os.chmod(dest, 0o644)
-        written += 1
-    except Exception as e:
-        print(f"ERROR writing {dest}: {e}", file=sys.stderr)
-        failed += 1
-
-print(f"{written} {failed}")
-PYEOF
-)
-    MRG_JSON_COUNT=$(echo "$_py_out" | tail -1 | awk '{print $1}')
-    MRG_JSON_FAIL=$(echo "$_py_out" | tail -1 | awk '{print $2}')
-    log INFO "Compare JSON split: $MRG_JSON_COUNT host files written to $COMPARE_DATA_DIR ($MRG_JSON_FAIL failed)"
-else
-    log WARN "MRGJSONTMP empty — Compare JSON files not generated"
-fi
-rm -f "$MRGJSONTMP"
-
-# =============================================================================
 log SECTION "Phase 4.5 — Fed Enclave data merge"
 # =============================================================================
 # When running via AAP pipeline, AAP_FED_DIR points to the directory on
@@ -509,7 +424,7 @@ _fed_merge \
     "Fed MRG CSV" \
     "${_FED_SRC_DIR:+${_FED_SRC_DIR}/fed_enclave_midrange_mod.dat}" \
     "${DATA_DIR}/fed_enclave_midrange_mod.dat" \
-    "$MRGCSVDATA" \
+    "$MRGCSVTEMP" \
     "csv"
 
 # Fed Compare JSON — merge fed combined array into main combined array.
@@ -554,6 +469,91 @@ fi
 if [[ -z "${AAP_FED_DIR:-}" ]]; then
     log INFO "AAP_FED_DIR not set — normal cron/test run, Fed Enclave merge skipped"
 fi
+
+# =============================================================================
+log SECTION "Phase 4.6 — Midrange Mod CSV and Compare JSON promotion"
+# =============================================================================
+# Promote MRGCSVTEMP → MRGCSVDATA, write MRG CSV header, archive CSV.
+# Split MRGJSONTMP (combined JSON array) into per-host hostname.json files
+# in COMPARE_DATA_DIR for the Server Compare Tool.
+# =============================================================================
+
+mkdir -p "$MRG_ARCHIVE_DIR" "$COMPARE_DATA_DIR"
+
+# SELinux context so httpd can serve the JSON files
+chcon -R -t httpd_sys_content_t "$COMPARE_DATA_DIR" 2>/dev/null || \
+    restorecon -R "$COMPARE_DATA_DIR" 2>/dev/null || true
+
+# --- Promote MRG CSV ---------------------------------------------------------
+if [[ -s "$MRGCSVTEMP" ]]; then
+    # The temp file is already named Midrange_Mod_Report_MM-DD-YYYY.csv.tmp
+    # Strip .tmp to get the archive filename directly
+    MRG_ARCHIVE_FILE="${MRG_ARCHIVE_DIR}/$(basename "${MRGCSVTEMP%.tmp}")"
+
+    {
+        echo "Host,Location,Mnemonic,Environment,OS Version,Authentication Method,OUD Query,AD Query,pnc_join_ad,Nsswitch,KRB5 Keytab,xqvsmlinauthscan Sudo,xqmrglineng Sudo,xqmrglinaap Sudo"
+        grep -v "^[[:space:]]*$" "$MRGCSVTEMP"
+    } > "$MRGCSVDATA"
+    MRG_ROW_COUNT=$(grep -vc "^Host," "$MRGCSVDATA" 2>/dev/null || echo 0)
+    log INFO "MRG CSV promoted: $MRGCSVDATA ($MRG_ROW_COUNT rows)"
+
+    cp "$MRGCSVDATA" "$MRG_ARCHIVE_FILE"
+    log INFO "MRG CSV archived: $MRG_ARCHIVE_FILE"
+
+    DELETED_MRG=$(find "$MRG_ARCHIVE_DIR" -name "Midrange_Mod_Report_*.csv" \
+        -type f -mtime +"${DAYS_TO_KEEP_MRG:-31}" -delete -print | wc -l)
+    [[ $DELETED_MRG -gt 0 ]] && \
+        log INFO "MRG archive pruned: $DELETED_MRG file(s) older than ${DAYS_TO_KEEP_MRG:-31} days removed"
+else
+    log WARN "MRGCSVTEMP empty — Midrange Mod CSV not generated (check if RHEL_data_gather.sh ran)"
+fi
+rm -f "$MRGCSVTEMP"
+
+# --- Split combined JSON array into per-host files ---------------------------
+if [[ -s "$MRGJSONTMP" ]]; then
+    log INFO "Compare JSON: splitting $MRGJSONTMP -> $COMPARE_DATA_DIR"
+    _py_out=$(python3 2>&1 << PYEOF
+import json, os, sys
+
+json_file = "${MRGJSONTMP}"
+out_dir   = "${COMPARE_DATA_DIR}"
+os.makedirs(out_dir, exist_ok=True)
+
+try:
+    with open(json_file) as f:
+        entries = json.load(f)
+except Exception as e:
+    print(f"ERROR parsing {json_file}: {e}", file=sys.stderr)
+    print("0 0")
+    sys.exit(0)
+
+written = 0
+failed  = 0
+for entry in entries:
+    host = entry.get("host", "")
+    if not host:
+        failed += 1
+        continue
+    dest = os.path.join(out_dir, f"{host}.json")
+    try:
+        with open(dest, "w") as f:
+            json.dump(entry, f, indent=2)
+        os.chmod(dest, 0o644)
+        written += 1
+    except Exception as e:
+        print(f"ERROR writing {dest}: {e}", file=sys.stderr)
+        failed += 1
+
+print(f"{written} {failed}")
+PYEOF
+)
+    MRG_JSON_COUNT=$(echo "$_py_out" | tail -1 | awk '{print $1}')
+    MRG_JSON_FAIL=$(echo "$_py_out" | tail -1 | awk '{print $2}')
+    log INFO "Compare JSON split: $MRG_JSON_COUNT host files written to $COMPARE_DATA_DIR ($MRG_JSON_FAIL failed)"
+else
+    log WARN "MRGJSONTMP empty — Compare JSON files not generated"
+fi
+rm -f "$MRGJSONTMP"
 
 # =============================================================================
 log SECTION "Phase 5 — Collect UIDs and GIDs"
