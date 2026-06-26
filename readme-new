@@ -1,0 +1,115 @@
+### Introduction
+
+I am Anup Neupane and I work in the Linux OS Engineering focusing on building and standardizing RHEL platforms at scale. I design automated, secure, and consistent system builds using Ansible, manage patching lifecycle with Red Hat Satellite, and develop automation and reporting solutions to reduce manual work. Some of the projects I've been working is automating RHEL in-place upgrades, automating remediations for vulnerabilities, maintaining our server build code, rewriting custom packages, providing automation for other teams to use with documentation.
+
+### My daily work like:
+
+On a daily basis, my work is focused on maintaining and improving the Linux platform at scale rather than handling individual server issues. I spend a significant amount of time developing and maintaining automation using Ansible and Bash. This includes building reusable playbooks, enhancing scripts for compliance and system configuration, and creating workflows that reduce manual intervention. A big focus is making everything repeatable and reliable at scale.
+
+## Brief intro you can use
+
+“Thanks for meeting with us today. I’m going to ask a few Linux engineering questions. Some are scenario-based, so I’m not looking for one perfect command. I’m more interested in how you think through platform standards, automation, troubleshooting, risk, and repeatable engineering solutions.”
+
+### Technical Interview Questions
+
+---
+
+**Q1: Red Hat Satellite Architecture & Strategy**
+
+_"You've listed Red Hat Satellite on your resume extensively. Walk me through how you've used it at scale — and if you were asked to design a Satellite architecture for 22,000 servers across multiple datacenters, what would that look like?"_
+
+**Expected Answer:**  
+A strong candidate should go beyond "we used it for patching." Look for:
+
+- Capsule server placement per datacenter/availability zone to reduce WAN traffic
+- Content view and lifecycle environment strategy (dev → stage → prod promotion)
+- Activation keys and host groups for standardized registration
+- Consideration of bandwidth, sync schedules, and capsule redundancy/HA
+- Ideally mention HAProxy or VIPs in front of capsules for load distribution
+
+A weak answer focuses only on "we synced repos and pushed patches monthly" with no architectural thinking.
+
+---
+
+**Q2: Ansible at Enterprise Scale**
+
+_"Your resume mentions writing Ansible playbooks for patching, user management, and filesystem tasks. In a large enterprise environment, how do you structure Ansible content to be maintainable and scalable — and what's the difference between a playbook someone wrote to solve a problem once versus one that belongs in a production automation platform?"_
+
+**Expected Answer:**  
+Look for:
+
+- Role-based structure (roles/, defaults/, vars/, handlers/) vs. flat playbooks
+- Use of Ansible Automation Platform / AWX for execution, RBAC, and audit trails
+- Idempotency as a first principle — the playbook should be safe to run repeatedly
+- Variable management (group_vars, host_vars, encrypted vault)
+- Testing strategy (check mode, staging environment, lint with ansible-lint)
+- Awareness that ad-hoc scripts don't belong in AAP without hardening
+
+Bonus: mention of dynamic inventory, tags for selective execution, or callback plugins for logging.
+
+---
+
+**Q3: RHEL Lifecycle & Leapp Upgrades**
+
+_"You've done RHEL 7 to RHEL 8 migrations using Leapp. If you were designing a platform standard for keeping a large fleet current — including the upcoming RHEL 8 to 9 wave — what would your approach look like, and what are the most common failure points?"_
+
+**Expected Answer:**
+
+- Pre-upgrade assessment: `leapp preupgrade` report, inhibitors vs. warnings
+- Common inhibitors: third-party kernel modules, deprecated packages, custom configs, SELinux denials
+- Application owner coordination — not just an OS operation
+- Rollback strategy (snapshots on VMs, bare metal considerations)
+- Post-upgrade validation checklist: services, mounts, authentication (SSSD/AD), SELinux modes
+- At scale: Ansible to automate pre-checks and post-validation, Satellite content views gating the upgrade packages
+
+A weak answer: "We ran leapp upgrade and it mostly worked."
+
+---
+
+**Q4: Active Directory / SSSD Integration**
+
+_"You've listed AD integration and SSSD in your background. What are the most common failure modes you've seen when Linux systems authenticate against Active Directory, and how do you diagnose and resolve them?"_
+
+**Expected Answer:**  
+Strong candidates will hit several of:
+
+- `sssd` cache staleness — clearing with `sss_cache -E` or service restart
+- GPO enforcement (`ad_gpo_access_control`) blocking logins when AD site detection fails
+- Kerberos ticket issues — clock skew, missing keytab entries
+- Nested group resolution failures — `ldap_group_nesting_level` tuning
+- PAM stack misconfiguration blocking sudo or console access
+- Tools used: `realm list`, `id <user>`, `sssctl user-checks`, `journalctl -u sssd`, `adcli`
+
+This is an area where you have deep operational knowledge — feel free to probe further if his answer is shallow.
+
+---
+
+**Q5: Platform Standards & Documentation**
+
+_"This role is heavily documentation-forward — build standards, hardening guides, SOPs. Give me an example of a technical standard or guide you've authored, and walk me through how you structured it and how it was actually used by other teams."_
+
+**Expected Answer:**  
+This is a soft/behavioral question but technically grounded. Look for:
+
+- Evidence he's written something others consumed — not just personal notes
+- Logical structure: purpose, scope, prerequisites, step-by-step procedure, validation, rollback
+- Awareness of audience — provisioning teams need different depth than architects
+- Version control for docs (Confluence, Git)
+- Whether the doc reduced tickets/toil or enabled self-service
+
+A weak answer: "I documented things in ServiceNow tickets." That's not platform documentation.
+
+---
+
+**Q6: Security Hardening & CIS Compliance**
+
+_"Security hardening is listed in your experience. How have you approached CIS benchmark compliance at scale — specifically, how do you handle remediations that could break running workloads, and how do you balance compliance with operational stability?"_
+
+**Expected Answer:**
+
+- CIS Level 1 vs. Level 2 awareness and why Level 2 isn't always appropriate in production
+- Remediation via Ansible with dry-run / check mode before live execution
+- Exception management process — not every finding should be force-remediated
+- Regression testing — applying hardening to a clone before fleet rollout
+- Reporting: generating evidence for auditors (before/after state)
+- Coordination with app teams before touching things like `umask`, `pam_faillock`, file permissions
