@@ -384,11 +384,30 @@ fi
 # =============================================================================
 # One PKG line per installed RPM:
 #   PKG|hostname,pkgname,version,release,installdate
+#
+# If the RPM database is corrupt, rpm -qa writes errors to stderr and
+# produces no usable output. We capture stderr, detect the corruption
+# strings, and emit a PKG|RPM_DB_ERROR sentinel so the jumpbox filter
+# can track the host in rpm_db_errors.dat and skip writing to PACKAGETEMP.
+# The INV| line above is still emitted — all other data is collected normally.
 
-rpm -qa --queryformat '%{NAME} %{VERSION} %{RELEASE} %{installtime}\n' \
-    2>/dev/null \
-    | sort -k 1,1 -u \
-    | while read -r a b c d; do
-        installdate=$(date +%m/%d/%Y_%T -d "@${d}" 2>/dev/null)
-        echo "PKG|${HOST},${a},${b},${c},${installdate}"
-    done
+_rpm_stderr_tmp=$(mktemp /tmp/rpm_err.XXXXXX 2>/dev/null || echo "/tmp/rpm_err.$$")
+_rpm_out=$(rpm -qa --queryformat '%{NAME} %{VERSION} %{RELEASE} %{installtime}\n' \
+    2>"$_rpm_stderr_tmp")
+_rpm_rc=$?
+
+_rpm_err=$(cat "$_rpm_stderr_tmp" 2>/dev/null)
+rm -f "$_rpm_stderr_tmp"
+
+if echo "$_rpm_err" | grep -qiE 'rpmdb|BDB|DB_RUNRECOVERY|cannot open Packages'; then
+    # RPM DB corrupt — signal filter to skip packages but keep host in inventory
+    echo "PKG|RPM_DB_ERROR:${HOST}"
+else
+    echo "$_rpm_out" \
+        | sort -k 1,1 -u \
+        | while read -r a b c d; do
+            [[ -z "$a" ]] && continue
+            installdate=$(date +%m/%d/%Y_%T -d "@${d}" 2>/dev/null)
+            echo "PKG|${HOST},${a},${b},${c},${installdate}"
+          done
+fi
