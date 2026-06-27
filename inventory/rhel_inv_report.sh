@@ -70,10 +70,20 @@ awk -v lp="$LOCDATAPLAT" -v lr="$LOCDATAREL" \
     -v ap="$APPDATAPLAT" -v ar="$APPDATAREL" \
     '!/^#/ {
         if ($3 == "?") next
-        print $21 " " $2  >> lp
-        print $21 " " $3  >> lr
-        print $26 " " $2  >> ap
-        print $26 " " $3  >> ar
+
+        # Normalise location: strip "Greenfield-" prefix so GF0/GF1/GF2
+        # appear as a single canonical uppercase code in all lookup files.
+        loc = $21
+        sub(/^[Gg]reenfield-/, "", loc)
+
+        print loc " " $2  >> lp
+        print loc " " $3  >> lr
+
+        # Only write app code rows for real codes — n/a means SSHFAIL/TIMEOUT
+        if ($26 != "n/a" && $26 != "") {
+            print $26 " " $2  >> ap
+            print $26 " " $3  >> ar
+        }
     }' "$INVENTORYDATA"
 
 log INFO "Intermediate files built"
@@ -618,10 +628,14 @@ RPT_by_Location() {
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1.4rem">
 LOCEOF
 
-    awk '!/^\?/{print $1}' "$LOCDATAPLAT" | sort -u \
-    | while read -r LOC; do
+    # Iterate the canonical location list from conf (LOCATIONS array),
+    # then append n/a so SSHFAIL/TIMEOUT hosts are represented.
+    # This prevents raw IPs or malformed values in $21 from appearing as cards.
+    local _loc_list=("${LOCATIONS[@]}" "n/a")
+
+    for LOC in "${_loc_list[@]}"; do
         [[ -z "$LOC" ]] && continue
-        STOTAL=$(grep -c "^$LOC " "$LOCDATAPLAT" 2>/dev/null || echo 0)
+        STOTAL=$(grep -c "^$LOC " "$LOCDATAPLAT" 2>/dev/null || true)
         STOTAL=$(( STOTAL + 0 ))
         [[ $STOTAL -eq 0 ]] && continue
 
@@ -661,7 +675,7 @@ LOCBEOF
 # =============================================================================
 RPT_by_Mnemonic() {
     local GRAND
-    GRAND=$(grep -vc "^#" "$INVENTORYDATA" 2>/dev/null || echo 0)
+    GRAND=$(awk '!/^#/ && $3 != "?" && $26 != "n/a" && $26 != ""' "$INVENTORYDATA" | wc -l)
 
     # Build series metadata from OS_SERIES conf array
     # Each entry: "Label:ver1,ver2,..."  e.g. "RHEL 8.x Series:8.8,8.10"
@@ -710,7 +724,7 @@ RPT_by_Mnemonic() {
             printf "\n"
         done
     } > "$APP_CSV"
-    log INFO "Application CSV written: $APP_CSV"
+    log INFO "Application CSV written: $APP_CSV" >&2
 
     _html_head "RHEL Operations — Inventory by Application Code"
     _sidebar ""
