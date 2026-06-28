@@ -1,0 +1,128 @@
+---
+# Manages home directory renames/moves during lifecycle transitions.
+# Never chowns anything - sssd corrects ownership automatically once
+# the domain is joined/left and the kernel resolves UIDs again.
+#
+# Only touches home dirs owned by UIDs in the OUD/AD managed user range
+# (2000000 < uid < 100000000). Local accounts are skipped automatically.
+# This is the same UID range check the pnc_join_ad RPM %post used.
+#
+# Callers set dual_auth_homedir_action before importing this file:
+#   rename_to_oud   - configure on OUD-only host migrating to OUD+AD
+#   move_ad_into_oud - leave_ad when both *OUD and AD dirs exist
+#   move_oud_into_ad - convert_ad_only
+
+# ── configure: OUD-only host migrating to OUD+AD ─────────────────────────────
+# Rename /home/sa04192 → /home/sa04192OUD so the AD home dir path is free.
+# Guard: skip if /home/sa04192OUD already exists.
+- name: Rename OUD home dirs to *OUD (configure on OUD-only host)
+  when: dual_auth_homedir_action == 'rename_to_oud'
+  block:
+    - name: Find candidate home dirs (no OUD suffix)
+      ansible.builtin.shell: |
+        for dir in /home/*/; do
+          dir="${dir%/}"
+          name=$(basename "$dir")
+          # skip dirs that already end in OUD or OUD.date
+          echo "$name" | grep -qE 'OUD($|\.)' && continue
+          uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
+          [ -z "$uid" ] && continue
+          if [ "$uid" -gt 2000000 ] && [ "$uid" -lt 100000000 ]; then
+            echo "$dir"
+          fi
+        done
+      register: dual_auth_homedir_candidates
+      changed_when: false
+
+    - name: Rename each candidate to *OUD if *OUD does not already exist
+      ansible.builtin.shell: |
+        src="{{ item }}"
+        dst="{{ item }}OUD"
+        if [ -d "$src" ] && [ ! -d "$dst" ]; then
+          mv "$src" "$dst"
+          echo "moved"
+        else
+          echo "skipped"
+        fi
+      loop: "{{ dual_auth_homedir_candidates.stdout_lines }}"
+      register: dual_auth_rename_result
+      changed_when: "'moved' in dual_auth_rename_result.stdout"
+
+# ── leave_ad: both *OUD and AD dir exist ─────────────────────────────────────
+# Move AD home dir inside the OUD dir as *OUD/sa04192AD.
+# If only the AD dir exists (no *OUD counterpart), leave it — it goes numeric
+# and sssd corrects ownership when AD is rejoined via configure or rejoin.
+- name: Move AD home dirs inside existing OUD dirs (leave_ad)
+  when: dual_auth_homedir_action == 'move_ad_into_oud'
+  block:
+    - name: Find AD home dirs that have a matching *OUD counterpart
+      ansible.builtin.shell: |
+        for dir in /home/*/; do
+          dir="${dir%/}"
+          name=$(basename "$dir")
+          echo "$name" | grep -qE 'OUD($|\.)' && continue
+          uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
+          [ -z "$uid" ] && continue
+          if [ "$uid" -gt 2000000 ] && [ "$uid" -lt 100000000 ]; then
+            if [ -d "${dir}OUD" ]; then
+              echo "$dir"
+            fi
+          fi
+        done
+      register: dual_auth_ad_to_move
+      changed_when: false
+
+    - name: Move AD dir inside OUD dir as *OUD/basenameAD
+      ansible.builtin.shell: |
+        src="{{ item }}"
+        name=$(basename "$src")
+        dst="${src}OUD/${name}AD"
+        if [ -d "$src" ]; then
+          mv "$src" "$dst"
+          echo "moved"
+        else
+          echo "skipped"
+        fi
+      loop: "{{ dual_auth_ad_to_move.stdout_lines }}"
+      register: dual_auth_move_ad_result
+      changed_when: "'moved' in dual_auth_move_ad_result.stdout"
+
+# ── convert_ad_only: move *OUD dir inside AD dir ─────────────────────────────
+# Move /home/sa04192OUD inside /home/sa04192 as sa04192/sa04192OUD for backup.
+# Ownership will be corrected by sssd (AD user) naturally.
+- name: Move OUD dirs inside AD dirs (convert_ad_only)
+  when: dual_auth_homedir_action == 'move_oud_into_ad'
+  block:
+    - name: Find *OUD dirs that have a matching AD counterpart
+      ansible.builtin.shell: |
+        for dir in /home/*OUD/; do
+          dir="${dir%/}"
+          [ ! -d "$dir" ] && continue
+          name=$(basename "$dir")
+          addir="${dir%OUD}"
+          uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
+          [ -z "$uid" ] && continue
+          if [ "$uid" -gt 2000000 ] && [ "$uid" -lt 100000000 ]; then
+            if [ -d "$addir" ]; then
+              echo "$dir"
+            fi
+          fi
+        done
+      register: dual_auth_oud_to_move
+      changed_when: false
+
+    - name: Move OUD dir inside AD dir as addir/basenameOUD
+      ansible.builtin.shell: |
+        src="{{ item }}"
+        name=$(basename "$src")
+        addir="${src%OUD}"
+        dst="${addir}/${name}"
+        if [ -d "$src" ]; then
+          mv "$src" "$dst"
+          echo "moved"
+        else
+          echo "skipped"
+        fi
+      loop: "{{ dual_auth_oud_to_move.stdout_lines }}"
+      register: dual_auth_move_oud_result
+      changed_when: "'moved' in dual_auth_move_oud_result.stdout"

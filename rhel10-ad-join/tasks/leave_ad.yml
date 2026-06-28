@@ -85,21 +85,14 @@
   ansible.builtin.command: sss_cache -E
   changed_when: true
 
-- name: Move OUD-suffixed home directories back to their original names
-  ansible.builtin.shell:
-    cmd: |
-      set -e
-      for d in /home/*OUD; do
-        [ -d "$d" ] || continue
-        base="${d%OUD}"
-        if [ ! -e "$base" ]; then
-          mv "$d" "$base"
-          echo "moved $d"
-        fi
-      done
-  register: dual_auth_home_restore
-  changed_when: "'moved' in dual_auth_home_restore.stdout"
-  failed_when: false
+- name: Move AD home dirs inside existing OUD dirs where both exist (leave_ad)
+  # When both /home/sa04192 and /home/sa04192OUD exist, moves the AD dir
+  # contents inside the OUD dir as /home/sa04192OUD/sa04192AD.
+  # When only the AD dir exists (no OUD counterpart), leaves it as-is -
+  # it goes to numeric IDs and sssd corrects ownership on next configure/rejoin.
+  ansible.builtin.include_tasks: manage_homedirs.yml
+  vars:
+    dual_auth_homedir_action: move_ad_into_oud
 
 - name: Remove AUTHMETHOD line from PNC provision config
   ansible.builtin.lineinfile:

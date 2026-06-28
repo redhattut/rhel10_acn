@@ -101,3 +101,10 @@
   ansible.builtin.command: "sss_cache -E"
   changed_when: true
   failed_when: false
+
+- name: Move OUD home dirs inside AD dirs for backup (convert_ad_only)
+  # Moves /home/sa04192OUD inside /home/sa04192 as sa04192/sa04192OUD.
+  # sssd corrects ownership to the AD user naturally - no chown needed.
+  ansible.builtin.include_tasks: manage_homedirs.yml
+  vars:
+    dual_auth_homedir_action: move_oud_into_ad

@@ -60,6 +60,15 @@
     enabled: false
   when: not dual_auth_healthy or dual_auth_force_configure
 
+- name: Rename home dirs from *username* to *usernameOUD* (OUD-only host migrating to OUD+AD)
+  # Only runs when host is currently OUD-only (id_provider=ldap, no AD joined).
+  # Frees up /home/sa04192 so it becomes the AD home dir after the join.
+  # sssd corrects ownership automatically - this task only renames, never chowns.
+  ansible.builtin.include_tasks: manage_homedirs.yml
+  vars:
+    dual_auth_homedir_action: rename_to_oud
+  when: dual_auth_is_oud_only | default(false) | bool
+
 - name: Remove legacy AD-only krb5.conf before deploying dual auth version
   ansible.builtin.file:
     path: /etc/krb5.conf
