@@ -104,10 +104,27 @@ for ver in "${OS_VERSIONS[@]}"; do
 "
 done
 
+# Build dynamic awk snippets from LOCATIONS array
+# Each location gets a LOC_<code> variable, safe for shell variable names
+# (hyphens replaced with underscores).
+LOC_AWK_INIT=""
+LOC_AWK_COUNTS=""
+LOC_AWK_PRINTF=""
+# Also build the is_cloud test string for the awk cloud classifier
+LOC_CLOUD_TEST=""
+for loc_code in "${LOCATIONS[@]}"; do
+    varname="LOC_${loc_code//-/_}"
+    LOC_AWK_INIT+="${varname}=0;"
+    LOC_AWK_COUNTS+="        if (loc==\"${loc_code}\") ${varname}++
+"
+    LOC_AWK_PRINTF+="    printf \"${varname}=%d\\n\", ${varname}+0
+"
+done
+
 eval "$(awk \
     'BEGIN{total=0;virt=0;phys=0;cloud=0;fail=0
            ernd=0;euat=0;eqa=0;eprod=0
-           lgf0=0;lgf1=0;lgf2=0;lazce=0;laze2=0}
+           '"$LOC_AWK_INIT"'}
     !/^#/{
         if ($3 == "?") next
         total++
@@ -121,11 +138,7 @@ eval "$(awk \
         if ($27=="UAT")  euat++
         if ($27=="QA")   eqa++
         if ($27=="PROD") eprod++
-        if (loc=="GF0")  lgf0++
-        if (loc=="GF1")  lgf1++
-        if (loc=="GF2")  lgf2++
-        if (loc=="AZCE") lazce++
-        if (loc=="AZE2") laze2++
+'"$LOC_AWK_COUNTS"'
     }
     END{
         printf "TOTAL_HOSTS=%d\n",    total
@@ -137,11 +150,7 @@ eval "$(awk \
         printf "ENV_UAT=%d\n",  euat
         printf "ENV_QA=%d\n",   eqa
         printf "ENV_PROD=%d\n", eprod
-        printf "LOC_GF0=%d\n",  lgf0
-        printf "LOC_GF1=%d\n",  lgf1
-        printf "LOC_GF2=%d\n",  lgf2
-        printf "LOC_AZCE=%d\n", lazce
-        printf "LOC_AZE2=%d\n", laze2
+'"$LOC_AWK_PRINTF"'
     }' "$INVENTORYDATA")"
 
 eval "$(awk '!/^#/ && $3 != "?" {
@@ -702,9 +711,9 @@ RPT_by_Mnemonic() {
         done
         printf "\n"
 
-        awk '!/^#/{print $26}' "$INVENTORYDATA" | sort -u \
+        awk '{print $1}' "$APPDATAPLAT" | sort -u \
         | while read -r APP; do
-            [[ -z "$APP" || "$APP" == "n/a" ]] && continue
+            [[ -z "$APP" ]] && continue
             local STOTAL; STOTAL=$(grep -c "^$APP " "$APPDATAPLAT" 2>/dev/null || echo 0)
             STOTAL=$(( STOTAL + 0 ))
             [[ $STOTAL -eq 0 ]] && continue
@@ -771,7 +780,7 @@ APPEOF2
     echo "          </tr></thead>"
     echo "          <tbody id=\"appBody\">"
 
-    awk '!/^#/{print $26}' "$INVENTORYDATA" | sort -u \
+    awk '{print $1}' "$APPDATAPLAT" | sort -u \
     | while read -r APP; do
         [[ -z "$APP" || "$APP" == "n/a" ]] && continue
         local STOTAL; STOTAL=$(grep -c "^$APP " "$APPDATAPLAT" 2>/dev/null || echo 0)
