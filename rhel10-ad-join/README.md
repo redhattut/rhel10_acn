@@ -32,6 +32,7 @@ mrg-join-ad-keytab/
 | krb5.conf | Shipped inside RPM | `files/krb5.conf.j2` |
 | rbin scripts | `/usr/local/pnc/rbin/` from RPM | `files/rbin/` — same scripts |
 | login-access.conf | Populated by `pnc-run-discovery` in RPM `%post` | Same — `pnc-run-discovery` called in `tasks/configure_auth.yml` |
+| Home dir management | RPM `%post`/`%preun` shell loop, UID range 2000000-100000000 | Same UID range, `tasks/manage_homedirs.yml` |
 | Decommission | `rpm -e` | `dual_auth_lifecycle_action=leave_ad` |
 
 ---
@@ -48,6 +49,69 @@ Set via `-e` on CLI or AAP Survey (single-select). Default: `configure`.
 | `convert_ad_only` | Convert to AD-only | Warn + skip (already AD-only) |
 | `recreate_keytab` | Rebuild machine keytab via `adcli join` | Same |
 | `recreate_sssd` | Regenerate `sssd.conf` with fresh authtok | Warn + skip (no OUD config) |
+
+---
+
+## Home directory handling
+
+Home dirs are managed by `tasks/manage_homedirs.yml`, which mirrors the
+logic from the `pnc_join_ad` RPM `%post`/`%preun`. Only dirs owned by UIDs
+in the OUD/AD managed range (`2000000 < uid < 100000000`) are touched —
+local accounts are skipped automatically. The role never chowns anything;
+sssd corrects ownership automatically once the domain is joined or left.
+
+**`configure` — OUD-only host migrating to OUD+AD**
+
+Existing OUD home dir renamed to free up the path for the AD home dir.
+New AD home dir is created by `pam_mkhomedir` on first AD login.
+
+```
+Before:  drwx------ sa04192  users                  /home/sa04192
+After:   drwx------ sa04192  users                  /home/sa04192OUD
+         drwx------ sa04192@uat.pncint.net gslunxpg_sa04192  /home/sa04192  (created on login)
+```
+
+**`configure` — new build or idempotent rerun**
+
+No home dir action. Both dirs created by `pam_mkhomedir` on first login.
+
+**`leave_ad` — both dirs exist**
+
+AD home dir moved inside the OUD dir for safekeeping.
+
+```
+Before:  drwx------ sa04192  users                  /home/sa04192OUD
+         drwx------ sa04192@uat.pncint.net gslunxpg_sa04192  /home/sa04192
+After:   drwx------ sa04192  users                  /home/sa04192OUD
+         drwx------ sa04192  users                  /home/sa04192OUD/sa04192AD
+         drwx------ 700001166  700001166             /home/sa04192  (numeric - AD gone)
+```
+
+**`leave_ad` — only AD dir exists (no OUD counterpart)**
+
+AD dir stays on disk with numeric IDs. sssd corrects ownership on next
+`configure` or `rejoin`. No rename, no move.
+
+```
+Before:  drwx------ sa04192@uat.pncint.net gslunxpg_sa04192  /home/sa04192
+After:   drwx------ 700001166  700001166             /home/sa04192
+```
+
+**`convert_ad_only`**
+
+OUD home dir moved inside the AD dir as a backup. sssd corrects ownership
+of the moved dir to the AD user naturally.
+
+```
+Before:  drwx------ sa04192  users                  /home/sa04192OUD
+         drwx------ sa04192@uat.pncint.net gslunxpg_sa04192  /home/sa04192
+After:   drwx------ sa04192@uat.pncint.net gslunxpg_sa04192  /home/sa04192
+         drwx------ sa04192@uat.pncint.net gslunxpg_sa04192  /home/sa04192/sa04192OUD
+```
+
+**`rejoin`, `recreate_keytab`, `recreate_sssd`**
+
+No home dir changes.
 
 ---
 
@@ -77,7 +141,7 @@ Set via `-e` on CLI or AAP Survey (single-select). Default: `configure`.
 | `ad_bind_password_prod` | AD bind password (PROD) | Yes |
 
 Attach both credentials to the AAP Job Template. The role auto-selects the
-correct env-specific password based on the detected environment.
+correct env-specific values based on the detected environment.
 
 ---
 
@@ -91,8 +155,7 @@ correct env-specific password based on the detected environment.
 Lifecycle action choices: `configure`, `rejoin`, `leave_ad`, `convert_ad_only`, `recreate_keytab`, `recreate_sssd`
 
 OUD credentials are only needed for new builds (`configure` on a host with no
-existing `sssd.conf`) and `recreate_sssd`. Leave blank if only running `rejoin`,
-`leave_ad`, `convert_ad_only`, or `recreate_keytab`.
+existing `sssd.conf`) and `recreate_sssd`. Leave blank for all other actions.
 
 ---
 
@@ -147,10 +210,11 @@ ansible-playbook -i hosts.txt playbooks/main.yml -e dual_auth_target_env=qa
 
 ## Host type detection
 
-The role detects the host type automatically during preflight:
+The role detects the host type automatically during preflight. No manual
+flag needed.
 
-- **OUD+AD** — sssd has `id_provider = ldap` and `PROVISION_CONFIG` shows `AUTHMETHOD=OUD+AD`
-- **Legacy AD-only** — sssd has `id_provider = ad` but `PROVISION_CONFIG` does not show `AUTHMETHOD=OUD+AD` (or the file is absent)
-
-Legacy AD-only detection is used to adjust which steps run per lifecycle action.
-No manual flag is needed.
+| Detected state | Signal | Effect |
+|---|---|---|
+| OUD-only | `id_provider = ldap` only in sssd config | `configure` renames home dirs before AD join |
+| OUD+AD | `id_provider = ldap` + `AUTHMETHOD=OUD+AD` in `PROVISION_CONFIG` | Normal dual auth path |
+| Legacy AD-only | `id_provider = ad` without `AUTHMETHOD=OUD+AD` | Adjusted steps per lifecycle action |
