@@ -45,15 +45,24 @@
 # default, so checking it here against the pristine-default checksum list
 # would always wrongly fail). See health_check.yml.
 
-- name: Refuse to proceed if host is on the legacy pure-AD path, not yet OUD+AD
-  ansible.builtin.assert:
-    that:
-      - >-
-        'AD' not in (dual_auth_current_auth.stdout | upper)
-        or dual_auth_current_authmethod == dual_auth_target_authmethod
-    fail_msg: >-
-      sssd already reports an AD id_provider but {{ dual_auth_provision_config_path }}
-      does not show AUTHMETHOD={{ dual_auth_target_authmethod }}. This host may be on
-      the legacy pure-AD path that this role does not manage - investigate
-      before running it here.
-    success_msg: "Auth method pre-check passed."
+- name: Detect whether host is currently OUD-only (no AD joined yet)
+  # Used by configure to decide whether to rename home dirs sa04192 -> sa04192OUD.
+  # Detection matches the Midrange Mod report check: id_provider = ldap only.
+  ansible.builtin.set_fact:
+    dual_auth_is_oud_only: >-
+      {{ dual_auth_current_auth.stdout | trim == 'ldap' }}
+
+- name: Detect whether host is on the legacy pure-AD path (no OUD configured)
+  ansible.builtin.set_fact:
+    dual_auth_is_legacy_ad_only: >-
+      {{ 'AD' in (dual_auth_current_auth.stdout | upper) and
+         dual_auth_current_authmethod != dual_auth_target_authmethod }}
+
+- name: Warn that this is a legacy pure-AD host - will migrate to OUD+AD
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: sssd reports an AD id_provider but AUTHMETHOD is not OUD+AD.
+      This host is on the legacy pure-AD path. The configure action will
+      back up the existing sssd.conf, generate a fresh OUD+AD one, and
+      deploy the dual auth conf.d files. OUD admin password is required.
+  when: dual_auth_is_legacy_ad_only | bool
