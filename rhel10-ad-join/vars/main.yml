@@ -2,9 +2,9 @@
 # === Environment indicator -> environment name ===
 # Matches the legacy convention: 5th character of the short hostname.
 #   0 or 5 -> rnd      1 or 6 -> uat      2 or 7 -> qa      3 or 8 -> prod
-# mrg_dual_auth_target_env itself is intentionally NOT defaulted here - see tasks/facts.yml.
-# Pass -e mrg_dual_auth_target_env=<rnd|uat|qa|prod> to override hostname-based detection.
-mrg_dual_auth_env_digit_map:
+# dual_auth_target_env itself is intentionally NOT defaulted here - see tasks/facts.yml.
+# Pass -e dual_auth_target_env=<rnd|uat|qa|prod> to override hostname-based detection.
+dual_auth_env_digit_map:
   "0": rnd
   "5": rnd
   "1": uat
@@ -16,13 +16,13 @@ mrg_dual_auth_env_digit_map:
 
 # === AD service account per environment ===
 # Confirmed correct (double "A", "...RAS" for rnd).
-mrg_dual_auth_service_account_map:
+dual_auth_service_account_map:
   rnd: XAAMMRAS
   uat: XAAMMUAS
   qa: XAAMMQAS
   prod: XAAMMPAS
 
-mrg_dual_auth_username: "{{ mrg_dual_auth_service_account_map[mrg_dual_auth_target_env] }}"
+dual_auth_username: "{{ dual_auth_service_account_map[dual_auth_target_env] }}"
 
 # Four separate pre-built keytab files (one per environment), each
 # containing just that environment's single bind account. Deliberately not
@@ -31,31 +31,31 @@ mrg_dual_auth_username: "{{ mrg_dual_auth_service_account_map[mrg_dual_auth_targ
 # ending in .keytab if you need to run klist on one by hand.
 # tasks/stage_static_keytab.yml copies whichever one matches the current
 # host's environment to a tmpfs location at runtime and kinits with it.
-mrg_dual_auth_static_keytab_filename_map:
+dual_auth_static_keytab_filename_map:
   rnd: ad-bind-rnd.dat
   uat: ad-bind-uat.dat
   qa: ad-bind-qa.dat
   prod: ad-bind-prod.dat
 
-mrg_dual_auth_static_keytab_filename: "{{ mrg_dual_auth_static_keytab_filename_map[mrg_dual_auth_target_env] }}"
+dual_auth_static_keytab_filename: "{{ dual_auth_static_keytab_filename_map[dual_auth_target_env] }}"
 
-# === Domain / realm derived from mrg_dual_auth_target_env ===
-mrg_dual_auth_domain: "{{ mrg_dual_auth_target_env }}.pncint.net"
-mrg_dual_auth_realm: "{{ mrg_dual_auth_domain | upper }}"
-mrg_dual_auth_dc_ou: "DC={{ mrg_dual_auth_domain.split('.') | join(',DC=') }}"
+# === Domain / realm derived from dual_auth_target_env ===
+dual_auth_domain: "{{ dual_auth_target_env }}.pncint.net"
+dual_auth_realm: "{{ dual_auth_domain | upper }}"
+dual_auth_dc_ou: "DC={{ dual_auth_domain.split('.') | join(',DC=') }}"
 
 # Domain used for sudoers AD group references. Prod authenticates the sudoers
 # group lookups against pncbank.com; non-prod uses the env-specific realm.
-mrg_dual_auth_sudoers_domain: "{{ 'pncbank.com' if mrg_dual_auth_target_env == 'prod' else mrg_dual_auth_domain }}"
+dual_auth_sudoers_domain: "{{ 'pncbank.com' if dual_auth_target_env == 'prod' else dual_auth_domain }}"
 
 # === Computer account OU (constant across environments) ===
-mrg_dual_auth_base_ou: "OU=OUs_UnixStandard,OU=OUc_UnixServers,OU=OUc_Computers"
+dual_auth_base_ou: "OU=OUs_UnixStandard,OU=OUc_UnixServers,OU=OUc_Computers"
 
 # === Known-good krb5.conf MD5 checksums, keyed by RHEL major version ===
 # A host whose /etc/krb5.conf does not match one of these (and is not OUD's
 # own already-managed default) is assumed to be hand-customized; the role
 # refuses to overwrite it.
-mrg_dual_auth_krb5_known_md5:
+dual_auth_krb5_known_md5:
   "8":
     - c523bd80412c3f7aae8cfdcefd9a15d4
     - c3496b2f79c911b1ddb1ca2b8eedf119
@@ -67,14 +67,14 @@ mrg_dual_auth_krb5_known_md5:
     - c3496b2f79c911b1ddb1ca2b8eedf119
 
 # === Lifecycle / target state ===
-mrg_dual_auth_target_authmethod: "OUD+AD"
-mrg_dual_auth_provision_config_path: /boot/PNC_PROVISION_CONFIG
+dual_auth_target_authmethod: "OUD+AD"
+dual_auth_provision_config_path: /boot/PNC_PROVISION_CONFIG
 
 # Force the disruptive bits (sssd stop/disable, cache wipe, restart) to run
 # even when the host already looks healthy. Normally leave this false and
-# rely on mrg_dual_auth_lifecycle_action: rejoin / leave_ad for the explicit
+# rely on dual_auth_lifecycle_action: rejoin / leave_ad for the explicit
 # disruptive paths instead.
-mrg_dual_auth_force_configure: false
+dual_auth_force_configure: false
 
 # Primary control for which lifecycle path this run takes. This is a plain
 # extra_var deliberately, not an Ansible tag - AAP Survey questions always
@@ -84,12 +84,48 @@ mrg_dual_auth_force_configure: false
 #   configure (default) - facts + preflight + health check + configure + join-if-needed
 #   rejoin               - all of the above, then forced leave-then-rejoin
 #   leave_ad              - all of the above, then full decommission
-mrg_dual_auth_lifecycle_action: "configure"
+dual_auth_lifecycle_action: "configure"
 
 # === Filesystem locations ===
-mrg_dual_auth_auth_backup_dir: /var/pnc/pnc_auth_config
-mrg_dual_auth_rbin_dir: /usr/local/pnc/rbin
+dual_auth_auth_backup_dir: /var/pnc/pnc_auth_config
+dual_auth_rbin_dir: /usr/local/pnc/rbin
 
 # === Sudoers group names ===
-mrg_dual_auth_btgsudo_group: "GSLunxSU_{{ mrg_dual_auth_mnemonic | default('MNE') }}_AdminLogin"
-mrg_dual_auth_mrgeng_group: "GSLunxSU_MRG_AllServerAdmin"
+dual_auth_btgsudo_group: "GSLunxSU_{{ dual_auth_mnemonic | default('MNE') }}_AdminLogin"
+dual_auth_mrgeng_group: "GSLunxSU_MRG_AllServerAdmin"
+
+# === OUD LDAP admin credentials for hostId account management ===
+# Admin bind DN is not secret - stays in vars. Passwords must be set via
+# AAP Survey (Password type) or -e on CLI - never hard-code them here.
+# The role auto-selects the right password based on dual_auth_target_env.
+dual_auth_oud_admin_dn: "cn=asc-serviceid,ou=TrustedApplications,ou=FrameworkSystems,o=pnc"
+dual_auth_oud_admin_password_rnd: ""
+dual_auth_oud_admin_password_uat: ""
+dual_auth_oud_admin_password_qa: ""
+dual_auth_oud_admin_password_prod: ""
+# Resolved at runtime - do not set directly
+dual_auth_oud_admin_password: "{{ vars['dual_auth_oud_admin_password_' + dual_auth_target_env] | default('') }}"
+
+# OUD LDAP URI per environment
+dual_auth_oud_ldap_uri_map:
+  rnd: "ldaps://mdsemp-rnd.pncint.net"
+  uat: "ldaps://mdsemp-uat.pncint.net"
+  qa: "ldaps://mdsemp-qa.pncint.net"
+  prod: "ldaps://mdsemp.pncint.net"
+dual_auth_oud_ldap_uri: "{{ dual_auth_oud_ldap_uri_map[dual_auth_target_env] }}"
+
+# === Additional GSGu groups for convert_ad_only action ===
+# Set via -e dual_auth_additional_gsgu_groups='group1' or newline-separated.
+# Not a Survey field - use the dedicated convert playbook for bulk additions.
+dual_auth_additional_gsgu_groups: ""
+
+# === AD bind account password for keytab generation ===
+# Set via the PNC MRG AD Bind AAP credential (once created) or -e on CLI.
+# Used by recreate_keytab to build a fresh keytab via ktutil.
+# These will be injected by the credential type - defaults are empty.
+ad_bind_password_rnd: ""
+ad_bind_password_uat: ""
+ad_bind_password_qa: ""
+ad_bind_password_prod: ""
+# Resolved at runtime from the env-specific var above - do not set directly
+dual_auth_ad_bind_password: "{{ vars['ad_bind_password_' + dual_auth_target_env] | default('') }}"
