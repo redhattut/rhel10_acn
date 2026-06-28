@@ -1,0 +1,322 @@
+# MRG Migration Utility — Runbook
+
+**Team:** Midrange Engineering (MRG)
+**Maintained by:** OS Engineering — Midrange Engineering Team
+**Last Updated:** June 2026
+
+---
+
+## Overview
+
+The MRG Migration Utility is an end-to-end workflow that allows application teams to submit structured data migration and ownership transfer requests to Midrange Engineering. The request is fulfilled by a Midrange Change Team engineer running an AAP job that processes the submitted CSV against the target servers.
+
+This runbook covers everything the Change Team engineer needs to know: what the request looks like, how to validate it, how to run it, and what the output means.
+
+---
+
+## How the Workflow Works
+
+1. The application team fills out the **Migration Request Portal** (internal web tool) and downloads a CSV file
+2. They attach the CSV to a **ServiceNow request** submitted to the Midrange team
+3. A Midrange Change Team engineer picks up the ticket, reviews the CSV, uploads it to the jumpbox, and runs the AAP job
+4. The job executes the migration script on the jumpbox and outputs a full run log
+5. The engineer reviews the output, updates the ticket, and closes
+
+---
+
+## Step 1 — Review the ServiceNow Request
+
+When a migration ticket comes in, check the following before touching anything:
+
+- The ticket has a CSV file attached
+- The CSV filename follows the format: `migration_request_YYYYMMDD_HHMMSS.csv`
+- The request description is clear about what is being migrated and why
+- If anything looks off or incomplete, send it back to the requester before proceeding
+
+> **Note:** Do not modify the CSV. If corrections are needed, the requester must re-export from the portal and resubmit.
+
+---
+
+## Step 2 — Understand the CSV Format
+
+The CSV downloaded from the portal will look like this:
+
+```
+#Type,Source server,Destination server,Source path,Destination path,Source user,Target user,Source group,Target group
+DATA_TRANSFER,rhel8-app01.dc1.corp,rhel9-app01.dc2.corp,/app/data/jdoe/reports,/var/app/data/reports,jdoe,CORP\ad_jdoe,appgrp,CORP\ad_appgrp
+OWNERSHIP_TRANSFER,rhel8-app02.dc1.corp,,/app/data/svcacct/config,,,svcacct01,CORP\svc_acct01,svcgrp,CORP\ad_svcgrp
+```
+
+### Row Types
+
+| Type | What it does |
+|---|---|
+| `DATA_TRANSFER` | Copies data from source server/path to destination server/path, optionally remapping user and group ownership |
+| `OWNERSHIP_TRANSFER` | Changes ownership of files on a single server in-place — no data is moved |
+
+### Column Reference
+
+| Column | Description |
+|---|---|
+| `#Type` | `DATA_TRANSFER` or `OWNERSHIP_TRANSFER` |
+| `Source server` | Hostname of the source (always required) |
+| `Destination server` | Hostname of the destination (DT only, blank for OT) |
+| `Source path` | Full path on the source server |
+| `Destination path` | Full path on the destination server (DT only) |
+| `Source user` | Existing local user to remap (optional) |
+| `Target user` | AD user to remap to (optional) |
+| `Source group` | Existing local group to remap (optional) |
+| `Target group` | AD group to remap to (optional) |
+
+> **Screenshot placeholder:** _Insert screenshot of the Migration Request Portal here_
+
+> **Screenshot placeholder:** _Insert screenshot of a sample completed CSV here_
+
+---
+
+## Step 3 — Upload the CSV to the Jumpbox
+
+SSH into the jumpbox and place the CSV in the pending directory:
+
+```bash
+scp migration_request_20260611_103701.csv lmrg34ja:/data/MRGeng/Migration_Utility/pending/
+```
+
+Or if you are already on the jumpbox, copy it directly:
+
+```bash
+cp /tmp/migration_request_20260611_103701.csv /data/MRGeng/Migration_Utility/pending/
+```
+
+Confirm it is there before launching the job:
+
+```bash
+ls -ltr /data/MRGeng/Migration_Utility/pending/
+```
+
+---
+
+## Step 4 — Launch the AAP Job (Dry Run First)
+
+Always run dry run first. Never run live without reviewing the dry run output.
+
+### Find the Job Template
+
+In AAP, navigate to:
+
+**Resources → Templates → MRG Migration Utility**
+
+> **Screenshot placeholder:** _Insert screenshot of the AAP Job Template here_
+
+### Fill In the Survey
+
+The job template will prompt for two fields:
+
+| Field | What to enter |
+|---|---|
+| **Migration filename** | The CSV filename only — no path (e.g. `migration_request_20260611_103701.csv`) |
+| **Dry run** | `true` for dry run, `false` for live |
+
+> **Screenshot placeholder:** _Insert screenshot of the AAP Survey fields here_
+
+Set **Dry run = true** and launch.
+
+---
+
+## Step 5 — Review Dry Run Output
+
+The job output in AAP will show the full run log. Read it carefully before proceeding.
+
+### What to look for
+
+**Precheck — SSH connectivity:** Every host in the CSV must show `OK`. Any `UNREACHABLE` host means that row will be skipped.
+
+```
+[PRECHECK] Testing SSH connectivity for all hosts in CSV...
+  rhel8-app01.dc1.corp ............ OK
+  rhel9-app01.dc2.corp ............ OK
+```
+
+**Precheck — Space and ownership checks:** Confirms there is sufficient disk space on destination servers and that the target users and groups exist.
+
+```
+[PRECHECK] Space and ownership checks...
+  rhel9-app01.dc2.corp ............ OK
+```
+
+If any host shows `FAIL` here, the reasons are listed underneath:
+
+```
+  rhel9-app03.dc2.corp ............ FAIL
+    - Insufficient space: need 4200M, available 1100M on /var/app
+    - User 'CORP\ad_jdoe' not found
+```
+
+**Row details:** Each row shows what will be executed. Confirm source, destination, paths, and ownership remapping look correct.
+
+```
+ROW 1 — DATA_TRANSFER
+  Source      : rhel8-app01.dc1.corp:/app/data/jdoe/reports
+  Destination : rhel9-app01.dc2.corp:/var/app/data/reports
+  User remap  : jdoe -> CORP\ad_jdoe
+  Group remap : appgrp -> CORP\ad_appgrp
+[DRY-RUN] rsync -avz --chown=CORP\\ad_jdoe:CORP\\ad_appgrp rhel8-app01.dc1.corp:/app/data/jdoe/reports rhel9-app01.dc2.corp:/var/app/data/reports
+```
+
+**Summary:** Confirms total rows, how many would execute, and how many would be skipped.
+
+```
+SUMMARY
+  Total rows    : 4
+  Would execute : 4
+  Skipped       : 0
+  Hosts in scope: rhel9-app01.dc2.corp, rhel8-app02.dc1.corp
+```
+
+### If the dry run looks wrong
+
+- Do not proceed to live
+- Contact the requester to clarify or correct the CSV
+- They must re-export from the portal and resubmit via the ticket
+- Re-upload the corrected CSV and re-run the dry run
+
+---
+
+## Step 6 — Launch Live Run
+
+Once the dry run output looks correct, go back to the job template, set **Dry run = false**, and launch again.
+
+The live output follows the same format. Each row will show `[EXEC]` and then `[OK]` or `[FAIL]`:
+
+```
+ROW 1 — DATA_TRANSFER
+  Source      : rhel8-app01.dc1.corp:/app/data/jdoe/reports
+  Destination : rhel9-app01.dc2.corp:/var/app/data/reports
+  User remap  : jdoe -> CORP\ad_jdoe
+  Group remap : appgrp -> CORP\ad_appgrp
+[EXEC] rsync -avz --chown=CORP\\ad_jdoe:CORP\\ad_appgrp rhel8-app01.dc1.corp:/app/data/jdoe/reports rhel9-app01.dc2.corp:/var/app/data/reports
+[OK]   exit 0 (3.2s)
+```
+
+---
+
+## Step 7 — Review the Logs on the Jumpbox
+
+Two log files are written per run under `/data/MRGeng/Migration_Utility/logs/`:
+
+| File | Contents |
+|---|---|
+| `migration_request_YYYYMMDD_HHMMSS.run.log` | Full structured run log — parse results, precheck results, per-row status, summary |
+| `migration_request_YYYYMMDD_HHMMSS.rsync.log` | Raw rsync output for every row that executed |
+
+```bash
+cat /data/MRGeng/Migration_Utility/logs/migration_request_20260611_103701.run.log
+cat /data/MRGeng/Migration_Utility/logs/migration_request_20260611_103701.rsync.log
+```
+
+---
+
+## Step 8 — Check CSV Final Status
+
+After a live run, the CSV is automatically moved based on outcome:
+
+| Outcome | CSV location |
+|---|---|
+| All rows succeeded | `processed/migration_request_....csv` |
+| Any row skipped or failed | `failed/migration_request_....csv` |
+| Dry run or aborted | Stays in `pending/migration_request_....csv` |
+
+```bash
+ls -ltr /data/MRGeng/Migration_Utility/processed/
+ls -ltr /data/MRGeng/Migration_Utility/failed/
+```
+
+If the CSV ended up in `failed/`, review the run log summary section for which rows failed and why, then communicate back to the requester.
+
+---
+
+## Handling Failures and Skipped Rows
+
+### Unreachable host at precheck
+
+The row is skipped and the rest of the run continues. The summary will list which rows were skipped:
+
+```
+  Skipped       : 1 (unreachable host)
+    - ROW 3: rhel9-app03.dc2.corp — unreachable at precheck
+```
+
+Action: Confirm the server is up and reachable from the jumpbox. Re-upload the CSV and re-run once connectivity is restored.
+
+### Precheck failure (space or ownership)
+
+The affected row is skipped. The precheck section lists the reason:
+
+```
+  rhel9-app03.dc2.corp ............ FAIL
+    - Insufficient space: need 8200M, available 2100M on /var/app/data
+    - User 'CORP\ad_newuser' not found
+```
+
+Action: Work with the server owner to resolve the issue (free up space, create the AD account, etc.), then re-upload and re-run.
+
+### Row failed during execution
+
+The rsync command ran but returned a non-zero exit code. Check the rsync log for the specific error output.
+
+```
+[FAIL] exit 11 (30s)
+```
+
+Action: Review `/data/MRGeng/Migration_Utility/logs/*.rsync.log` for the error detail. Common causes are permission issues on the destination path, SSH key problems, or network interruptions.
+
+### Re-running after failure
+
+If the CSV ended up in `failed/`, copy it back to `pending/` before re-running:
+
+```bash
+cp /data/MRGeng/Migration_Utility/failed/migration_request_20260611_103701.csv \
+   /data/MRGeng/Migration_Utility/pending/
+```
+
+Then launch the AAP job again.
+
+---
+
+## Directory Structure Reference
+
+```
+/data/MRGeng/Migration_Utility/
+├── migration_runner.sh          ← the script (do not edit)
+├── pending/                     ← drop CSV here before running
+├── processed/                   ← CSV moves here on full success
+├── failed/                      ← CSV moves here on any skip or failure
+└── logs/
+    ├── migration_request_YYYYMMDD_HHMMSS.run.log
+    └── migration_request_YYYYMMDD_HHMMSS.rsync.log
+```
+
+---
+
+## Quick Reference Checklist
+
+```
+[ ] ServiceNow ticket received with CSV attached
+[ ] CSV filename and format look correct
+[ ] CSV uploaded to /data/MRGeng/Migration_Utility/pending/ on lmrg34ja
+[ ] AAP job launched with Dry run = true
+[ ] Dry run output reviewed — all hosts OK, rows look correct
+[ ] AAP job launched with Dry run = false
+[ ] Live output reviewed — all rows OK
+[ ] Run log and rsync log reviewed on jumpbox
+[ ] CSV moved to processed/ (confirm)
+[ ] ServiceNow ticket updated and closed
+```
+
+---
+
+## Contact / Escalation
+
+For issues with the migration script or AAP job template, contact the **MRG Midrange Engineering** team.
+
+For issues with AD user or group resolution on the target servers, contact the **Identity & Access Management** team.
