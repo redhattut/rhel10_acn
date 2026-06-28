@@ -7,18 +7,45 @@
 #
 # 2. NEW BUILD (sssd.conf absent): generate from scratch using sssd.conf.j2,
 #    which includes the OUD LDAP hostId bind DN and password. This requires:
-#    - Creating/updating the host bind account in OUD LDAP (via ldapmodify,
-#      delegated to dual_auth_oud_delegate_host since target hosts may not have
-#      openldap-clients, and the admin bind password should not leave the jumpbox)
-#    - dual_auth_oud_admin_password_<env> set via AAP Survey (Password type)
-#      or -e on CLI - never hard-coded in vars
+#    - Creating/updating the host bind account in OUD LDAP directly on the
+#      target host via ldapmodify (openldap-clients is installed if needed).
+#      Target hosts already have network access to the OUD LDAP servers since
+#      they are OUD clients. This replicates what amm-create-authn did on the
+#      jumpbox, but runs directly on the target - no jumpbox dependency.
+#    - dual_auth_oud_admin_password_<env> set via AAP credential or -e on CLI
 
 - name: Check whether /etc/sssd/sssd.conf already exists
   ansible.builtin.stat:
     path: /etc/sssd/sssd.conf
   register: dual_auth_sssd_conf_stat
 
-# ── Existing host path (in-place rename) ─────────────────────────────────────
+# ── Legacy pure-AD host path ──────────────────────────────────────────────────
+# If this host was previously AD-only (no OUD), sssd.conf has no [domain/OUD]
+# section at all. Back it up and remove it so the new-build generation path
+# below creates a proper OUD+AD sssd.conf from the template.
+- name: Handle legacy pure-AD host - back up and remove AD-only sssd.conf
+  when:
+    - dual_auth_sssd_conf_stat.stat.exists
+    - dual_auth_is_legacy_ad_only | default(false) | bool
+  block:
+    - name: Back up existing AD-only sssd.conf before OUD+AD migration
+      ansible.builtin.copy:
+        src: /etc/sssd/sssd.conf
+        dest: "{{ dual_auth_auth_backup_dir }}/sssd.conf.pre_oud_migration"
+        remote_src: true
+        mode: "0600"
+
+    - name: Remove AD-only sssd.conf to trigger fresh OUD+AD generation
+      ansible.builtin.file:
+        path: /etc/sssd/sssd.conf
+        state: absent
+
+    - name: Re-stat sssd.conf after removal
+      ansible.builtin.stat:
+        path: /etc/sssd/sssd.conf
+      register: dual_auth_sssd_conf_stat
+
+# ── Existing OUD host path (in-place rename) ──────────────────────────────────
 - name: Rename legacy [domain/default] stanza to [domain/OUD] in existing sssd.conf
   ansible.builtin.replace:
     path: /etc/sssd/sssd.conf
@@ -59,12 +86,16 @@
         dual_auth_host_pwd: "{{ dual_auth_host_pwd_result.stdout }}"
       no_log: true
 
-    - name: Render hostId LDIF to temp file on jumpbox
+    - name: Ensure openldap-clients is installed for ldapmodify
+      ansible.builtin.package:
+        name: openldap-clients
+        state: present
+
+    - name: Render hostId LDIF to temp file on target host
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../files/hostid.ldif.j2"
         dest: "/tmp/{{ ansible_hostname }}.ldif"
         mode: "0600"
-      delegate_to: "{{ dual_auth_oud_delegate_host }}"
       no_log: true
 
     - name: Check if OUD hostId account already exists
@@ -79,7 +110,6 @@
       register: dual_auth_oud_hostid_check
       changed_when: false
       failed_when: false
-      delegate_to: "{{ dual_auth_oud_delegate_host }}"
       no_log: true
 
     - name: Create OUD hostId account (does not exist yet)
@@ -89,7 +119,6 @@
         -x -D "{{ dual_auth_oud_admin_dn }}"
         -w "{{ dual_auth_oud_admin_password }}"
         -c -f /tmp/{{ ansible_hostname }}.ldif
-      delegate_to: "{{ dual_auth_oud_delegate_host }}"
       no_log: true
       when: dual_auth_oud_hostid_check.rc != 0
 
@@ -104,15 +133,13 @@
         replace: userPassword
         userPassword: {{ dual_auth_host_pwd }}
         EOLDIFF
-      delegate_to: "{{ dual_auth_oud_delegate_host }}"
       no_log: true
       when: dual_auth_oud_hostid_check.rc == 0
 
-    - name: Remove temp LDIF from jumpbox
+    - name: Remove temp LDIF from target host
       ansible.builtin.file:
         path: "/tmp/{{ ansible_hostname }}.ldif"
         state: absent
-      delegate_to: "{{ dual_auth_oud_delegate_host }}"
 
     - name: Deploy sssd.conf from template
       ansible.builtin.template:
