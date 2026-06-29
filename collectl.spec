@@ -32,8 +32,38 @@ collectl - Collects data that describes the current system status.
 # Install section
 ########################################################################
 %install
-# Files are pre-staged by the build system into BUILDROOT under their
-# source paths. No install actions needed.
+SRCDIR=/var/tmp/collectl-4.3.20.1/collectl
+DESTDIR=%{buildroot}/var/tmp/collectl-4.3.20.1/collectl
+
+mkdir -p $DESTDIR/man1
+mkdir -p $DESTDIR/initd
+mkdir -p $DESTDIR/service
+
+install -m 755 $SRCDIR/collectl           $DESTDIR/collectl
+install -m 755 $SRCDIR/colmux             $DESTDIR/colmux
+install -m 444 $SRCDIR/collectl.conf      $DESTDIR/collectl.conf
+install -m 644 $SRCDIR/envrules.std       $DESTDIR/envrules.std
+install -m 444 $SRCDIR/formatit.ph        $DESTDIR/formatit.ph
+install -m 444 $SRCDIR/gexpr.ph           $DESTDIR/gexpr.ph
+install -m 444 $SRCDIR/graphite.ph        $DESTDIR/graphite.ph
+install -m 444 $SRCDIR/hello.ph           $DESTDIR/hello.ph
+install -m 444 $SRCDIR/lexpr.ph           $DESTDIR/lexpr.ph
+install -m 444 $SRCDIR/misc.ph            $DESTDIR/misc.ph
+install -m 444 $SRCDIR/proctree.ph        $DESTDIR/proctree.ph
+install -m 444 $SRCDIR/statsd.ph          $DESTDIR/statsd.ph
+install -m 444 $SRCDIR/vmstat.ph          $DESTDIR/vmstat.ph
+install -m 444 $SRCDIR/vmsum.ph           $DESTDIR/vmsum.ph
+install -m 444 $SRCDIR/vnet.ph            $DESTDIR/vnet.ph
+install -m 644 $SRCDIR/man1/collectl.1    $DESTDIR/man1/collectl.1
+install -m 644 $SRCDIR/man1/colmux.1      $DESTDIR/man1/colmux.1
+install -m 755 $SRCDIR/initd/collectl     $DESTDIR/initd/collectl
+install -m 644 $SRCDIR/ARTISTIC           $DESTDIR/ARTISTIC
+install -m 644 $SRCDIR/COPYING            $DESTDIR/COPYING
+install -m 644 $SRCDIR/GPL               $DESTDIR/GPL
+install -m 644 $SRCDIR/RELEASE-collectl   $DESTDIR/RELEASE-collectl
+install -m 755 $SRCDIR/UNINSTALL          $DESTDIR/UNINSTALL
+install -m 755 $SRCDIR/client.pl          $DESTDIR/client.pl
+install -m 644 $SRCDIR/service/collectl.service $DESTDIR/service/collectl.service
 
 ########################################################################
 # Post-process section
