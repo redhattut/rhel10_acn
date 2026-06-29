@@ -32,8 +32,12 @@ collectl - Collects data that describes the current system status.
 # Install section
 ########################################################################
 %install
-# The build system copies root/ into BUILDROOT automatically.
-# No actions required here.
+# Do NOT wipe buildroot - copy from root/ into BUILDROOT explicitly
+if [ -d "%{_builddir}/../root" ]; then
+  cp -a %{_builddir}/../root/. %{buildroot}/
+elif [ -d "root" ]; then
+  cp -a root/. %{buildroot}/
+fi
 
 ########################################################################
 # Post-process section
@@ -51,7 +55,6 @@ SRCDIR=/var/tmp/collectl-4.3.20.1/collectl
 BINDIR=/usr/bin
 SHRDIR=/usr/share/collectl
 MANDIR=/usr/share/man/man1
-SYSDDIR=/usr/lib/systemd/system
 ETCDIR=/etc
 INITDIR=/etc/init.d
 
@@ -60,33 +63,32 @@ mkdir -p $MANDIR
 mkdir -p $INITDIR
 mkdir -p /var/log/collectl
 
-install -m 755 $SRCDIR/collectl                   $BINDIR/collectl
-install -m 755 $SRCDIR/colmux                     $BINDIR/colmux
-install -m 444 $SRCDIR/collectl.conf              $ETCDIR/collectl.conf
-install -m 644 $SRCDIR/man1/collectl.1            $MANDIR/collectl.1
-install -m 644 $SRCDIR/man1/colmux.1              $MANDIR/colmux.1
-install -m 755 $SRCDIR/initd/collectl             $INITDIR/collectl
-install -m 644 $SRCDIR/ARTISTIC                   $SHRDIR/ARTISTIC
-install -m 644 $SRCDIR/COPYING                    $SHRDIR/COPYING
-install -m 644 $SRCDIR/GPL                        $SHRDIR/GPL
-install -m 644 $SRCDIR/RELEASE-collectl           $SHRDIR/RELEASE-collectl
-install -m 755 $SRCDIR/UNINSTALL                  $SHRDIR/UNINSTALL
-install -m 644 $SRCDIR/envrules.std               $SHRDIR/envrules.std
-install -m 444 $SRCDIR/formatit.ph                $SHRDIR/formatit.ph
-install -m 444 $SRCDIR/gexpr.ph                   $SHRDIR/gexpr.ph
-install -m 444 $SRCDIR/graphite.ph                $SHRDIR/graphite.ph
-install -m 444 $SRCDIR/hello.ph                   $SHRDIR/hello.ph
-install -m 444 $SRCDIR/lexpr.ph                   $SHRDIR/lexpr.ph
-install -m 444 $SRCDIR/misc.ph                    $SHRDIR/misc.ph
-install -m 444 $SRCDIR/proctree.ph                $SHRDIR/proctree.ph
-install -m 444 $SRCDIR/statsd.ph                  $SHRDIR/statsd.ph
-install -m 444 $SRCDIR/vmstat.ph                  $SHRDIR/vmstat.ph
-install -m 444 $SRCDIR/vmsum.ph                   $SHRDIR/vmsum.ph
-install -m 444 $SRCDIR/vnet.ph                    $SHRDIR/vnet.ph
-install -m 755 $SRCDIR/client.pl                  $SHRDIR/util/client.pl
+install -m 755 $SRCDIR/collectl                 $BINDIR/collectl
+install -m 755 $SRCDIR/colmux                   $BINDIR/colmux
+install -m 444 $SRCDIR/collectl.conf            $ETCDIR/collectl.conf
+install -m 644 $SRCDIR/man1/collectl.1          $MANDIR/collectl.1
+install -m 644 $SRCDIR/man1/colmux.1            $MANDIR/colmux.1
+install -m 755 $SRCDIR/initd/collectl           $INITDIR/collectl
+install -m 644 $SRCDIR/ARTISTIC                 $SHRDIR/ARTISTIC
+install -m 644 $SRCDIR/COPYING                  $SHRDIR/COPYING
+install -m 644 $SRCDIR/GPL                      $SHRDIR/GPL
+install -m 644 $SRCDIR/RELEASE-collectl         $SHRDIR/RELEASE-collectl
+install -m 755 $SRCDIR/UNINSTALL                $SHRDIR/UNINSTALL
+install -m 644 $SRCDIR/envrules.std             $SHRDIR/envrules.std
+install -m 444 $SRCDIR/formatit.ph              $SHRDIR/formatit.ph
+install -m 444 $SRCDIR/gexpr.ph                 $SHRDIR/gexpr.ph
+install -m 444 $SRCDIR/graphite.ph              $SHRDIR/graphite.ph
+install -m 444 $SRCDIR/hello.ph                 $SHRDIR/hello.ph
+install -m 444 $SRCDIR/lexpr.ph                 $SHRDIR/lexpr.ph
+install -m 444 $SRCDIR/misc.ph                  $SHRDIR/misc.ph
+install -m 444 $SRCDIR/proctree.ph              $SHRDIR/proctree.ph
+install -m 444 $SRCDIR/statsd.ph                $SHRDIR/statsd.ph
+install -m 444 $SRCDIR/vmstat.ph                $SHRDIR/vmstat.ph
+install -m 444 $SRCDIR/vmsum.ph                 $SHRDIR/vmsum.ph
+install -m 444 $SRCDIR/vnet.ph                  $SHRDIR/vnet.ph
+install -m 755 $SRCDIR/client.pl                $SHRDIR/util/client.pl
 
-install -m 644 $SRCDIR/service/collectl.service   /etc/systemd/system/collectl.service
-chmod 644 /etc/systemd/system/collectl.service
+install -m 644 $SRCDIR/service/collectl.service /etc/systemd/system/collectl.service
 
 echo "Verifying server is Database"
 FILE='/boot/PNC_PROVISION_CONFIG'
@@ -138,7 +140,7 @@ else
 fi
 
 ########################################################################
-# Files section - must match exactly what root/ puts in BUILDROOT
+# Files section
 ########################################################################
 %files
 %defattr(-,root,root,-)
