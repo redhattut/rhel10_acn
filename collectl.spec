@@ -37,7 +37,6 @@ rm -rf %{buildroot}
 SRCDIR=/var/tmp/collectl-4.3.20.1/collectl
 
 BINDIR=%{buildroot}/usr/bin
-DOCDIR=%{buildroot}/usr/share/doc/collectl
 SHRDIR=%{buildroot}/usr/share/collectl
 MANDIR=%{buildroot}/usr/share/man/man1
 SYSDDIR=%{buildroot}/usr/lib/systemd/system
@@ -45,27 +44,26 @@ ETCDIR=%{buildroot}/etc
 INITDIR=%{buildroot}/etc/init.d
 
 mkdir -p $BINDIR
-mkdir -p $DOCDIR
 mkdir -p $SHRDIR/util
 mkdir -p $MANDIR
 mkdir -p $SYSDDIR
 mkdir -p $INITDIR
 mkdir -p %{buildroot}/var/log/collectl
 
-install -m 755 $SRCDIR/collectl          $BINDIR/collectl
-install -m 755 $SRCDIR/colmux            $BINDIR/colmux
-install -m 444 $SRCDIR/collectl.conf     $ETCDIR/collectl.conf
-install -m 644 $SRCDIR/man1/*            $MANDIR/
-install -m 755 $SRCDIR/initd/*           $INITDIR/
-install -m 644 $SRCDIR/docs/*            $DOCDIR/
-install -m 644 $SRCDIR/GPL              $DOCDIR/GPL
-install -m 644 $SRCDIR/ARTISTIC         $DOCDIR/ARTISTIC
-install -m 644 $SRCDIR/COPYING          $DOCDIR/COPYING
-install -m 644 $SRCDIR/RELEASE-collectl $DOCDIR/RELEASE-collectl
-install -m 755 $SRCDIR/UNINSTALL        $SHRDIR/UNINSTALL
-install -m 444 $SRCDIR/*.ph             $SHRDIR/
-install -m 755 $SRCDIR/client.pl        $SHRDIR/util/client.pl
-install -m 644 $SRCDIR/service/collectl.service $SYSDDIR/collectl.service
+install -m 755 $SRCDIR/collectl                   $BINDIR/collectl
+install -m 755 $SRCDIR/colmux                     $BINDIR/colmux
+install -m 444 $SRCDIR/collectl.conf              $ETCDIR/collectl.conf
+install -m 644 $SRCDIR/man1/collectl.1            $MANDIR/collectl.1
+install -m 644 $SRCDIR/man1/colmux.1             $MANDIR/colmux.1
+install -m 755 $SRCDIR/initd/collectl             $INITDIR/collectl
+install -m 644 $SRCDIR/ARTISTIC                   $SHRDIR/ARTISTIC
+install -m 644 $SRCDIR/COPYING                    $SHRDIR/COPYING
+install -m 644 $SRCDIR/GPL                        $SHRDIR/GPL
+install -m 644 $SRCDIR/RELEASE-collectl           $SHRDIR/RELEASE-collectl
+install -m 755 $SRCDIR/UNINSTALL                  $SHRDIR/UNINSTALL
+install -m 444 $SRCDIR/*.ph                       $SHRDIR/
+install -m 755 $SRCDIR/client.pl                  $SHRDIR/util/client.pl
+install -m 644 $SRCDIR/service/collectl.service   $SYSDDIR/collectl.service
 
 ########################################################################
 # Post-process section
@@ -122,7 +120,6 @@ if [ "$1" -eq 0 ]; then
   rm -f /etc/systemd/system/collectl.service
 
   echo "Removing collectl directories..."
-  rm -rf /usr/share/doc/collectl
   rm -rf /usr/share/collectl
   rm -rf /var/log/collectl
 
@@ -139,9 +136,9 @@ fi
 /usr/bin/collectl
 /usr/bin/colmux
 %config(noreplace) /etc/collectl.conf
-/usr/share/man/man1/
+/usr/share/man/man1/collectl.1
+/usr/share/man/man1/colmux.1
 /etc/init.d/collectl
-/usr/share/doc/collectl/
 /usr/share/collectl/
 /usr/lib/systemd/system/collectl.service
 /var/log/collectl
