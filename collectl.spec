@@ -20,7 +20,7 @@ collectl - Collects data that describes the current system status.
 # Build section
 ########################################################################
 %build
-# No build required; files are staged in /var/tmp/collectl-4.3.20.1/collectl
+# No build required
 
 ########################################################################
 # Pre-process section
@@ -32,38 +32,8 @@ collectl - Collects data that describes the current system status.
 # Install section
 ########################################################################
 %install
-rm -rf %{buildroot}
-
-SRCDIR=/var/tmp/collectl-4.3.20.1/collectl
-
-BINDIR=%{buildroot}/usr/bin
-SHRDIR=%{buildroot}/usr/share/collectl
-MANDIR=%{buildroot}/usr/share/man/man1
-SYSDDIR=%{buildroot}/usr/lib/systemd/system
-ETCDIR=%{buildroot}/etc
-INITDIR=%{buildroot}/etc/init.d
-
-mkdir -p $BINDIR
-mkdir -p $SHRDIR/util
-mkdir -p $MANDIR
-mkdir -p $SYSDDIR
-mkdir -p $INITDIR
-mkdir -p %{buildroot}/var/log/collectl
-
-install -m 755 $SRCDIR/collectl                   $BINDIR/collectl
-install -m 755 $SRCDIR/colmux                     $BINDIR/colmux
-install -m 444 $SRCDIR/collectl.conf              $ETCDIR/collectl.conf
-install -m 644 $SRCDIR/man1/collectl.1            $MANDIR/collectl.1
-install -m 644 $SRCDIR/man1/colmux.1             $MANDIR/colmux.1
-install -m 755 $SRCDIR/initd/collectl             $INITDIR/collectl
-install -m 644 $SRCDIR/ARTISTIC                   $SHRDIR/ARTISTIC
-install -m 644 $SRCDIR/COPYING                    $SHRDIR/COPYING
-install -m 644 $SRCDIR/GPL                        $SHRDIR/GPL
-install -m 644 $SRCDIR/RELEASE-collectl           $SHRDIR/RELEASE-collectl
-install -m 755 $SRCDIR/UNINSTALL                  $SHRDIR/UNINSTALL
-install -m 444 $SRCDIR/*.ph                       $SHRDIR/
-install -m 755 $SRCDIR/client.pl                  $SHRDIR/util/client.pl
-install -m 644 $SRCDIR/service/collectl.service   $SYSDDIR/collectl.service
+# Files are pre-staged by the build system into BUILDROOT under their
+# source paths. No install actions needed.
 
 ########################################################################
 # Post-process section
@@ -75,6 +45,36 @@ if [ "$1" -eq 1 ]; then
 else
   echo "collectl RPM running in UPGRADE mode"
 fi
+
+SRCDIR=/var/tmp/collectl-4.3.20.1/collectl
+
+BINDIR=/usr/bin
+SHRDIR=/usr/share/collectl
+MANDIR=/usr/share/man/man1
+SYSDDIR=/usr/lib/systemd/system
+ETCDIR=/etc
+INITDIR=/etc/init.d
+
+mkdir -p $SHRDIR/util
+mkdir -p $MANDIR
+mkdir -p $SYSDDIR
+mkdir -p $INITDIR
+mkdir -p /var/log/collectl
+
+install -m 755 $SRCDIR/collectl                 $BINDIR/collectl
+install -m 755 $SRCDIR/colmux                   $BINDIR/colmux
+install -m 444 $SRCDIR/collectl.conf            $ETCDIR/collectl.conf
+install -m 644 $SRCDIR/man1/collectl.1          $MANDIR/collectl.1
+install -m 644 $SRCDIR/man1/colmux.1            $MANDIR/colmux.1
+install -m 755 $SRCDIR/initd/collectl           $INITDIR/collectl
+install -m 644 $SRCDIR/ARTISTIC                 $SHRDIR/ARTISTIC
+install -m 644 $SRCDIR/COPYING                  $SHRDIR/COPYING
+install -m 644 $SRCDIR/GPL                      $SHRDIR/GPL
+install -m 644 $SRCDIR/RELEASE-collectl         $SHRDIR/RELEASE-collectl
+install -m 755 $SRCDIR/UNINSTALL                $SHRDIR/UNINSTALL
+install -m 444 $SRCDIR/*.ph                     $SHRDIR/
+install -m 755 $SRCDIR/client.pl                $SHRDIR/util/client.pl
+install -m 644 $SRCDIR/service/collectl.service $SYSDDIR/collectl.service
 
 echo "Verifying server is Database"
 FILE='/boot/PNC_PROVISION_CONFIG'
@@ -133,15 +133,31 @@ fi
 ########################################################################
 %files
 %defattr(-,root,root,-)
-/usr/bin/collectl
-/usr/bin/colmux
-%config(noreplace) /etc/collectl.conf
-/usr/share/man/man1/collectl.1
-/usr/share/man/man1/colmux.1
-/etc/init.d/collectl
-/usr/share/collectl/
-/usr/lib/systemd/system/collectl.service
-/var/log/collectl
+/var/tmp/collectl-4.3.20.1/collectl/collectl
+/var/tmp/collectl-4.3.20.1/collectl/colmux
+/var/tmp/collectl-4.3.20.1/collectl/collectl.conf
+/var/tmp/collectl-4.3.20.1/collectl/man1/collectl.1
+/var/tmp/collectl-4.3.20.1/collectl/man1/colmux.1
+/var/tmp/collectl-4.3.20.1/collectl/initd/collectl
+/var/tmp/collectl-4.3.20.1/collectl/service/collectl.service
+/var/tmp/collectl-4.3.20.1/collectl/ARTISTIC
+/var/tmp/collectl-4.3.20.1/collectl/COPYING
+/var/tmp/collectl-4.3.20.1/collectl/GPL
+/var/tmp/collectl-4.3.20.1/collectl/RELEASE-collectl
+/var/tmp/collectl-4.3.20.1/collectl/UNINSTALL
+/var/tmp/collectl-4.3.20.1/collectl/client.pl
+/var/tmp/collectl-4.3.20.1/collectl/envrules.std
+/var/tmp/collectl-4.3.20.1/collectl/formatit.ph
+/var/tmp/collectl-4.3.20.1/collectl/gexpr.ph
+/var/tmp/collectl-4.3.20.1/collectl/graphite.ph
+/var/tmp/collectl-4.3.20.1/collectl/hello.ph
+/var/tmp/collectl-4.3.20.1/collectl/lexpr.ph
+/var/tmp/collectl-4.3.20.1/collectl/misc.ph
+/var/tmp/collectl-4.3.20.1/collectl/proctree.ph
+/var/tmp/collectl-4.3.20.1/collectl/statsd.ph
+/var/tmp/collectl-4.3.20.1/collectl/vmstat.ph
+/var/tmp/collectl-4.3.20.1/collectl/vmsum.ph
+/var/tmp/collectl-4.3.20.1/collectl/vnet.ph
 
 ########################################################################
 # Changelog
