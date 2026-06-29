@@ -4,7 +4,7 @@
 Name:           pnc_collectl
 Summary:        PNC custom package for Collectl
 Version:        7.0.0
-Release:        1
+Release:        2
 License:        none
 Group:          pnc
 #Requires:
@@ -32,38 +32,8 @@ collectl - Collects data that describes the current system status.
 # Install section
 ########################################################################
 %install
-SRCDIR=/var/tmp/collectl-4.3.20.1/collectl
-DESTDIR=%{buildroot}/var/tmp/collectl-4.3.20.1/collectl
-
-mkdir -p $DESTDIR/man1
-mkdir -p $DESTDIR/initd
-mkdir -p $DESTDIR/service
-
-install -m 755 $SRCDIR/collectl           $DESTDIR/collectl
-install -m 755 $SRCDIR/colmux             $DESTDIR/colmux
-install -m 444 $SRCDIR/collectl.conf      $DESTDIR/collectl.conf
-install -m 644 $SRCDIR/envrules.std       $DESTDIR/envrules.std
-install -m 444 $SRCDIR/formatit.ph        $DESTDIR/formatit.ph
-install -m 444 $SRCDIR/gexpr.ph           $DESTDIR/gexpr.ph
-install -m 444 $SRCDIR/graphite.ph        $DESTDIR/graphite.ph
-install -m 444 $SRCDIR/hello.ph           $DESTDIR/hello.ph
-install -m 444 $SRCDIR/lexpr.ph           $DESTDIR/lexpr.ph
-install -m 444 $SRCDIR/misc.ph            $DESTDIR/misc.ph
-install -m 444 $SRCDIR/proctree.ph        $DESTDIR/proctree.ph
-install -m 444 $SRCDIR/statsd.ph          $DESTDIR/statsd.ph
-install -m 444 $SRCDIR/vmstat.ph          $DESTDIR/vmstat.ph
-install -m 444 $SRCDIR/vmsum.ph           $DESTDIR/vmsum.ph
-install -m 444 $SRCDIR/vnet.ph            $DESTDIR/vnet.ph
-install -m 644 $SRCDIR/man1/collectl.1    $DESTDIR/man1/collectl.1
-install -m 644 $SRCDIR/man1/colmux.1      $DESTDIR/man1/colmux.1
-install -m 755 $SRCDIR/initd/collectl     $DESTDIR/initd/collectl
-install -m 644 $SRCDIR/ARTISTIC           $DESTDIR/ARTISTIC
-install -m 644 $SRCDIR/COPYING            $DESTDIR/COPYING
-install -m 644 $SRCDIR/GPL               $DESTDIR/GPL
-install -m 644 $SRCDIR/RELEASE-collectl   $DESTDIR/RELEASE-collectl
-install -m 755 $SRCDIR/UNINSTALL          $DESTDIR/UNINSTALL
-install -m 755 $SRCDIR/client.pl          $DESTDIR/client.pl
-install -m 644 $SRCDIR/service/collectl.service $DESTDIR/service/collectl.service
+# The build system copies root/ into BUILDROOT automatically.
+# No actions required here.
 
 ########################################################################
 # Post-process section
@@ -87,24 +57,36 @@ INITDIR=/etc/init.d
 
 mkdir -p $SHRDIR/util
 mkdir -p $MANDIR
-mkdir -p $SYSDDIR
 mkdir -p $INITDIR
 mkdir -p /var/log/collectl
 
-install -m 755 $SRCDIR/collectl                 $BINDIR/collectl
-install -m 755 $SRCDIR/colmux                   $BINDIR/colmux
-install -m 444 $SRCDIR/collectl.conf            $ETCDIR/collectl.conf
-install -m 644 $SRCDIR/man1/collectl.1          $MANDIR/collectl.1
-install -m 644 $SRCDIR/man1/colmux.1            $MANDIR/colmux.1
-install -m 755 $SRCDIR/initd/collectl           $INITDIR/collectl
-install -m 644 $SRCDIR/ARTISTIC                 $SHRDIR/ARTISTIC
-install -m 644 $SRCDIR/COPYING                  $SHRDIR/COPYING
-install -m 644 $SRCDIR/GPL                      $SHRDIR/GPL
-install -m 644 $SRCDIR/RELEASE-collectl         $SHRDIR/RELEASE-collectl
-install -m 755 $SRCDIR/UNINSTALL                $SHRDIR/UNINSTALL
-install -m 444 $SRCDIR/*.ph                     $SHRDIR/
-install -m 755 $SRCDIR/client.pl                $SHRDIR/util/client.pl
-install -m 644 $SRCDIR/service/collectl.service $SYSDDIR/collectl.service
+install -m 755 $SRCDIR/collectl                   $BINDIR/collectl
+install -m 755 $SRCDIR/colmux                     $BINDIR/colmux
+install -m 444 $SRCDIR/collectl.conf              $ETCDIR/collectl.conf
+install -m 644 $SRCDIR/man1/collectl.1            $MANDIR/collectl.1
+install -m 644 $SRCDIR/man1/colmux.1              $MANDIR/colmux.1
+install -m 755 $SRCDIR/initd/collectl             $INITDIR/collectl
+install -m 644 $SRCDIR/ARTISTIC                   $SHRDIR/ARTISTIC
+install -m 644 $SRCDIR/COPYING                    $SHRDIR/COPYING
+install -m 644 $SRCDIR/GPL                        $SHRDIR/GPL
+install -m 644 $SRCDIR/RELEASE-collectl           $SHRDIR/RELEASE-collectl
+install -m 755 $SRCDIR/UNINSTALL                  $SHRDIR/UNINSTALL
+install -m 644 $SRCDIR/envrules.std               $SHRDIR/envrules.std
+install -m 444 $SRCDIR/formatit.ph                $SHRDIR/formatit.ph
+install -m 444 $SRCDIR/gexpr.ph                   $SHRDIR/gexpr.ph
+install -m 444 $SRCDIR/graphite.ph                $SHRDIR/graphite.ph
+install -m 444 $SRCDIR/hello.ph                   $SHRDIR/hello.ph
+install -m 444 $SRCDIR/lexpr.ph                   $SHRDIR/lexpr.ph
+install -m 444 $SRCDIR/misc.ph                    $SHRDIR/misc.ph
+install -m 444 $SRCDIR/proctree.ph                $SHRDIR/proctree.ph
+install -m 444 $SRCDIR/statsd.ph                  $SHRDIR/statsd.ph
+install -m 444 $SRCDIR/vmstat.ph                  $SHRDIR/vmstat.ph
+install -m 444 $SRCDIR/vmsum.ph                   $SHRDIR/vmsum.ph
+install -m 444 $SRCDIR/vnet.ph                    $SHRDIR/vnet.ph
+install -m 755 $SRCDIR/client.pl                  $SHRDIR/util/client.pl
+
+install -m 644 $SRCDIR/service/collectl.service   /etc/systemd/system/collectl.service
+chmod 644 /etc/systemd/system/collectl.service
 
 echo "Verifying server is Database"
 FILE='/boot/PNC_PROVISION_CONFIG'
@@ -114,9 +96,6 @@ if [ -f "$FILE" ] && grep -q ${KEY} ${FILE}; then
   echo "Database server detected; adjusting retention policy"
   sed -i 's/\-r00:00,7/\-r00:00,3/' /etc/collectl.conf
 fi
-
-mv /usr/lib/systemd/system/collectl.service /etc/systemd/system/collectl.service
-chmod 644 /etc/systemd/system/collectl.service
 
 systemctl daemon-reload
 systemctl enable collectl
@@ -159,7 +138,7 @@ else
 fi
 
 ########################################################################
-# Files section
+# Files section - must match exactly what root/ puts in BUILDROOT
 ########################################################################
 %files
 %defattr(-,root,root,-)
