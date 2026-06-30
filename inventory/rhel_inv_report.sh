@@ -856,7 +856,7 @@ $(printf '%b' "$GT_COLS")            </tr>
       const va = a.querySelectorAll('td')[col].textContent.trim();
       const vb = b.querySelectorAll('td')[col].textContent.trim();
       return col === 0 ? va.localeCompare(vb) * dir
-                       : (parseInt(va)||0 - (parseInt(vb)||0)) * dir;
+                       : ((parseInt(va)||0) - (parseInt(vb)||0)) * dir;
     });
     const tb = document.getElementById('appBody');
     rows.forEach(function(r){ tb.insertBefore(r, tb.lastElementChild); });
@@ -1003,7 +1003,11 @@ MFEOF
         local cpct; cpct=$(awk -v n="${month_counts[$i]}" -v d="$max_cnt" 'BEGIN{printf "%.1f", n/d*100}')
         local peak_cls=""
         [[ $i -eq $peak_idx ]] && peak_cls=" peak"
-        echo "      <div class=\"col${peak_cls}\"><div class=\"colbar-wrap\"><div class=\"colbar\" style=\"height:${cpct}%\"><span class=\"colval\">${month_counts[$i]}</span></div></div><span class=\"collabel\">${month_labels[$i]}</span></div>"
+        # bar-1/bar-2/bar-3 give each column a distinct color by position,
+        # independent of which one is flagged "peak" — fixes oldest/newest
+        # bars rendering identically when peak only marks the highest value.
+        local pos_cls=" bar-$(( i + 1 ))"
+        echo "      <div class=\"col${peak_cls}${pos_cls}\"><div class=\"colbar-wrap\"><div class=\"colbar${pos_cls}\" style=\"height:${cpct}%\"><span class=\"colval\">${month_counts[$i]}</span></div></div><span class=\"collabel\">${month_labels[$i]}</span></div>"
     done
     echo "    </div>"
     echo "  </section>"
@@ -1084,7 +1088,8 @@ AEOF
         local apct; apct=$(awk -v n="${bar_counts[$i]}" -v d="$max_cnt" 'BEGIN{printf "%.1f", n/d*100}')
         local peak_cls=""
         [[ $i -eq $peak_idx ]] && peak_cls=" peak"
-        echo "      <div class=\"col${peak_cls}\"><div class=\"colbar-wrap\"><div class=\"colbar\" style=\"height:${apct}%\"><span class=\"colval\">${bar_counts[$i]}</span></div></div><span class=\"collabel\">${bar_labels[$i]}</span></div>"
+        local pos_cls=" bar-$(( i + 1 ))"
+        echo "      <div class=\"col${peak_cls}${pos_cls}\"><div class=\"colbar-wrap\"><div class=\"colbar${pos_cls}\" style=\"height:${apct}%\"><span class=\"colval\">${bar_counts[$i]}</span></div></div><span class=\"collabel\">${bar_labels[$i]}</span></div>"
     done
     echo "    </div>"
     echo "  </section>"

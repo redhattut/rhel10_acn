@@ -516,7 +516,13 @@ a { color: inherit; }
   position: relative; min-height: 10px;
   box-shadow: 0 6px 14px rgba(59,110,240,.22);
 }
-.col.peak .colbar { background: linear-gradient(180deg, var(--teal), #3fc8bb); box-shadow: 0 6px 14px rgba(20,179,166,.25); }
+/* Three distinct bar colors by chronological position (oldest to newest) —
+   independent of .peak so all bars are visually unique even when one wins. */
+.col .colbar.bar-1 { background: linear-gradient(180deg, var(--indigo), #8b9bfa); box-shadow: 0 6px 14px rgba(91,110,245,.22); }
+.col .colbar.bar-2 { background: linear-gradient(180deg, var(--violet), #b794f7); box-shadow: 0 6px 14px rgba(139,92,246,.22); }
+.col .colbar.bar-3 { background: linear-gradient(180deg, var(--teal), #3fc8bb);   box-shadow: 0 6px 14px rgba(20,179,166,.25); }
+/* Peak bar gets a highlight ring on top of its position color, not a color swap */
+.col.peak .colbar { outline: 2px solid var(--ink); outline-offset: 2px; }
 .col .colval { position: absolute; top: -1.7rem; left: 0; right: 0; text-align: center; font-weight: 750; color: var(--ink); font-size: 1.05rem; }
 .col .collabel { font-size: .82rem; color: var(--muted); font-weight: 500; }
 
