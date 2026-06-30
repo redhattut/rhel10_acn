@@ -783,24 +783,33 @@ current_file == inv_file && !/^#/ && NF >= 1 {
     # Skip non-RHEL hosts entirely — OS "?" means no /etc/redhat-release
     if ($3 == "?") { next }
 
-    # For TIMEOUT hosts: overlay yesterday dat record so real scan
-    # data (kernel, CPU, memory etc.) is preserved rather than showing n/a.
-    # This matches legacy behaviour — RHEL_INVENTORY.dat.1.gz carry-forward.
-    # Type becomes TIMEOUT_Virt or TIMEOUT_Phys based on yesterday type.
-    if (typ == "TIMEOUT" && (host in prev)) {
+    # For TIMEOUT and SSHFAIL hosts: overlay the carried-forward record so
+    # real scan data (kernel, CPU, memory, location, etc.) is preserved
+    # instead of showing n/a across the board. Each failure mode keeps its
+    # own distinct type suffix so the report can still tell them apart:
+    #   TIMEOUT host  -> TIMEOUT_Virt / TIMEOUT_Phys / TIMEOUT_Cloud
+    #   SSHFAIL host  -> SSHFAIL_Virt / SSHFAIL_Phys / SSHFAIL_Cloud
+    # The underlying carried-forward fields (kernel, memory, location, CMDB,
+    # etc.) are identical either way — only the failure-type label differs.
+    if ((typ == "TIMEOUT" || typ == "SSHFAIL") && (host in prev)) {
+        fail_prefix = typ
         n = split(prev[host], pf, " ")
-        # Rebuild $2-$28 from yesterday record
+        # Rebuild $2-$28 from the carried-forward record
         for (i = 1; i <= n; i++) $i = pf[i]
-        # Strip TIMEOUT_ prefix from prev type to avoid compounding
-        # (TIMEOUT_Virt from yesterday → Virt → TIMEOUT_Virt today, not TIMEOUT_TIMEOUT_Virt)
+        # Strip any TIMEOUT_/SSHFAIL_ prefix from prev type to avoid
+        # compounding (e.g. SSHFAIL_Virt yesterday -> Virt -> SSHFAIL_Virt
+        # today, not SSHFAIL_SSHFAIL_Virt or a mismatched failure label)
         prev_typ = pf[2]
-        sub(/^TIMEOUT_/, "", prev_typ)
-        if (prev_typ == "Virt" || prev_typ == "Cloud" || prev_typ == "TIMEOUT") typ = "TIMEOUT_Virt"
-        else if (prev_typ == "Phys") typ = "TIMEOUT_Phys"
-        else typ = "TIMEOUT_" prev_typ
+        sub(/^(TIMEOUT|SSHFAIL)_/, "", prev_typ)
+        if (prev_typ == "Virt" || prev_typ == "Cloud" || prev_typ == "TIMEOUT" || prev_typ == "SSHFAIL") typ = fail_prefix "_Virt"
+        else if (prev_typ == "Phys") typ = fail_prefix "_Phys"
+        else typ = fail_prefix "_" prev_typ
     } else if (typ == "TIMEOUT") {
         # No previous data — use TIMEOUT_Virt with n/a fields
         typ = "TIMEOUT_Virt"
+    } else if (typ == "SSHFAIL") {
+        # No previous data — use SSHFAIL_Virt with n/a fields
+        typ = "SSHFAIL_Virt"
     }
 
     loc = expand_loc($21)
@@ -808,9 +817,11 @@ current_file == inv_file && !/^#/ && NF >= 1 {
     # IP address in location field — repurposed server with duplicate config block
     if (loc ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) loc = "unknown"
 
-    # Cloud datacenter — set type to Cloud or TIMEOUT_Cloud based on location
+    # Cloud datacenter — set type to Cloud, TIMEOUT_Cloud, or SSHFAIL_Cloud
+    # based on location, preserving whichever failure mode (if any) applies.
     if (loc == "AZCE" || loc == "AZE2") {
         if (typ ~ /^TIMEOUT/) typ = "TIMEOUT_Cloud"
+        else if (typ ~ /^SSHFAIL/) typ = "SSHFAIL_Cloud"
         else typ = "Cloud"
     }
 
