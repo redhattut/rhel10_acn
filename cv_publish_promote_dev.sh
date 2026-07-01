@@ -23,7 +23,8 @@ HAMMER="/usr/bin/hammer"
 
 LOGDIR="/var/log/cv_publish_promote"
 MONTH_SHORT_LC="$(date +%b_%Y | tr '[:upper:]' '[:lower:]')"   # e.g. jul_2026
-MONTH_SHORT="$(date +%b_%Y)"                                    # e.g. Jul_2026 (used in CV description tag)
+MONTH_SHORT="$(date +%b_%Y)"        # Jul_2026  - used in email subject
+MONTH_LONG="$(date +%B_%Y)"         # July_2026 - used in CV description
 LOGFILE="${LOGDIR}/cv_publish_promote_dev_${MONTH_SHORT_LC}.log"
 LOCKFILE="/var/run/cv_publish_promote_dev.lock"
 
@@ -87,7 +88,7 @@ fi
 
 publish_cv() {
   local cv="$1"
-  local desc="${cv}_${MONTH_SHORT}"
+  local desc="${cv}_${MONTH_LONG}"
 
   log "INFO: Publishing content view '$cv' (description: $desc)"
 
