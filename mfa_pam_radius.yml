@@ -1,0 +1,155 @@
+---
+- name: Configure PNC MFA with pam_radius on RHEL (FedEnclave)
+  hosts: all
+  become: yes
+
+  vars:
+    # RADIUS server hostnames
+    radius_host_qa:   "wfsso-qa.pnc.com"
+    radius_host_prod: "wfsso.pnc.com"
+
+    # RADIUS timeouts
+    radius_timeout_qa:   30
+    radius_timeout_prod: 45
+
+    # RADIUS shared secrets — injected from AAP survey as Password fields
+    # (do not define here; set in AAP survey)
+    # radius_secret_qa:   <AAP Password survey var>
+    # radius_secret_prod: <AAP Password survey var>
+
+    pam_d_sshd_content: |
+      #%PAM-1.0
+      # auth [default=1 success=ignore] pam_succeed_if.so uid > 0
+      auth [success=1 default=ignore] pam_succeed_if.so user ingroup AccountLockExempt quiet
+      auth      required    pam_radius_auth.so debug client_id=linux
+      auth      required    pam_sepermit.so
+      auth      substack    password-auth
+      auth      include     postlogin
+      # Used with polkit to reauthorize users in remote sessions
+      -auth     optional    pam_reauthorize.so prepare
+      account   required    pam_nologin.so
+      account   include     password-auth
+      password  include     password-auth
+      # pam_selinux.so close should be the first session rule
+      session   required    pam_selinux.so close
+      session   required    pam_loginuid.so
+      # pam_selinux.so open should only be followed by sessions to be executed in the user context
+      session   required    pam_selinux.so open env_params
+      session   required    pam_namespace.so
+      session   optional    pam_keyinit.so force revoke
+      session   include     password-auth
+      session   include     postlogin
+      # Used with polkit to reauthorize users in remote sessions
+      -session  optional    pam_reauthorize.so prepare
+
+  tasks:
+
+    # -----------------------------------------------
+    # Detect environment from provisioning config
+    # -----------------------------------------------
+    - name: Read environment from PNC_PROVISION_CONFIG
+      ansible.builtin.shell:
+        cmd: grep ENVIRONMENT /boot/PNC_PROVISION_CONFIG | tail -1 | cut -d= -f2 | tr '[:upper:]' '[:lower:]'
+      register: detected_env
+      changed_when: false
+
+    - name: Set mfa_env fact
+      ansible.builtin.set_fact:
+        mfa_env: "{{ detected_env.stdout | trim }}"
+
+    - name: Show detected environment
+      ansible.builtin.debug:
+        msg: "Detected environment: {{ mfa_env }}"
+
+    # -----------------------------------------------
+    # Skip if not QA or PROD
+    # -----------------------------------------------
+    - name: End play if environment is not QA or PROD
+      ansible.builtin.meta: end_host
+      when: mfa_env not in ['qa', 'prod']
+
+    # -----------------------------------------------
+    # Build pam_radius.conf line from env-specific vars
+    # -----------------------------------------------
+    - name: Set RADIUS config facts for QA
+      ansible.builtin.set_fact:
+        pam_radius_line: "{{ radius_host_qa }} {{ radius_secret_qa }} {{ radius_timeout_qa }}"
+      when: mfa_env == 'qa'
+
+    - name: Set RADIUS config facts for PROD
+      ansible.builtin.set_fact:
+        pam_radius_line: "{{ radius_host_prod }} {{ radius_secret_prod }} {{ radius_timeout_prod }}"
+      when: mfa_env == 'prod'
+
+    # -----------------------------------------------
+    # 1. Install pam_radius package
+    # -----------------------------------------------
+    - name: Install pam_radius from PNC_EPEL repo
+      ansible.builtin.yum:
+        name: "pam_radius*"
+        state: present
+        enablerepo: "PNC_EPEL*"
+
+    # -----------------------------------------------
+    # 2. Write /etc/pam_radius.conf
+    # -----------------------------------------------
+    - name: Write /etc/pam_radius.conf with correct server line
+      ansible.builtin.copy:
+        dest: /etc/pam_radius.conf
+        content: |
+          ## PNC MFA Config
+          {{ pam_radius_line }}
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+
+    # -----------------------------------------------
+    # 3. Configure /etc/pam.d/sshd (verbatim per doc)
+    # -----------------------------------------------
+    - name: Write /etc/pam.d/sshd with MFA PAM stack
+      ansible.builtin.copy:
+        dest: /etc/pam.d/sshd
+        content: "{{ pam_d_sshd_content }}"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+
+    # -----------------------------------------------
+    # 4. Ensure AccountLockExempt local group exists
+    # -----------------------------------------------
+    - name: Ensure AccountLockExempt local group exists
+      ansible.builtin.group:
+        name: AccountLockExempt
+        state: present
+        local: yes
+
+    # -----------------------------------------------
+    # 6. Update SSH configuration
+    # -----------------------------------------------
+    - name: Enable ChallengeResponseAuthentication in sshd_config
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?ChallengeResponseAuthentication'
+        line: 'ChallengeResponseAuthentication yes'
+        backup: yes
+        validate: '/usr/sbin/sshd -t -f %s'
+
+    # -----------------------------------------------
+    # Restart sshd
+    # -----------------------------------------------
+    - name: Restart sshd to apply changes
+      ansible.builtin.systemd:
+        name: sshd
+        state: restarted
+        enabled: yes
+
+    # -----------------------------------------------
+    # Reminder — manual step (before or after playbook)
+    # -----------------------------------------------
+    - name: Reminder — register server with Ping Identity Team
+      ansible.builtin.debug:
+        msg: >
+          REMINDER: If not already done, provide hostname '{{ inventory_hostname }}'
+          to the Ping Identity Team to complete server registration (Step 4 in runbook).
