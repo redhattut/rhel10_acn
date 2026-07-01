@@ -57,7 +57,8 @@ VIRT_COUNT=$(awk  -F, '!/^#/ && $2=="Virt"'  "$TMPCSV" | wc -l)
 PHYS_COUNT=$(awk  -F, '!/^#/ && $2=="Phys"'  "$TMPCSV" | wc -l)
 CLOUD_COUNT=$(awk -F, '!/^#/ && $2=="Cloud"' "$TMPCSV" | wc -l)
 FAIL_COUNT=0
-_fc=$(awk -F, '!/^#/ && ($2=="SSHFAIL" || $7=="SSHFAIL")' "$TMPCSV" | wc -l)
+# SSHFAIL and TIMEOUT both count as unreachable — combined into one stat chip
+_fc=$(awk -F, '!/^#/ && ($2 ~ /^SSHFAIL/ || $2 ~ /^TIMEOUT/)' "$TMPCSV" | wc -l)
 FAIL_COUNT=$(( ${_fc:-0} + 0 ))
 
 # =============================================================================
@@ -197,7 +198,7 @@ cat > "$OUT" << HTMLEOF
     <span class="chip-stat"><b>${VIRT_COUNT}</b> virtual</span>
     <span class="chip-stat"><b>${PHYS_COUNT}</b> physical</span>
     <span class="chip-stat"><b>${CLOUD_COUNT}</b> cloud</span>
-    <span class="chip-stat warn"><b>${FAIL_COUNT}</b> SSH failures</span>
+    <span class="chip-stat warn"><b>${FAIL_COUNT}</b> unreachable (SSH / timeout)</span>
   </div>
 
   <div class="controls">

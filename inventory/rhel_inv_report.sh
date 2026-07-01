@@ -130,10 +130,12 @@ eval "$(awk \
         total++
         loc=$21
         sub(/^Greenfield-/,"",loc)
-        if (loc=="AZCE"||loc=="AZE2") cloud++
-        else if ($2=="Virt") virt++
-        else if ($2=="Phys") phys++
-        if ($2=="SSHFAIL"||$3=="SSHFAIL") fail++
+        # SSHFAIL and TIMEOUT both count as unreachable — folded into one counter.
+        # Neither is counted toward virt/phys/cloud since they are failure states.
+        if ($2 ~ /^SSHFAIL/ || $2 ~ /^TIMEOUT/) { fail++ }
+        else if (loc=="AZCE"||loc=="AZE2") cloud++
+        else if ($2=="Virt")  virt++
+        else if ($2=="Phys")  phys++
         if ($27=="RND")  ernd++
         if ($27=="UAT")  euat++
         if ($27=="QA")   eqa++
@@ -160,7 +162,7 @@ END{
 '"$OS_AWK_PRINTF"'
 }' "$INVENTORYDATA")"
 
-log INFO "Virtual: $VIRTUAL_SERVERS  Physical: $PHYSICAL_SERVERS  Cloud: $CLOUD_SERVERS  SSH failures: $SSHFAIL"
+log INFO "Virtual: $VIRTUAL_SERVERS  Physical: $PHYSICAL_SERVERS  Cloud: $CLOUD_SERVERS  SSH/Timeout failures: $SSHFAIL"
 
 # =============================================================================
 # config.js — RHEL versions JSON fragment
@@ -398,6 +400,19 @@ RPT_Main() {
   </div>
 
   <section class="kpis">
+    <div class="kpi total">
+      <span class="ic ic-green">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="2" y="3" width="20" height="14" rx="2"/>
+          <line x1="8" y1="21" x2="16" y2="21"/>
+          <line x1="12" y1="17" x2="12" y2="21"/>
+        </svg>
+      </span>
+      <span class="meta">
+        <span class="num" data-kpi="total">${TOTAL_HOSTS}</span>
+        <span class="lab">Total managed servers</span>
+      </span>
+    </div>
     <div class="kpi">
       <span class="ic ic-blue">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -434,7 +449,7 @@ RPT_Main() {
       <span class="ic ic-red">!</span>
       <span class="meta">
         <span class="num" data-kpi="ssh">${SSHFAIL}</span>
-        <span class="lab">Hosts unreachable by SSH</span>
+        <span class="lab">Hosts unreachable (SSH)</span>
       </span>
     </div>
   </section>

@@ -384,7 +384,7 @@ a { color: inherit; }
    ============================================================================= */
 .kpis {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(5, 1fr);
   gap: 1rem;
   margin-bottom: 1.4rem;
 }
@@ -410,6 +410,14 @@ a { color: inherit; }
 .ic-violet { background: #f1ecfe; color: var(--violet); }
 .ic-teal   { background: #e3f7f4; color: var(--teal); }
 .ic-red    { background: #fdebee; color: var(--red); }
+.ic-green  { background: #e4f7ee; color: var(--green); }
+
+/* Total tile — first in the grid, slightly distinct */
+.kpi.total {
+  background: linear-gradient(135deg, #f0f4ff 0%, #e8f2ff 100%);
+  border-color: #d0ddfb;
+}
+.kpi.total .num { font-size: 2.1rem; }
 
 /* =============================================================================
    Grid helpers
@@ -691,6 +699,8 @@ body { min-height: 100vh; }
 /* =============================================================================
    Responsive
    ============================================================================= */
+@media (max-width: 1100px) { .kpis { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 720px)  { .kpis { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 920px) {
   .row.split, .row.halves { grid-template-columns: 1fr; }
   .month-grid { grid-template-columns: 1fr; gap: 1.3rem; }
@@ -754,6 +764,7 @@ cat > "${WEBDIR}/app.js" << 'APPJS_EOF'
     const el = document.querySelector(selector);
     if (el) el.textContent = value;
   };
+  set('[data-kpi="total"]',   fmt(cfg.totals.totalHosts));
   set('[data-kpi="virtual"]', fmt(cfg.totals.virtual));
   set('[data-kpi="physical"]', fmt(cfg.totals.physical));
   set('[data-kpi="cloud"]', fmt(cfg.totals.cloud));
