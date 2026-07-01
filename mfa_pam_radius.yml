@@ -126,7 +126,7 @@
         local: yes
 
     # -----------------------------------------------
-    # 6. Update SSH configuration
+    # 5. Update SSH configuration
     # -----------------------------------------------
     - name: Enable ChallengeResponseAuthentication in sshd_config
       ansible.builtin.lineinfile:
@@ -152,4 +152,4 @@
       ansible.builtin.debug:
         msg: >
           REMINDER: If not already done, provide hostname '{{ inventory_hostname }}'
-          to the Ping Identity Team to complete server registration (Step 4 in runbook).
+          to the Ping Identity Team to complete server registration (see runbook prerequisites).
