@@ -26,8 +26,7 @@ LOGFILE="${LOGDIR}/cv_publish_promote_dev_${MONTH_SHORT_LC}.log"
 LOCKFILE="/var/run/cv_publish_promote_dev.lock"
 
 EMAIL_TO="mrg-team@pnc.com"
-EMAIL_FROM="satellite-noreply@pnc.com"
-SENDMAIL="/usr/sbin/sendmail"
+MAILX="/usr/bin/mailx"
 
 RETENTION_DAYS=90
 
@@ -177,7 +176,7 @@ done
 
 ### ---------------- BUILD & SEND EMAIL (plain text) ----------------
 send_email() {
-  local subject body
+  local subject
 
   if [[ "$OVERALL_OK" -eq 1 ]]; then
     subject="Satellite CV Publish/Promote to DEV - ${MONTH_SHORT//_/ }"
@@ -185,30 +184,22 @@ send_email() {
     subject="Satellite CV Publish/Promote to DEV - ${MONTH_SHORT//_/ } - ERRORS DETECTED"
   fi
 
-  body="Satellite Content View Publish/Promote to DEV
+  local cv_summary=""
+  for cv in "${!RESULTS[@]}"; do
+    cv_summary+="${cv} - ${RESULTS[$cv]}
+$(printf '%b' "${DETAILS[$cv]}")
+"
+  done
+
+  $MAILX -s "$subject" "$EMAIL_TO" <<EOF
+Satellite Content View Publish/Promote to DEV
 Run date: ${RUN_DATE}
 Organization: ${ORG}
 Duration: ${DURATION}s
 
-"
-
-  for cv in "${!RESULTS[@]}"; do
-    body+="${cv} - ${RESULTS[$cv]}
-"
-    body+="$(printf '%b' "${DETAILS[$cv]}")
-"
-  done
-
-  body+="Full log: ${LOGFILE}
-"
-
-  {
-    echo "From: ${EMAIL_FROM}"
-    echo "To: ${EMAIL_TO}"
-    echo "Subject: ${subject}"
-    echo
-    echo "$body"
-  } | $SENDMAIL -t
+${cv_summary}
+Full log: ${LOGFILE}
+EOF
 
   log "INFO: Summary email sent to $EMAIL_TO (subject: $subject)"
 }
