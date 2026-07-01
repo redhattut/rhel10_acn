@@ -143,9 +143,8 @@ promote_cv() {
 
     log "INFO: Promoting '$cv' version $version_id -> '$env'"
     if $HAMMER content-view version promote \
-        --content-view "$cv" \
         --organization "$ORG" \
-        --version "$version_id" \
+        --id "$version_id" \
         --to-lifecycle-environment "$env" >> "$LOGFILE" 2>&1; then
       log "SUCCESS: Promoted '$cv' to '$env'"
       DETAILS["$cv"]+="  ${env}: promoted OK\n"
