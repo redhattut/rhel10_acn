@@ -9,7 +9,9 @@
 #          Runs monthly via cron; logs full hammer output and sends a
 #          plain-text email summary.
 #
-# Usage:   ./cv_publish_promote_dev.sh
+# Usage:   ./cv_publish_promote_dev.sh [--publish-only|--promote-only]
+#            (no flag = publish AND promote, default behavior)
+#
 # Cron:    0 3 1 * * /opt/scripts/cv_publish_promote_dev.sh >> /var/log/cv_publish_promote/cron.log 2>&1
 #######################################################################
 
@@ -43,6 +45,19 @@ declare -A CV_FULL=(
   ["Sat_Infrastructure"]="Library DEV RND UAT QA Prod"
 )
 ### ------------------------------------------
+
+# ---- Mode selection ----
+MODE="both"   # both | publish | promote
+
+case "${1:-}" in
+  --publish-only) MODE="publish" ;;
+  --promote-only) MODE="promote" ;;
+  "") MODE="both" ;;
+  *)
+    echo "Usage: $0 [--publish-only|--promote-only]"
+    exit 1
+    ;;
+esac
 
 mkdir -p "$LOGDIR"
 : > "$LOGFILE"
@@ -95,12 +110,18 @@ get_latest_version_id() {
   local csv
   csv=$($HAMMER --output csv content-view version list \
           --content-view "$cv" \
-          --organization "$ORG" \
-          --order "Version DESC" 2>>"$LOGFILE")
+          --organization "$ORG" 2>>"$LOGFILE")
 
   echo "$csv" | awk -F',' '
-    NR==1 { for (i=1;i<=NF;i++) if ($i=="Id") col=i }
-    NR==2 { print $col }
+    NR==1 {
+      for (i=1;i<=NF;i++) {
+        if ($i=="Id")      idcol=i
+        if ($i=="Version") vercol=i
+      }
+      next
+    }
+    { if ($vercol+0 > maxver) { maxver=$vercol+0; maxid=$idcol } }
+    END { print maxid }
   '
 }
 
@@ -112,7 +133,7 @@ promote_cv() {
   version_id=$(get_latest_version_id "$cv")
   if [[ -z "$version_id" ]]; then
     log "ERROR: Could not determine latest version id for '$cv'"
-    DETAILS["$cv"]+="  ERROR: could not retrieve version ID after publish\n"
+    DETAILS["$cv"]+="  ERROR: could not retrieve version ID\n"
     return 1
   fi
   log "INFO: Latest version id for '$cv' is $version_id"
@@ -142,18 +163,36 @@ process_cv() {
   local cv="$1"; shift
   local envs=("$@")
 
-  if publish_cv "$cv"; then
-    if promote_cv "$cv" "${envs[@]}"; then
-      RESULTS["$cv"]="SUCCESS"
-    else
-      RESULTS["$cv"]="PARTIAL FAILURE"
-    fi
-  else
-    RESULTS["$cv"]="PUBLISH FAILED"
-  fi
+  case "$MODE" in
+    publish)
+      if publish_cv "$cv"; then
+        RESULTS["$cv"]="SUCCESS"
+      else
+        RESULTS["$cv"]="PUBLISH FAILED"
+      fi
+      ;;
+    promote)
+      if promote_cv "$cv" "${envs[@]}"; then
+        RESULTS["$cv"]="SUCCESS"
+      else
+        RESULTS["$cv"]="PARTIAL FAILURE"
+      fi
+      ;;
+    both)
+      if publish_cv "$cv"; then
+        if promote_cv "$cv" "${envs[@]}"; then
+          RESULTS["$cv"]="SUCCESS"
+        else
+          RESULTS["$cv"]="PARTIAL FAILURE"
+        fi
+      else
+        RESULTS["$cv"]="PUBLISH FAILED"
+      fi
+      ;;
+  esac
 }
 
-log "===== Starting Content View Publish/Promote to DEV run ====="
+log "===== Starting Content View Publish/Promote to DEV run (mode: ${MODE}) ====="
 log "Organization: $ORG | Tag: $MONTH_SHORT"
 
 for cv in "${!CV_STANDARD[@]}"; do
@@ -176,12 +215,18 @@ done
 
 ### ---------------- BUILD & SEND EMAIL (plain text) ----------------
 send_email() {
-  local subject
+  local subject mode_label
+
+  case "$MODE" in
+    publish) mode_label="Publish Only" ;;
+    promote) mode_label="Promote Only" ;;
+    both)    mode_label="Publish/Promote" ;;
+  esac
 
   if [[ "$OVERALL_OK" -eq 1 ]]; then
-    subject="Satellite CV Publish/Promote to DEV - ${MONTH_SHORT//_/ }"
+    subject="Satellite CV ${mode_label} to DEV - ${MONTH_SHORT//_/ }"
   else
-    subject="Satellite CV Publish/Promote to DEV - ${MONTH_SHORT//_/ } - ERRORS DETECTED"
+    subject="Satellite CV ${mode_label} to DEV - ${MONTH_SHORT//_/ } - ERRORS DETECTED"
   fi
 
   local cv_summary=""
@@ -192,9 +237,10 @@ $(printf '%b' "${DETAILS[$cv]}")
   done
 
   $MAILX -s "$subject" "$EMAIL_TO" <<EOF
-Satellite Content View Publish/Promote to DEV
+Satellite Content View ${mode_label} to DEV
 Run date: ${RUN_DATE}
 Organization: ${ORG}
+Mode: ${MODE}
 Duration: ${DURATION}s
 
 ${cv_summary}
