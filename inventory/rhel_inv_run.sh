@@ -544,6 +544,7 @@ a { color: inherit; }
   padding: .4rem .85rem; border-radius: 999px;
 }
 .month-head .total b { font-size: 1rem; font-weight: 750; }
+.deploy-empty-note { color: var(--muted); font-size: .88rem; padding: .5rem 0 .25rem; }
 .month-grid { display: grid; grid-template-columns: 1fr 1.3fr; gap: 2rem; }
 .month-grid h3 { font-size: .76rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .85rem; }
 .dlist { display: flex; flex-direction: column; gap: .85rem; }

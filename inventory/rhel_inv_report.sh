@@ -909,7 +909,7 @@ _render_deploy_card() {
         <h2>${heading}</h2>
         <span class="total"><b>0</b> deployments</span>
       </div>
-      <p style="color:var(--muted);font-size:.88rem;padding:.5rem 0 .25rem">No new deployments recorded this month yet.</p>
+      <p class="deploy-empty-note">No new deployments recorded this month yet.</p>
     </section>
 EMPTYEOF
         return
