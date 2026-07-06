@@ -901,6 +901,20 @@ _render_deploy_card() {
     local heading="$1"
     local datafile="$2"
 
+    # Empty file = current month with no deployments yet — render a placeholder card
+    if [[ ! -s "$datafile" ]]; then
+        cat << EMPTYEOF
+    <section class="card">
+      <div class="month-head">
+        <h2>${heading}</h2>
+        <span class="total"><b>0</b> deployments</span>
+      </div>
+      <p style="color:var(--muted);font-size:.88rem;padding:.5rem 0 .25rem">No new deployments recorded this month yet.</p>
+    </section>
+EMPTYEOF
+        return
+    fi
+
     local total=0 virt=0 phys=0 cloud=0
     eval "$(awk 'BEGIN{t=0;v=0;p=0;c=0}
         /Microsoft_Corporation/{c++;t++;next}
@@ -1037,7 +1051,12 @@ MFEOF
         local mname; mname=$(date -d "${y}-${mpad}-01" '+%B' 2>/dev/null || echo "Month $mpad")
         local _mdtmp; _mdtmp=$(mktemp /tmp/rhel_mdata.XXXXXX)
         awk -v p="${y}-${mpad}" '$1~p' "$DEPLOYMENTDATA" > "$_mdtmp"
-        [[ -s "$_mdtmp" ]] && _render_deploy_card "${mname} ${y}" "$_mdtmp"
+        # Always render the current month (i=0) even if count is zero —
+        # without this, a month with no deployments yet is silently skipped
+        # and the previous month appears first, which is confusing.
+        if [[ -s "$_mdtmp" ]] || [[ $i -eq 0 ]]; then
+            _render_deploy_card "${mname} ${y}" "$_mdtmp"
+        fi
         rm -f "$_mdtmp"
     done
 

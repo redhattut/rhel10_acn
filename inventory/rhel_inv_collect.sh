@@ -94,10 +94,23 @@ log INFO "Error log dir: $ERRDIR"
 log SECTION "Phase 1 — Deployment scan (new host detection)"
 # =============================================================================
 
-# Auto-seed RHEL_DEPLOYMENTS.dat from legacy location if not present
-# This happens once on fresh install — after that v2 maintains its own copy.
-# In test mode we also auto-seed so deployment history is available for
-# BuildDate fallback lookups (we still never append to it in test mode).
+# RHEL_DEPLOYMENTS.dat management during parallel validation period
+# -----------------------------------------------------------------------
+# During parallel validation, the legacy script runs alongside v2 and
+# both append to their own separate dat files each night. Without syncing,
+# v2's deployment counts will always lag because the legacy script appended
+# all the historical records to the legacy dat, while v2 only sees new
+# hosts it discovers itself each night.
+#
+# Strategy:
+#   1. Auto-seed: if v2 dat doesn't exist yet, copy the full legacy dat.
+#   2. Nightly sync: merge any records in the legacy dat that aren't in v2's
+#      dat yet (identified by hostname field $2). This keeps v2 current with
+#      all deployments the legacy script is still recording during the
+#      parallel period, without duplicating records v2 already has.
+#      Safe to leave enabled after cutover — once legacy stops writing,
+#      there will simply be no new records to merge.
+#
 LEGACY_DEPLOY="/usr/local/pnc/bin/RHEL_Inventory/data/RHEL_DEPLOYMENTS.dat"
 if [[ ! -f "$DEPLOYMENTDATA" ]]; then
     if [[ -f "$LEGACY_DEPLOY" ]]; then
@@ -108,6 +121,20 @@ if [[ ! -f "$DEPLOYMENTDATA" ]]; then
     else
         log WARN "DEPLOYMENTDATA not found and legacy source not available: $LEGACY_DEPLOY"
         log WARN "BuildDate fallback for legacy hosts will be n/a until manually seeded"
+    fi
+elif [[ -f "$LEGACY_DEPLOY" && "${TEST_MODE:-0}" -eq 0 ]]; then
+    # Nightly sync — add any records in legacy dat not yet in v2 dat.
+    # Uses hostname ($2) as the dedup key — same as rhel_deploy_scan.sh.
+    _sync_added=$(awk '
+        NR==FNR { known[$2]=1; next }
+        !($2 in known) && $1 !~ /^unknown/ && NF >= 4
+    ' "$DEPLOYMENTDATA" "$LEGACY_DEPLOY" \
+        | tee -a "$DEPLOYMENTDATA" \
+        | wc -l)
+    if [[ $_sync_added -gt 0 ]]; then
+        log INFO "Legacy dat sync: $_sync_added new deployment record(s) merged from $LEGACY_DEPLOY"
+    else
+        log INFO "Legacy dat sync: v2 dat is current — no new records from legacy"
     fi
 fi
 
