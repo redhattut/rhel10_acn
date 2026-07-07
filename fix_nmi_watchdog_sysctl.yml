@@ -1,0 +1,298 @@
+---
+# ==============================================================================
+# Playbook: fix_nmi_watchdog_sysctl.yml
+#
+# Purpose:
+#   Remediates systemd-sysctl.service failures caused by a plain
+#   "kernel.nmi_watchdog = 0" line in sysctl config, by converting it to the
+#   error-tolerant hyphen-prefixed form: "-kernel.nmi_watchdog = 0"
+#
+# Background:
+#   - Case 04187913: fleet-wide "kernel.nmi_watchdog = 0" was added to prevent
+#     VMware/vPMU-related spurious kernel panics/reboots.
+#   - Case 04485213: on hosts where the hypervisor doesn't expose vPMU
+#     counters, the kernel permanently disables the watchdog at boot, so
+#     systemd-sysctl fails trying to write "0" to it (Unknown error 524).
+#   - Fix: prefix the parameter with "-" so systemd-sysctl ignores write
+#     errors for that parameter specifically, while still applying it on
+#     hosts where it IS supported. This preserves the original fix while
+#     resolving the new one.
+#
+# Logic per host:
+#   1. Check OS major version against target_rhel_version filter (8, 9, both)
+#   2. Search /etc/sysctl.conf AND all /etc/sysctl.d/*.conf files for any
+#      existing kernel.nmi_watchdog entry (active, commented, or already
+#      hyphenated)
+#   3. Cases:
+#      a. Already hyphenated (-kernel.nmi_watchdog = 0)  -> no action, compliant
+#      b. Active uncommented (kernel.nmi_watchdog = 0)   -> rewrite with hyphen
+#      c. Commented out (#kernel.nmi_watchdog = 0)        -> uncomment + hyphen
+#      d. Not found anywhere                               -> add new drop-in
+#         file /etc/sysctl.d/99-nmi-watchdog.conf with the hyphenated line
+#   4. Restart systemd-sysctl.service and verify it's active
+#   5. Report per-host summary of what action was taken
+#
+# Usage:
+#   ansible-playbook fix_nmi_watchdog_sysctl.yml -i inventory \
+#       -e "target_rhel_version=8"     # RHEL 8 only
+#       -e "target_rhel_version=9"     # RHEL 9 only
+#       -e "target_rhel_version=both"  # both (default)
+#
+#   Add --check --diff for a dry run first (recommended before fleet rollout).
+# ==============================================================================
+
+- name: Remediate kernel.nmi_watchdog sysctl / systemd-sysctl.service failures
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    # Which RHEL major version(s) to target: "8", "9", or "both"
+    target_rhel_version: "both"
+
+    # The setting we care about
+    nmi_param: "kernel.nmi_watchdog"
+    nmi_value: "0"
+    nmi_line_hyphenated: "-kernel.nmi_watchdog = 0"
+
+    # If the parameter isn't found anywhere, it gets appended directly to
+    # /etc/sysctl.conf (created if it doesn't already exist)
+    nmi_target_file: "/etc/sysctl.conf"
+
+    # Files to search: main sysctl.conf + everything in sysctl.d/
+    sysctl_search_paths:
+      - /etc/sysctl.conf
+      - /etc/sysctl.d
+
+  pre_tasks:
+
+    - name: Determine RHEL major version for this host
+      ansible.builtin.set_fact:
+        rhel_major: "{{ ansible_distribution_major_version }}"
+
+    - name: Determine if this host is in scope based on target_rhel_version
+      ansible.builtin.set_fact:
+        host_in_scope: >-
+          {{
+            (target_rhel_version == "both") or
+            (target_rhel_version == rhel_major)
+          }}
+
+    - name: Skip out-of-scope hosts
+      ansible.builtin.meta: end_host
+      when:
+        - ansible_distribution == "RedHat"
+        - not host_in_scope
+
+    - name: Fail fast on non-RHEL hosts (safety check)
+      ansible.builtin.fail:
+        msg: >-
+          This playbook targets Red Hat Enterprise Linux only.
+          Detected distribution: {{ ansible_distribution }}.
+      when: ansible_distribution != "RedHat"
+
+  tasks:
+
+    # --------------------------------------------------------------------
+    # STEP 1: Discover all sysctl config files that could contain the param
+    # --------------------------------------------------------------------
+    - name: Find candidate sysctl.d config files
+      ansible.builtin.find:
+        paths: /etc/sysctl.d
+        patterns: "*.conf"
+        recurse: false
+      register: sysctl_d_files
+
+    - name: Check if /etc/sysctl.conf exists
+      ansible.builtin.stat:
+        path: /etc/sysctl.conf
+      register: sysctl_conf_stat
+
+    - name: Build combined list of files to search
+      ansible.builtin.set_fact:
+        all_sysctl_files: >-
+          {{
+            (sysctl_conf_stat.stat.exists | ternary(['/etc/sysctl.conf'], []))
+            + (sysctl_d_files.files | map(attribute='path') | list)
+          }}
+
+    # --------------------------------------------------------------------
+    # STEP 2: Search each file for existing nmi_watchdog entries
+    #         (active, commented, or already hyphenated)
+    # --------------------------------------------------------------------
+    - name: Search files for any existing kernel.nmi_watchdog reference
+      ansible.builtin.command:
+        cmd: >-
+          grep -nE '^[[:space:]]*[#;-]?[[:space:]]*kernel\.nmi_watchdog[[:space:]]*='
+          {{ item }}
+      loop: "{{ all_sysctl_files }}"
+      register: nmi_grep_results
+      changed_when: false
+      failed_when: false  # grep returns rc=1 when no match; that's fine
+
+    - name: Build fact list of files/lines where the parameter was found
+      ansible.builtin.set_fact:
+        nmi_matches: >-
+          {{
+            nmi_matches | default([]) + [
+              {
+                'file': item.item,
+                'lines': item.stdout_lines
+              }
+            ]
+          }}
+      loop: "{{ nmi_grep_results.results }}"
+      when: item.stdout_lines | length > 0
+
+    - name: Determine overall state of the nmi_watchdog setting
+      ansible.builtin.set_fact:
+        nmi_already_hyphenated: >-
+          {{
+            (nmi_matches | default([]))
+            | map(attribute='lines')
+            | flatten
+            | select('search', '^\s*\d+:\s*-\s*kernel\.nmi_watchdog')
+            | list
+            | length > 0
+          }}
+        nmi_active_uncommented: >-
+          {{
+            (nmi_matches | default([]))
+            | map(attribute='lines')
+            | flatten
+            | select('search', '^\s*\d+:\s*kernel\.nmi_watchdog')
+            | list
+            | length > 0
+          }}
+        nmi_commented_out: >-
+          {{
+            (nmi_matches | default([]))
+            | map(attribute='lines')
+            | flatten
+            | select('search', '^\s*\d+:\s*[#;]\s*kernel\.nmi_watchdog')
+            | list
+            | length > 0
+          }}
+        nmi_found_anywhere: "{{ (nmi_matches | default([])) | length > 0 }}"
+
+    # --------------------------------------------------------------------
+    # STEP 3a: Already compliant -> do nothing, just record it
+    # --------------------------------------------------------------------
+    - name: Report - setting already hyphenated (no action needed)
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: kernel.nmi_watchdog already hyphenated
+          in {{ (nmi_matches | default([])) | map(attribute='file') | list }}.
+          No changes required.
+      when: nmi_already_hyphenated
+
+    # --------------------------------------------------------------------
+    # STEP 3b: Active uncommented line found -> rewrite with hyphen
+    #          (covers "kernel.nmi_watchdog = 0" and "kernel.nmi_watchdog=0")
+    # --------------------------------------------------------------------
+    - name: Rewrite active uncommented kernel.nmi_watchdog line(s) with hyphen prefix
+      ansible.builtin.replace:
+        path: "{{ item.file }}"
+        regexp: '^\s*kernel\.nmi_watchdog\s*=\s*0\s*$'
+        replace: '-kernel.nmi_watchdog = 0'
+        backup: true
+      loop: "{{ nmi_matches | default([]) }}"
+      when:
+        - nmi_active_uncommented
+        - not nmi_already_hyphenated
+      register: nmi_rewrite_active
+      notify: restart systemd-sysctl
+
+    # --------------------------------------------------------------------
+    # STEP 3c: Commented-out line found -> uncomment AND add hyphen
+    #          (covers "#kernel.nmi_watchdog = 0", "# kernel.nmi_watchdog=0",
+    #          and ";kernel.nmi_watchdog = 0")
+    # --------------------------------------------------------------------
+    - name: Uncomment and hyphenate commented-out kernel.nmi_watchdog line(s)
+      ansible.builtin.replace:
+        path: "{{ item.file }}"
+        regexp: '^\s*[#;]\s*kernel\.nmi_watchdog\s*=\s*0\s*$'
+        replace: '-kernel.nmi_watchdog = 0'
+        backup: true
+      loop: "{{ nmi_matches | default([]) }}"
+      when:
+        - nmi_commented_out
+        - not nmi_already_hyphenated
+        - not nmi_active_uncommented
+      register: nmi_rewrite_commented
+      notify: restart systemd-sysctl
+
+    # --------------------------------------------------------------------
+    # STEP 3d: Not found anywhere -> append hyphenated line directly to
+    #          /etc/sysctl.conf (created if it doesn't already exist)
+    # --------------------------------------------------------------------
+    - name: Add kernel.nmi_watchdog (hyphenated) to /etc/sysctl.conf when not found anywhere
+      ansible.builtin.lineinfile:
+        path: "{{ nmi_target_file }}"
+        line: "{{ nmi_line_hyphenated }}"
+        create: true
+        owner: root
+        group: root
+        mode: "0644"
+        insertafter: EOF
+        backup: true
+      when: not nmi_found_anywhere
+      register: nmi_new_file
+      notify: restart systemd-sysctl
+
+    # --------------------------------------------------------------------
+    # STEP 4: Force handler to run now so we can verify in this same play
+    # --------------------------------------------------------------------
+    - name: Flush handlers to apply sysctl changes immediately
+      ansible.builtin.meta: flush_handlers
+
+    # --------------------------------------------------------------------
+    # STEP 5: Verify systemd-sysctl.service is healthy post-change
+    # --------------------------------------------------------------------
+    - name: Gather systemd-sysctl.service state
+      ansible.builtin.systemd:
+        name: systemd-sysctl.service
+      register: sysctl_service_state
+
+    - name: Assert systemd-sysctl.service is not in a failed state
+      ansible.builtin.assert:
+        that:
+          - sysctl_service_state.status.ActiveState != "failed"
+        fail_msg: >-
+          {{ inventory_hostname }}: systemd-sysctl.service is STILL failed
+          after remediation. Manual investigation required.
+        success_msg: >-
+          {{ inventory_hostname }}: systemd-sysctl.service is healthy
+          (ActiveState={{ sysctl_service_state.status.ActiveState }}).
+
+    # --------------------------------------------------------------------
+    # STEP 6: Per-host summary for reporting / AWX job output
+    # --------------------------------------------------------------------
+    - name: Build action-taken summary
+      ansible.builtin.set_fact:
+        nmi_action_summary: >-
+          {%- if nmi_already_hyphenated -%}
+          No action - already hyphenated
+          {%- elif nmi_active_uncommented -%}
+          Rewrote active uncommented line with hyphen prefix
+          {%- elif nmi_commented_out -%}
+          Uncommented and hyphenated existing line
+          {%- elif not nmi_found_anywhere -%}
+          Added new hyphenated entry to {{ nmi_target_file }}
+          {%- else -%}
+          Unhandled state - review manually
+          {%- endif -%}
+
+    - name: Print per-host summary
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ inventory_hostname }}"
+          - "RHEL version: {{ rhel_major }}"
+          - "Action taken: {{ nmi_action_summary | trim }}"
+          - "systemd-sysctl.service ActiveState: {{ sysctl_service_state.status.ActiveState }}"
+
+  handlers:
+    - name: restart systemd-sysctl
+      ansible.builtin.systemd:
+        name: systemd-sysctl.service
+        state: restarted
