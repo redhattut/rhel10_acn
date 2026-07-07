@@ -25,7 +25,7 @@
 # below creates a proper OUD+AD sssd.conf from the template.
 - name: Handle legacy pure-AD host - back up and remove AD-only sssd.conf
   when:
-    - dual_auth_sssd_conf_stat.stat.exists
+    - dual_auth_sssd_conf_stat.stat is defined and dual_auth_sssd_conf_stat.stat.exists
     - dual_auth_is_legacy_ad_only | default(false) | bool
   block:
     - name: Back up existing AD-only sssd.conf before OUD+AD migration
@@ -51,18 +51,18 @@
     path: /etc/sssd/sssd.conf
     regexp: '^\[domain/default\]'
     replace: '[domain/OUD]'
-  when: dual_auth_sssd_conf_stat.stat.exists
+  when: dual_auth_sssd_conf_stat.stat is defined and dual_auth_sssd_conf_stat.stat.exists
 
 - name: Rename bare "default" domain reference to "OUD" in existing sssd.conf
   ansible.builtin.replace:
     path: /etc/sssd/sssd.conf
     regexp: '(domains\s*=.*?)\bdefault\b'
     replace: '\1OUD'
-  when: dual_auth_sssd_conf_stat.stat.exists
+  when: dual_auth_sssd_conf_stat.stat is defined and dual_auth_sssd_conf_stat.stat.exists
 
 # ── New build path (generate from scratch) ───────────────────────────────────
 - name: Generate sssd.conf from scratch for new build
-  when: not dual_auth_sssd_conf_stat.stat.exists
+  when: dual_auth_sssd_conf_stat.stat is not defined or not dual_auth_sssd_conf_stat.stat.exists
   block:
     - name: Validate OUD admin password is set for this environment
       ansible.builtin.assert:
