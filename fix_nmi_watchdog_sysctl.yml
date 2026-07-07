@@ -20,23 +20,28 @@
 #
 # Logic per host:
 #   1. Check OS major version against target_rhel_version filter (8, 9, both)
-#   2. Search /etc/sysctl.conf AND all /etc/sysctl.d/*.conf files for any
+#   2. Check whether the host is a VM (ansible_virtualization_role == guest).
+#      Bare-metal hosts are skipped entirely - this issue is hypervisor-
+#      specific and doesn't apply to physical hardware.
+#   3. Search /etc/sysctl.conf AND all /etc/sysctl.d/*.conf files for any
 #      existing kernel.nmi_watchdog entry (active, commented, or already
 #      hyphenated)
-#   3. Cases:
+#   4. Cases:
 #      a. Already hyphenated (-kernel.nmi_watchdog = 0)  -> no action, compliant
 #      b. Active uncommented (kernel.nmi_watchdog = 0)   -> rewrite with hyphen
 #      c. Commented out (#kernel.nmi_watchdog = 0)        -> uncomment + hyphen
-#      d. Not found anywhere                               -> add new drop-in
-#         file /etc/sysctl.d/99-nmi-watchdog.conf with the hyphenated line
-#   4. Restart systemd-sysctl.service and verify it's active
-#   5. Report per-host summary of what action was taken
+#      d. Not found anywhere                               -> append hyphenated
+#         line directly to /etc/sysctl.conf
+#   5. Restart systemd-sysctl.service (only if a change was made - handled
+#      via notify/handler + flush_handlers) and verify it's active
+#   6. Report per-host summary of what action was taken
 #
 # Usage:
 #   ansible-playbook fix_nmi_watchdog_sysctl.yml -i inventory \
 #       -e "target_rhel_version=8"     # RHEL 8 only
 #       -e "target_rhel_version=9"     # RHEL 9 only
 #       -e "target_rhel_version=both"  # both (default)
+#       -e "skip_vm_check=true"        # bypass VM-only gate (not recommended)
 #
 #   Add --check --diff for a dry run first (recommended before fleet rollout).
 # ==============================================================================
@@ -64,6 +69,14 @@
       - /etc/sysctl.conf
       - /etc/sysctl.d
 
+    # This remediation only applies to virtual machines - the underlying
+    # issue is caused by hypervisors not exposing vPMU counters to guests.
+    # Bare-metal hosts have no such limitation and don't need this change.
+    # Set to true to bypass the VM check (not recommended - for edge cases
+    # only, e.g. a physical host you've confirmed needs this for another
+    # reason).
+    skip_vm_check: false
+
   pre_tasks:
 
     - name: Determine RHEL major version for this host
@@ -90,6 +103,31 @@
           This playbook targets Red Hat Enterprise Linux only.
           Detected distribution: {{ ansible_distribution }}.
       when: ansible_distribution != "RedHat"
+
+    - name: Determine if this host is a virtual machine
+      ansible.builtin.set_fact:
+        is_virtual_machine: "{{ ansible_virtualization_role | default('') == 'guest' }}"
+
+    - name: Report virtualization detection facts for this host
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: virtualization_type=
+          {{ ansible_virtualization_type | default('unknown') }},
+          virtualization_role=
+          {{ ansible_virtualization_role | default('unknown') }},
+          is_virtual_machine={{ is_virtual_machine }}
+
+    - name: Skip bare-metal hosts (this remediation only applies to VMs)
+      ansible.builtin.meta: end_host
+      when:
+        - not is_virtual_machine
+        - not skip_vm_check
+      # Rationale: the systemd-sysctl failure is caused by hypervisors not
+      # exposing vPMU performance counters to guests, so the kernel disables
+      # the NMI watchdog at boot and any attempt to write to it via sysctl
+      # errors out. Bare-metal hosts have direct hardware access to these
+      # counters and don't hit this failure mode, so there's nothing to fix
+      # there - leave their sysctl config untouched.
 
   tasks:
 
@@ -288,6 +326,7 @@
         msg:
           - "Host: {{ inventory_hostname }}"
           - "RHEL version: {{ rhel_major }}"
+          - "Virtual machine: {{ is_virtual_machine }} (type: {{ ansible_virtualization_type | default('unknown') }})"
           - "Action taken: {{ nmi_action_summary | trim }}"
           - "systemd-sysctl.service ActiveState: {{ sysctl_service_state.status.ActiveState }}"
 
