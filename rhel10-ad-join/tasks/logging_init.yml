@@ -1,0 +1,45 @@
+---
+# Sets up the per-run PNC dual-auth log. Imported exactly once, at the very
+# start of tasks/main.yml. Produces one timestamped log file per run under
+# /var/log/pnc_dual_auth/ on the target host - no jumpbox dependency, same
+# pattern as everything else in this role.
+#
+# How other task files add to this log:
+#   1. Append lines to the dual_auth_log_lines fact, e.g.:
+#        - name: Log something
+#          ansible.builtin.set_fact:
+#            dual_auth_log_lines: "{{ dual_auth_log_lines + ['my log line'] }}"
+#   2. Flush to disk with:
+#        - ansible.builtin.import_tasks: log_flush.yml
+#      Flushing after each stage means a run that fails partway through still
+#      leaves a log on disk with everything up to the failure - not just
+#      whatever happened to be visible in AAP job output before it aged out.
+#
+# No retention/cleanup here by design - log rotation is handled separately.
+
+- name: Ensure PNC dual-auth log directory exists
+  ansible.builtin.file:
+    path: /var/log/pnc_dual_auth
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Get run timestamp for log file naming
+  ansible.builtin.command: date -u +%Y%m%d-%H%M%S
+  register: dual_auth_run_timestamp_raw
+  changed_when: false
+
+- name: Set dual-auth log file path and initialize line buffer for this run
+  ansible.builtin.set_fact:
+    dual_auth_log_file: "/var/log/pnc_dual_auth/{{ dual_auth_lifecycle_action }}_{{ dual_auth_run_timestamp_raw.stdout }}.log"
+    dual_auth_log_lines:
+      - "=== PNC Dual-Auth Lifecycle Log ==="
+      - "Host:              {{ inventory_hostname }}"
+      - "Run started (UTC): {{ dual_auth_run_timestamp_raw.stdout }}"
+      - "Lifecycle action:  {{ dual_auth_lifecycle_action }}"
+      - "AAP job ID:        {{ tower_job_id | default(awx_job_id) | default('n/a') }}"
+      - ""
+
+- name: Write initial log header to disk
+  ansible.builtin.import_tasks: log_flush.yml

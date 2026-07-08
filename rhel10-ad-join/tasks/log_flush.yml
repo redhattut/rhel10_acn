@@ -1,0 +1,15 @@
+---
+# Persists the current dual_auth_log_lines buffer to dual_auth_log_file.
+# Safe to import repeatedly and often - each flush rewrites the file with
+# everything accumulated in the fact so far, so a run that fails partway
+# through still leaves a complete log of everything up to the failure.
+- name: Persist dual-auth log to disk
+  ansible.builtin.copy:
+    dest: "{{ dual_auth_log_file }}"
+    content: "{{ dual_auth_log_lines | join('\n') }}\n"
+    owner: root
+    group: root
+    mode: "0640"
+  when:
+    - dual_auth_log_file is defined
+    - dual_auth_log_lines is defined

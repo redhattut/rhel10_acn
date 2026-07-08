@@ -11,9 +11,25 @@
 #   convert_ad_only - convert existing OUD+AD host to AD-only auth
 #   recreate_keytab - rebuild and restage the AD bind keytab only, restart sssd
 #   recreate_sssd   - regenerate /etc/sssd/sssd.conf with a fresh authtok, restart sssd
+#
+# Every run writes a timestamped log to /var/log/pnc_dual_auth/ on the target
+# host (see logging_init.yml / log_flush.yml). This entry point logs a
+# start/complete line around every stage so the whole lifecycle run has a
+# trail, in addition to the detailed home-dir before/after logging inside
+# manage_homedirs.yml.
+
+- name: Initialize per-run dual-auth log
+  ansible.builtin.import_tasks: logging_init.yml
 
 - name: Gather environment facts (dual_auth_target_env, domain, realm, RHEL major, OU)
   ansible.builtin.import_tasks: facts.yml
+
+- name: Log environment facts
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + [
+      'Target env:        ' ~ (dual_auth_target_env | default('n/a')),
+      'Domain/Realm:      ' ~ (dual_auth_domain | default('n/a')) ~ ' / ' ~ (dual_auth_realm | default('n/a')),
+      ''] }}"
 
 - name: Run pre-flight validation checks
   ansible.builtin.import_tasks: preflight.yml
@@ -21,9 +37,32 @@
 - name: Evaluate current AD join health
   ansible.builtin.import_tasks: health_check.yml
 
+- name: Log preflight/health results
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + [
+      'Currently healthy: ' ~ (dual_auth_healthy | default(false) | string),
+      'OUD-only host:     ' ~ (dual_auth_is_oud_only | default(false) | string),
+      'Legacy AD-only:    ' ~ (dual_auth_is_legacy_ad_only | default(false) | string),
+      ''] }}"
+
+- name: Flush log after preflight
+  ansible.builtin.import_tasks: log_flush.yml
+
+- name: Log stage start - generate_oud_config
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + ['[stage] generate_oud_config - starting'] }}"
+  when: dual_auth_lifecycle_action == 'configure'
+
 - name: Ensure OUD sssd.conf is in place (generate for new builds, rename for existing)
   ansible.builtin.import_tasks: generate_oud_config.yml
   when: dual_auth_lifecycle_action == 'configure'
+
+- name: Log stage start - configure_auth
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + ['[stage] configure_auth - starting'] }}"
+  when:
+    - dual_auth_lifecycle_action in ['configure', 'rejoin']
+    - not (dual_auth_lifecycle_action == 'rejoin' and dual_auth_is_legacy_ad_only | default(false) | bool)
 
 - name: Apply PNC auth configuration (sssd conf.d / krb5 / authselect / sudoers)
   ansible.builtin.import_tasks: configure_auth.yml
@@ -31,18 +70,62 @@
     - dual_auth_lifecycle_action in ['configure', 'rejoin']
     - not (dual_auth_lifecycle_action == 'rejoin' and dual_auth_is_legacy_ad_only | default(false) | bool)
 
+- name: Log stage complete - configure_auth
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + ['[stage] configure_auth - complete'] }}"
+  when:
+    - dual_auth_lifecycle_action in ['configure', 'rejoin']
+    - not (dual_auth_lifecycle_action == 'rejoin' and dual_auth_is_legacy_ad_only | default(false) | bool)
+
+- name: Flush log after configure_auth
+  ansible.builtin.import_tasks: log_flush.yml
+
+- name: Log stage start - join_ad
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + ['[stage] join_ad - starting'] }}"
+  when:
+    - dual_auth_lifecycle_action == 'configure'
+    - not (dual_auth_healthy | default(false)) or dual_auth_force_configure
+
 - name: Join server to Active Directory if not already healthily joined
   ansible.builtin.import_tasks: join_ad.yml
   when:
     - dual_auth_lifecycle_action == 'configure'
     - not (dual_auth_healthy | default(false)) or dual_auth_force_configure
 
+- name: Log stage complete - join_ad
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + ['[stage] join_ad - complete'] }}"
+  when:
+    - dual_auth_lifecycle_action == 'configure'
+    - not (dual_auth_healthy | default(false)) or dual_auth_force_configure
+
+- name: Log stage start - rejoin
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + ['[stage] rejoin - starting'] }}"
+  when: dual_auth_lifecycle_action == 'rejoin'
+
 - name: Forced leave-and-rejoin
   ansible.builtin.import_tasks: rejoin.yml
   when: dual_auth_lifecycle_action == 'rejoin'
 
+- name: Log stage complete - rejoin
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + ['[stage] rejoin - complete'] }}"
+  when: dual_auth_lifecycle_action == 'rejoin'
+
+- name: Log stage start - leave_ad
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + ['[stage] leave_ad - starting'] }}"
+  when: dual_auth_lifecycle_action == 'leave_ad'
+
 - name: Full decommission - leave AD and restore pre-join state
   ansible.builtin.import_tasks: leave_ad.yml
+  when: dual_auth_lifecycle_action == 'leave_ad'
+
+- name: Log stage complete - leave_ad
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + ['[stage] leave_ad - complete'] }}"
   when: dual_auth_lifecycle_action == 'leave_ad'
 
 - name: Warn and skip convert_ad_only - host is already AD-only
@@ -52,14 +135,45 @@
     - dual_auth_lifecycle_action == 'convert_ad_only'
     - dual_auth_is_legacy_ad_only | default(false) | bool
 
+- name: Log skip - convert_ad_only not applicable
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + ['[stage] convert_ad_only - skipped (already legacy AD-only)'] }}"
+  when:
+    - dual_auth_lifecycle_action == 'convert_ad_only'
+    - dual_auth_is_legacy_ad_only | default(false) | bool
+
+- name: Log stage start - convert_ad_only
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + ['[stage] convert_ad_only - starting'] }}"
+  when:
+    - dual_auth_lifecycle_action == 'convert_ad_only'
+    - not (dual_auth_is_legacy_ad_only | default(false) | bool)
+
 - name: Convert from OUD+AD dual auth to AD-only
   ansible.builtin.import_tasks: convert_ad_only.yml
   when:
     - dual_auth_lifecycle_action == 'convert_ad_only'
     - not (dual_auth_is_legacy_ad_only | default(false) | bool)
 
+- name: Log stage complete - convert_ad_only
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + ['[stage] convert_ad_only - complete'] }}"
+  when:
+    - dual_auth_lifecycle_action == 'convert_ad_only'
+    - not (dual_auth_is_legacy_ad_only | default(false) | bool)
+
+- name: Log stage start - recreate_keytab
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + ['[stage] recreate_keytab - starting'] }}"
+  when: dual_auth_lifecycle_action == 'recreate_keytab'
+
 - name: Rebuild and restage the AD bind keytab only
   ansible.builtin.import_tasks: recreate_keytab.yml
+  when: dual_auth_lifecycle_action == 'recreate_keytab'
+
+- name: Log stage complete - recreate_keytab
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + ['[stage] recreate_keytab - complete'] }}"
   when: dual_auth_lifecycle_action == 'recreate_keytab'
 
 - name: Warn and skip recreate_sssd - no OUD sssd.conf on legacy AD-only host
@@ -69,8 +183,36 @@
     - dual_auth_lifecycle_action == 'recreate_sssd'
     - dual_auth_is_legacy_ad_only | default(false) | bool
 
+- name: Log skip - recreate_sssd not applicable
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + ['[stage] recreate_sssd - skipped (legacy AD-only host)'] }}"
+  when:
+    - dual_auth_lifecycle_action == 'recreate_sssd'
+    - dual_auth_is_legacy_ad_only | default(false) | bool
+
+- name: Log stage start - recreate_sssd
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + ['[stage] recreate_sssd - starting'] }}"
+  when:
+    - dual_auth_lifecycle_action == 'recreate_sssd'
+    - not (dual_auth_is_legacy_ad_only | default(false) | bool)
+
 - name: Regenerate sssd.conf with a fresh authtok
   ansible.builtin.import_tasks: recreate_sssd.yml
   when:
     - dual_auth_lifecycle_action == 'recreate_sssd'
     - not (dual_auth_is_legacy_ad_only | default(false) | bool)
+
+- name: Log stage complete - recreate_sssd
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + ['[stage] recreate_sssd - complete'] }}"
+  when:
+    - dual_auth_lifecycle_action == 'recreate_sssd'
+    - not (dual_auth_is_legacy_ad_only | default(false) | bool)
+
+- name: Log run completion footer
+  ansible.builtin.set_fact:
+    dual_auth_log_lines: "{{ dual_auth_log_lines + ['', '=== Run completed ==='] }}"
+
+- name: Final log flush
+  ansible.builtin.import_tasks: log_flush.yml

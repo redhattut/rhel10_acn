@@ -26,6 +26,11 @@
 # The dict cmd: form is not free-form parsed, so it is not exposed to this
 # at all. Keep using cmd: for any new shell/command task in this file.
 #
+# Every action here is logged to dual_auth_log_lines (see logging_init.yml /
+# log_flush.yml, set up once at the top of tasks/main.yml) with a before
+# snapshot, a line per directory acted on, and an after snapshot. Flushed to
+# /var/log/pnc_dual_auth/<action>_<timestamp>.log at the end of this file.
+#
 # Callers set dual_auth_homedir_action before importing this file:
 #   rename_to_oud   - configure on OUD-only host migrating to OUD+AD
 #   move_ad_into_oud - leave_ad when both *OUD and AD dirs exist
@@ -37,6 +42,11 @@
 - name: Rename OUD home dirs to *OUD (configure on OUD-only host)
   when: dual_auth_homedir_action == 'rename_to_oud'
   block:
+    - name: Log start of rename_to_oud
+      ansible.builtin.set_fact:
+        dual_auth_log_lines: "{{ dual_auth_log_lines + [
+          '--- homedirs: rename_to_oud ---'] }}"
+
     - name: Find candidate home dirs (no OUD suffix)
       ansible.builtin.shell:
         cmd: |
@@ -54,6 +64,13 @@
       register: dual_auth_homedir_candidates
       changed_when: false
 
+    - name: Log BEFORE candidates found
+      ansible.builtin.set_fact:
+        dual_auth_log_lines: "{{ dual_auth_log_lines + [
+          'BEFORE - candidates with no OUD suffix (uid > 2000000):']
+          + (dual_auth_homedir_candidates.stdout_lines if dual_auth_homedir_candidates.stdout_lines | length > 0 else ['(none found)'])
+          + [''] }}"
+
     - name: Rename each candidate to *OUD if *OUD does not already exist
       ansible.builtin.shell:
         cmd: |
@@ -69,6 +86,17 @@
       register: dual_auth_rename_result
       changed_when: "'moved' in dual_auth_rename_result.stdout"
 
+    - name: Log rename actions
+      ansible.builtin.set_fact:
+        dual_auth_log_lines: "{{ dual_auth_log_lines + ['ACTIONS:']
+          + (dual_auth_rename_result.results | map(attribute='item') | zip(dual_auth_rename_result.results | map(attribute='stdout'))
+             | map('join', ' -> renamed to *OUD: ') | list
+             if dual_auth_rename_result.results | default([]) | length > 0 else ['(nothing to rename)'])
+          + [''] }}"
+
+    - name: Flush log after rename_to_oud
+      ansible.builtin.import_tasks: log_flush.yml
+
 # ── leave_ad: both *OUD and AD dir exist ─────────────────────────────────────
 # Move AD home dir inside the OUD dir as *OUD/sa04192AD.
 # If only the AD dir exists (no *OUD counterpart), leave it — it goes numeric
@@ -76,6 +104,11 @@
 - name: Move AD home dirs inside existing OUD dirs (leave_ad)
   when: dual_auth_homedir_action == 'move_ad_into_oud'
   block:
+    - name: Log start of move_ad_into_oud
+      ansible.builtin.set_fact:
+        dual_auth_log_lines: "{{ dual_auth_log_lines + [
+          '--- homedirs: move_ad_into_oud ---'] }}"
+
     - name: Find AD home dirs that have a matching *OUD counterpart
       ansible.builtin.shell:
         cmd: |
@@ -94,6 +127,13 @@
       register: dual_auth_ad_to_move
       changed_when: false
 
+    - name: Log BEFORE AD dirs with an OUD counterpart
+      ansible.builtin.set_fact:
+        dual_auth_log_lines: "{{ dual_auth_log_lines + [
+          'BEFORE - AD dirs with a matching *OUD counterpart:']
+          + (dual_auth_ad_to_move.stdout_lines if dual_auth_ad_to_move.stdout_lines | length > 0 else ['(none found)'])
+          + [''] }}"
+
     - name: Move AD dir inside OUD dir as *OUD/basenameAD
       ansible.builtin.shell:
         cmd: |
@@ -110,12 +150,51 @@
       register: dual_auth_move_ad_result
       changed_when: "'moved' in dual_auth_move_ad_result.stdout"
 
+    - name: Log move_ad_into_oud actions
+      ansible.builtin.set_fact:
+        dual_auth_log_lines: "{{ dual_auth_log_lines + ['ACTIONS:']
+          + (dual_auth_move_ad_result.results | map(attribute='item') | zip(dual_auth_move_ad_result.results | map(attribute='stdout'))
+             | map('join', ' -> moved inside *OUD dir: ') | list
+             if dual_auth_move_ad_result.results | default([]) | length > 0 else ['(nothing to move)'])
+          + [''] }}"
+
+    - name: Flush log after move_ad_into_oud
+      ansible.builtin.import_tasks: log_flush.yml
+
 # ── convert_ad_only: move *OUD dir inside AD dir ─────────────────────────────
 # Move /home/sa04192OUD inside /home/sa04192 as sa04192/sa04192OUD for backup.
 # Ownership will be corrected by sssd (AD user) naturally.
 - name: Move OUD dirs inside AD dirs (convert_ad_only)
   when: dual_auth_homedir_action == 'move_oud_into_ad'
   block:
+    - name: Log start of move_oud_into_ad
+      ansible.builtin.set_fact:
+        dual_auth_log_lines: "{{ dual_auth_log_lines + [
+          '--- homedirs: move_oud_into_ad ---'] }}"
+
+    - name: Snapshot *OUD home dirs before any action
+      ansible.builtin.shell:
+        cmd: |
+          for dir in /home/*OUD/; do
+            dir="${dir%/}"
+            [ ! -d "$dir" ] && continue
+            uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
+            gid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $4}')
+            [ -z "$uid" ] && continue
+            if [ "$uid" -gt 2000000 ]; then
+              echo "$uid $gid $dir"
+            fi
+          done
+      register: dual_auth_oud_before_snapshot
+      changed_when: false
+
+    - name: Log BEFORE snapshot
+      ansible.builtin.set_fact:
+        dual_auth_log_lines: "{{ dual_auth_log_lines + [
+          'BEFORE (managed *OUD home dirs, uid > 2000000):']
+          + (dual_auth_oud_before_snapshot.stdout_lines if dual_auth_oud_before_snapshot.stdout_lines | length > 0 else ['(none found)'])
+          + [''] }}"
+
     - name: Chown OUD dirs without AD counterpart to root:root
       # OUD dirs whose AD home dir does not exist yet (user never logged in
       # via AD) are left in place but chowned to root:root to prevent CIS
@@ -131,9 +210,10 @@
             [ -z "$uid" ] && continue
             if [ "$uid" -gt 2000000 ] && [ ! -d "$addir" ]; then
               chown -R root:root "$dir"
-              echo "chowned $dir to root:root"
+              echo "no-ad-counterpart: $dir ($addir absent) -> chowned to root:root"
             fi
           done
+      register: dual_auth_chown_root_result
       changed_when: true
       failed_when: false
 
@@ -156,6 +236,12 @@
       register: dual_auth_oud_to_move
       changed_when: false
 
+    - name: Log chown-to-root and ad-match-found actions
+      ansible.builtin.set_fact:
+        dual_auth_log_lines: "{{ dual_auth_log_lines + ['ACTIONS:']
+          + (dual_auth_chown_root_result.stdout_lines if dual_auth_chown_root_result.stdout_lines | length > 0 else [])
+          + (dual_auth_oud_to_move.stdout_lines | map('regex_replace', '^(.*)$', 'ad-match-found: \\1 -> queued for move') | list) }}"
+
     - name: Move OUD dir inside AD dir and chown to AD user
       ansible.builtin.shell:
         cmd: |
@@ -172,13 +258,49 @@
             gid=$(id -g "$username" 2>/dev/null)
             if [ -n "$uid" ] && [ "$uid" -gt 0 ]; then
               chown -R "$uid:$gid" "$dst"
-              echo "moved and chowned to $uid:$gid"
+              echo "moved to $dst, chowned to $uid:$gid"
             else
-              echo "moved (chown skipped - $username not resolvable via sssd)"
+              echo "moved to $dst, chown skipped ($username not resolvable via sssd)"
             fi
           else
-            echo "skipped"
+            echo "skipped ($src no longer present)"
           fi
       loop: "{{ dual_auth_oud_to_move.stdout_lines }}"
       register: dual_auth_move_oud_result
       changed_when: "'moved' in dual_auth_move_oud_result.stdout"
+
+    - name: Log move actions
+      ansible.builtin.set_fact:
+        dual_auth_log_lines: "{{ dual_auth_log_lines
+          + (dual_auth_move_oud_result.results | map(attribute='item') | zip(dual_auth_move_oud_result.results | map(attribute='stdout'))
+             | map('join', ' -> ') | list
+             if dual_auth_move_oud_result.results | default([]) | length > 0 else [])
+          + [''] }}"
+
+    - name: Snapshot *OUD home dirs after all actions
+      ansible.builtin.shell:
+        cmd: |
+          for dir in $(find /home -maxdepth 2 -type d -name '*OUD' 2>/dev/null); do
+            uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
+            gid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $4}')
+            [ -z "$uid" ] && continue
+            if [ "$uid" -gt 2000000 ] || [ "$uid" = "0" ]; then
+              echo "$uid $gid $dir"
+            fi
+          done
+      register: dual_auth_oud_after_snapshot
+      changed_when: false
+
+    - name: Log AFTER snapshot and summary
+      ansible.builtin.set_fact:
+        dual_auth_log_lines: "{{ dual_auth_log_lines + [
+          'AFTER (same dirs, post-run - includes any now nested under an AD dir):']
+          + (dual_auth_oud_after_snapshot.stdout_lines if dual_auth_oud_after_snapshot.stdout_lines | length > 0 else ['(none found)'])
+          + ['',
+             'SUMMARY:',
+             'chowned to root:root : ' ~ (dual_auth_chown_root_result.stdout_lines | length),
+             'moved to AD dir       : ' ~ (dual_auth_move_oud_result.results | default([]) | selectattr('stdout', 'search', '^moved') | list | length),
+             ''] }}"
+
+    - name: Flush log after move_oud_into_ad
+      ansible.builtin.import_tasks: log_flush.yml
