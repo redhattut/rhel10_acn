@@ -45,12 +45,21 @@
 # default, so checking it here against the pristine-default checksum list
 # would always wrongly fail). See health_check.yml.
 
+- name: Check whether AD conf.d config exists (rules out convert_ad_only state)
+  ansible.builtin.stat:
+    path: /etc/sssd/conf.d/50-pncad.conf
+  register: dual_auth_ad_confd_stat
+
 - name: Detect whether host is currently OUD-only (no AD joined yet)
-  # Used by configure to decide whether to rename home dirs sa04192 -> sa04192OUD.
-  # Detection matches the Midrange Mod report check: id_provider = ldap only.
+  # True ONLY on a genuinely OUD-only host that has never had AD configured.
+  # Gating on 50-pncad.conf absence prevents false positives after convert_ad_only:
+  # sssd.conf still has [domain/OUD] after convert_ad_only (we never remove that
+  # section), so just checking id_provider=ldap is insufficient - it would also
+  # return True on an AD-only host post-convert, causing OUDOUD renames.
   ansible.builtin.set_fact:
     dual_auth_is_oud_only: >-
-      {{ dual_auth_current_auth.stdout | trim == 'ldap' }}
+      {{ dual_auth_current_auth.stdout | trim == 'ldap'
+         and not dual_auth_ad_confd_stat.stat.exists }}
 
 - name: Detect whether host is on the legacy pure-AD path (no OUD configured)
   ansible.builtin.set_fact:

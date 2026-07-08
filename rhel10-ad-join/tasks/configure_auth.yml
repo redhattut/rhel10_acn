@@ -342,3 +342,52 @@
     name: syslog-ng.service
     state: restarted
   when: not dual_auth_healthy or dual_auth_force_configure
+
+- name: Clear sssd cache so new OUD+AD config is picked up cleanly
+  ansible.builtin.shell: |
+    rm -rf /var/log/sssd/*
+    rm -rf /var/lib/sss/{db,mc}/*
+    rm -rf /var/lib/sss/pubconf/kdcinfo.*
+  changed_when: true
+  failed_when: false
+
+- name: Enable and restart sssd with new configuration
+  ansible.builtin.systemd_service:
+    name: sssd.service
+    enabled: true
+    state: restarted
+
+- name: Expire sssd cache
+  ansible.builtin.command: sss_cache -E
+  changed_when: false
+  failed_when: false
+
+- name: Restore ownership of root:root OUD home dirs now that OUD domain is active
+  # After convert_ad_only, OUD dirs without an AD counterpart were chowned to
+  # root:root to avoid CIS findings for unowned numeric UIDs. Now that OUD is
+  # active again, resolve each dir's username via getent and chown it back.
+  # Only touches dirs currently owned by root (uid 0) - all others are skipped.
+  # If getent cannot resolve the username (account removed, sssd still settling)
+  # the dir stays as root:root rather than being chowned to a wrong owner.
+  ansible.builtin.shell: |
+    changed=0
+    for dir in /home/*OUD/; do
+      dir="${dir%/}"
+      [ ! -d "$dir" ] && continue
+      uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
+      [ "$uid" != "0" ] && continue
+      username=$(basename "${dir%OUD}")
+      if getent passwd "$username" > /dev/null 2>&1; then
+        uid=$(id -u "$username" 2>/dev/null)
+        gid=$(id -g "$username" 2>/dev/null)
+        if [ -n "$uid" ] && [ "$uid" -gt 2000000 ]; then
+          chown -R "$uid:$gid" "$dir"
+          echo "restored $dir to $uid:$gid"
+          changed=1
+        fi
+      fi
+    done
+    [ "$changed" -eq 1 ] && echo "changed" || echo "no change"
+  register: dual_auth_oud_chown_restore
+  changed_when: "'changed' in dual_auth_oud_chown_restore.stdout"
+  failed_when: false

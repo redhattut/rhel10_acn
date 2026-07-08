@@ -94,6 +94,25 @@
 - name: Move OUD dirs inside AD dirs (convert_ad_only)
   when: dual_auth_homedir_action == 'move_oud_into_ad'
   block:
+    - name: Chown OUD dirs without AD counterpart to root:root
+      # OUD dirs whose AD home dir doesn't exist yet (user never logged in via AD)
+      # are left in place but chowned to root:root to prevent CIS findings for
+      # unowned numeric UIDs. sssd cannot resolve OUD UIDs after OUD is removed.
+      ansible.builtin.shell: |
+        for dir in /home/*OUD/; do
+          dir="${dir%/}"
+          [ ! -d "$dir" ] && continue
+          addir="${dir%OUD}"
+          uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
+          [ -z "$uid" ] && continue
+          if [ "$uid" -gt 2000000 ] && [ ! -d "$addir" ]; then
+            chown -R root:root "$dir"
+            echo "chowned $dir to root:root"
+          fi
+        done
+      changed_when: true
+      failed_when: false
+
     - name: Find *OUD dirs that have a matching AD counterpart
       ansible.builtin.shell: |
         for dir in /home/*OUD/; do
@@ -112,15 +131,26 @@
       register: dual_auth_oud_to_move
       changed_when: false
 
-    - name: Move OUD dir inside AD dir as addir/basenameOUD
+
+    - name: Move OUD dir inside AD dir and chown to AD user
       ansible.builtin.shell: |
         src="{{ item }}"
         name=$(basename "$src")
         addir="${src%OUD}"
         dst="${addir}/${name}"
+        username=$(basename "$addir")
         if [ -d "$src" ]; then
           mv "$src" "$dst"
-          echo "moved"
+          # Resolve AD UID/GID via sssd. Falls back gracefully if sssd
+          # hasn't fully settled yet - ownership can be corrected manually.
+          uid=$(id -u "$username" 2>/dev/null)
+          gid=$(id -g "$username" 2>/dev/null)
+          if [ -n "$uid" ] && [ "$uid" -gt 0 ]; then
+            chown -R "$uid:$gid" "$dst"
+            echo "moved and chowned to $uid:$gid"
+          else
+            echo "moved (chown skipped - $username not resolvable via sssd)"
+          fi
         else
           echo "skipped"
         fi
