@@ -4,7 +4,8 @@
 # the domain is joined/left and the kernel resolves UIDs again.
 #
 # Only touches home dirs owned by UIDs in the OUD/AD managed user range
-# (2000000 < uid < 100000000). Local accounts are skipped automatically.
+# (uid > 2000000). Local/system accounts are well below 2M. No upper bound
+# is used since OUD UIDs can be in the 700M+ range.
 # This is the same UID range check the pnc_join_ad RPM %post used.
 #
 # Callers set dual_auth_homedir_action before importing this file:
@@ -27,7 +28,7 @@
           echo "$name" | grep -qE 'OUD($|\.)' && continue
           uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
           [ -z "$uid" ] && continue
-          if [ "$uid" -gt 2000000 ] && [ "$uid" -lt 100000000 ]; then
+          if [ "$uid" -gt 2000000 ]; then
             echo "$dir"
           fi
         done
@@ -63,7 +64,7 @@
           echo "$name" | grep -qE 'OUD($|\.)' && continue
           uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
           [ -z "$uid" ] && continue
-          if [ "$uid" -gt 2000000 ] && [ "$uid" -lt 100000000 ]; then
+          if [ "$uid" -gt 2000000 ]; then
             if [ -d "${dir}OUD" ]; then
               echo "$dir"
             fi
@@ -102,7 +103,7 @@
           addir="${dir%OUD}"
           uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
           [ -z "$uid" ] && continue
-          if [ "$uid" -gt 2000000 ] && [ "$uid" -lt 100000000 ]; then
+          if [ "$uid" -gt 2000000 ]; then
             if [ -d "$addir" ]; then
               echo "$dir"
             fi
