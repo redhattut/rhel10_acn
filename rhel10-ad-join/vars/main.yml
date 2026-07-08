@@ -16,13 +16,9 @@ dual_auth_env_digit_map:
 
 # === AD service account per environment ===
 # Confirmed correct (double "A", "...RAS" for rnd).
-dual_auth_service_account_map:
-  rnd: XAAMMRAS
-  uat: XAAMMUAS
-  qa: XAAMMQAS
-  prod: XAAMMPAS
-
-dual_auth_username: "{{ dual_auth_service_account_map[dual_auth_target_env] }}"
+# AD bind account username - injected by PNC MRG AD Bind AAP credential.
+# Resolves to ad_bind_username_<env> for the detected environment.
+dual_auth_username: "{{ vars['ad_bind_username_' + dual_auth_target_env] | default('') }}"
 
 # Four separate pre-built keytab files (one per environment), each
 # containing just that environment's single bind account. Deliberately not
@@ -96,15 +92,11 @@ dual_auth_mrgeng_group: "GSLunxSU_MRG_AllServerAdmin"
 
 # === OUD LDAP admin credentials for hostId account management ===
 # Admin bind DN is not secret - stays in vars. Passwords must be set via
-# AAP Survey (Password type) or -e on CLI - never hard-code them here.
-# The role auto-selects the right password based on dual_auth_target_env.
-dual_auth_oud_admin_dn: "cn=asc-serviceid,ou=TrustedApplications,ou=FrameworkSystems,o=pnc"
-dual_auth_oud_admin_password_rnd: ""
-dual_auth_oud_admin_password_uat: ""
-dual_auth_oud_admin_password_qa: ""
-dual_auth_oud_admin_password_prod: ""
-# Resolved at runtime - do not set directly
-dual_auth_oud_admin_password: "{{ vars['dual_auth_oud_admin_password_' + dual_auth_target_env] | default('') }}"
+# OUD admin credentials - injected by PNC MRG OUD Bind AAP credential.
+# oud_bind_dn and oud_bind_password_<env> are set by the credential type.
+dual_auth_oud_admin_dn: "{{ oud_bind_dn | default('') }}"
+# Resolved at runtime from the env-specific credential var
+dual_auth_oud_admin_password: "{{ vars['oud_bind_password_' + dual_auth_target_env] | default('') }}"
 
 # OUD LDAP URI per environment
 dual_auth_oud_ldap_uri_map:
@@ -120,12 +112,6 @@ dual_auth_oud_ldap_uri: "{{ dual_auth_oud_ldap_uri_map[dual_auth_target_env] }}"
 dual_auth_additional_gsgu_groups: ""
 
 # === AD bind account password for keytab generation ===
-# Set via the PNC MRG AD Bind AAP credential (once created) or -e on CLI.
-# Used by recreate_keytab to build a fresh keytab via ktutil.
-# These will be injected by the credential type - defaults are empty.
-ad_bind_password_rnd: ""
-ad_bind_password_uat: ""
-ad_bind_password_qa: ""
-ad_bind_password_prod: ""
-# Resolved at runtime from the env-specific var above - do not set directly
+# Injected by PNC MRG AD Bind AAP credential as ad_bind_password_<env>.
+# Resolved at runtime from the env-specific credential var.
 dual_auth_ad_bind_password: "{{ vars['ad_bind_password_' + dual_auth_target_env] | default('') }}"
