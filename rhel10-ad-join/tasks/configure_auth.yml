@@ -320,23 +320,6 @@
       {{ dual_auth_visudo_post.stdout }} {{ dual_auth_visudo_post.stderr }}
   when: dual_auth_visudo_post.rc != 0
 
-- name: Move OUD-provisioned home directories to the OUD-suffixed name
-  ansible.builtin.shell:
-    cmd: |
-      set -e
-      for i in $(ls /home/); do
-        uid=$(stat -c '%u' "/home/$i" 2>/dev/null || echo 0)
-        if [ "$uid" -gt 2000000 ] && [ "$uid" -lt 100000000 ]; then
-          if [ ! -d "/home/${i}OUD" ]; then
-            mv "/home/$i" "/home/${i}OUD"
-            echo "moved $i"
-          fi
-        fi
-      done
-  register: dual_auth_home_move
-  changed_when: "'moved' in dual_auth_home_move.stdout"
-  failed_when: false
-
 - name: Restart syslog-ng to pick up logging changes
   ansible.builtin.systemd_service:
     name: syslog-ng.service
@@ -344,10 +327,11 @@
   when: not dual_auth_healthy or dual_auth_force_configure
 
 - name: Clear sssd cache so new OUD+AD config is picked up cleanly
-  ansible.builtin.shell: |
-    rm -rf /var/log/sssd/*
-    rm -rf /var/lib/sss/{db,mc}/*
-    rm -rf /var/lib/sss/pubconf/kdcinfo.*
+  ansible.builtin.shell:
+    cmd: |
+      rm -rf /var/log/sssd/*
+      rm -rf /var/lib/sss/{db,mc}/*
+      rm -rf /var/lib/sss/pubconf/kdcinfo.*
   changed_when: true
   failed_when: false
 
@@ -369,25 +353,26 @@
   # Only touches dirs currently owned by root (uid 0) - all others are skipped.
   # If getent cannot resolve the username (account removed, sssd still settling)
   # the dir stays as root:root rather than being chowned to a wrong owner.
-  ansible.builtin.shell: |
-    changed=0
-    for dir in /home/*OUD/; do
-      dir="${dir%/}"
-      [ ! -d "$dir" ] && continue
-      uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
-      [ "$uid" != "0" ] && continue
-      username=$(basename "${dir%OUD}")
-      if getent passwd "$username" > /dev/null 2>&1; then
-        uid=$(id -u "$username" 2>/dev/null)
-        gid=$(id -g "$username" 2>/dev/null)
-        if [ -n "$uid" ] && [ "$uid" -gt 2000000 ]; then
-          chown -R "$uid:$gid" "$dir"
-          echo "restored $dir to $uid:$gid"
-          changed=1
+  ansible.builtin.shell:
+    cmd: |
+      changed=0
+      for dir in /home/*OUD/; do
+        dir="${dir%/}"
+        [ ! -d "$dir" ] && continue
+        uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
+        [ "$uid" != "0" ] && continue
+        username=$(basename "${dir%OUD}")
+        if getent passwd "$username" > /dev/null 2>&1; then
+          uid=$(id -u "$username" 2>/dev/null)
+          gid=$(id -g "$username" 2>/dev/null)
+          if [ -n "$uid" ] && [ "$uid" -gt 2000000 ]; then
+            chown -R "$uid:$gid" "$dir"
+            echo "restored $dir to $uid:$gid"
+            changed=1
+          fi
         fi
-      fi
-    done
-    [ "$changed" -eq 1 ] && echo "changed" || echo "no change"
+      done
+      [ "$changed" -eq 1 ] && echo "changed" || echo "no change"
   register: dual_auth_oud_chown_restore
   changed_when: "'changed' in dual_auth_oud_chown_restore.stdout"
   failed_when: false

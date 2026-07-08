@@ -1,12 +1,30 @@
 ---
 # Manages home directory renames/moves during lifecycle transitions.
-# Never chowns anything - sssd corrects ownership automatically once
-# the domain is joined/left and the kernel resolves UIDs again.
+# Never chowns anything here except the one explicit CIS-safety exception
+# noted below - sssd corrects ownership automatically once the domain is
+# joined/left and the kernel resolves UIDs again.
 #
 # Only touches home dirs owned by UIDs in the OUD/AD managed user range
 # (uid > 2000000). Local/system accounts are well below 2M. No upper bound
 # is used since OUD UIDs can be in the 700M+ range.
 # This is the same UID range check the pnc_join_ad RPM %post used.
+#
+# IMPORTANT: every shell task below uses the dict form
+#   ansible.builtin.shell:
+#     cmd: |
+#       ...
+# instead of the free-form
+#   ansible.builtin.shell: |
+#     ...
+# On purpose. The free-form style is parsed by Ansible's split_args() to
+# look for k=v module parameters (chdir=, creates=, etc.) BEFORE the string
+# ever reaches bash. That parser tracks quote characters across the whole
+# block, and a single stray/unpaired quote anywhere in it - including in a
+# comment, e.g. a contraction like "doesn't" or "hasn't" - is read as an
+# unterminated quote and blows up the whole task with:
+#   "failed at splitting arguments, either an unbalanced jinja2 block or quotes"
+# The dict cmd: form is not free-form parsed, so it is not exposed to this
+# at all. Keep using cmd: for any new shell/command task in this file.
 #
 # Callers set dual_auth_homedir_action before importing this file:
 #   rename_to_oud   - configure on OUD-only host migrating to OUD+AD
@@ -20,31 +38,33 @@
   when: dual_auth_homedir_action == 'rename_to_oud'
   block:
     - name: Find candidate home dirs (no OUD suffix)
-      ansible.builtin.shell: |
-        for dir in /home/*/; do
-          dir="${dir%/}"
-          name=$(basename "$dir")
-          # skip dirs that already end in OUD or OUD.date
-          echo "$name" | grep -qE 'OUD($|\.)' && continue
-          uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
-          [ -z "$uid" ] && continue
-          if [ "$uid" -gt 2000000 ]; then
-            echo "$dir"
-          fi
-        done
+      ansible.builtin.shell:
+        cmd: |
+          for dir in /home/*/; do
+            dir="${dir%/}"
+            name=$(basename "$dir")
+            # skip dirs that already end in OUD or OUD.date
+            echo "$name" | grep -qE 'OUD($|\.)' && continue
+            uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
+            [ -z "$uid" ] && continue
+            if [ "$uid" -gt 2000000 ]; then
+              echo "$dir"
+            fi
+          done
       register: dual_auth_homedir_candidates
       changed_when: false
 
     - name: Rename each candidate to *OUD if *OUD does not already exist
-      ansible.builtin.shell: |
-        src="{{ item }}"
-        dst="{{ item }}OUD"
-        if [ -d "$src" ] && [ ! -d "$dst" ]; then
-          mv "$src" "$dst"
-          echo "moved"
-        else
-          echo "skipped"
-        fi
+      ansible.builtin.shell:
+        cmd: |
+          src="{{ item }}"
+          dst="{{ item }}OUD"
+          if [ -d "$src" ] && [ ! -d "$dst" ]; then
+            mv "$src" "$dst"
+            echo "moved"
+          else
+            echo "skipped"
+          fi
       loop: "{{ dual_auth_homedir_candidates.stdout_lines }}"
       register: dual_auth_rename_result
       changed_when: "'moved' in dual_auth_rename_result.stdout"
@@ -57,33 +77,35 @@
   when: dual_auth_homedir_action == 'move_ad_into_oud'
   block:
     - name: Find AD home dirs that have a matching *OUD counterpart
-      ansible.builtin.shell: |
-        for dir in /home/*/; do
-          dir="${dir%/}"
-          name=$(basename "$dir")
-          echo "$name" | grep -qE 'OUD($|\.)' && continue
-          uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
-          [ -z "$uid" ] && continue
-          if [ "$uid" -gt 2000000 ]; then
-            if [ -d "${dir}OUD" ]; then
-              echo "$dir"
+      ansible.builtin.shell:
+        cmd: |
+          for dir in /home/*/; do
+            dir="${dir%/}"
+            name=$(basename "$dir")
+            echo "$name" | grep -qE 'OUD($|\.)' && continue
+            uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
+            [ -z "$uid" ] && continue
+            if [ "$uid" -gt 2000000 ]; then
+              if [ -d "${dir}OUD" ]; then
+                echo "$dir"
+              fi
             fi
-          fi
-        done
+          done
       register: dual_auth_ad_to_move
       changed_when: false
 
     - name: Move AD dir inside OUD dir as *OUD/basenameAD
-      ansible.builtin.shell: |
-        src="{{ item }}"
-        name=$(basename "$src")
-        dst="${src}OUD/${name}AD"
-        if [ -d "$src" ]; then
-          mv "$src" "$dst"
-          echo "moved"
-        else
-          echo "skipped"
-        fi
+      ansible.builtin.shell:
+        cmd: |
+          src="{{ item }}"
+          name=$(basename "$src")
+          dst="${src}OUD/${name}AD"
+          if [ -d "$src" ]; then
+            mv "$src" "$dst"
+            echo "moved"
+          else
+            echo "skipped"
+          fi
       loop: "{{ dual_auth_ad_to_move.stdout_lines }}"
       register: dual_auth_move_ad_result
       changed_when: "'moved' in dual_auth_move_ad_result.stdout"
@@ -95,65 +117,68 @@
   when: dual_auth_homedir_action == 'move_oud_into_ad'
   block:
     - name: Chown OUD dirs without AD counterpart to root:root
-      # OUD dirs whose AD home dir doesn't exist yet (user never logged in via AD)
-      # are left in place but chowned to root:root to prevent CIS findings for
-      # unowned numeric UIDs. sssd cannot resolve OUD UIDs after OUD is removed.
-      ansible.builtin.shell: |
-        for dir in /home/*OUD/; do
-          dir="${dir%/}"
-          [ ! -d "$dir" ] && continue
-          addir="${dir%OUD}"
-          uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
-          [ -z "$uid" ] && continue
-          if [ "$uid" -gt 2000000 ] && [ ! -d "$addir" ]; then
-            chown -R root:root "$dir"
-            echo "chowned $dir to root:root"
-          fi
-        done
+      # OUD dirs whose AD home dir does not exist yet (user never logged in
+      # via AD) are left in place but chowned to root:root to prevent CIS
+      # findings for unowned numeric UIDs. sssd cannot resolve OUD UIDs after
+      # OUD is removed.
+      ansible.builtin.shell:
+        cmd: |
+          for dir in /home/*OUD/; do
+            dir="${dir%/}"
+            [ ! -d "$dir" ] && continue
+            addir="${dir%OUD}"
+            uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
+            [ -z "$uid" ] && continue
+            if [ "$uid" -gt 2000000 ] && [ ! -d "$addir" ]; then
+              chown -R root:root "$dir"
+              echo "chowned $dir to root:root"
+            fi
+          done
       changed_when: true
       failed_when: false
 
     - name: Find *OUD dirs that have a matching AD counterpart
-      ansible.builtin.shell: |
-        for dir in /home/*OUD/; do
-          dir="${dir%/}"
-          [ ! -d "$dir" ] && continue
-          name=$(basename "$dir")
-          addir="${dir%OUD}"
-          uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
-          [ -z "$uid" ] && continue
-          if [ "$uid" -gt 2000000 ]; then
-            if [ -d "$addir" ]; then
-              echo "$dir"
+      ansible.builtin.shell:
+        cmd: |
+          for dir in /home/*OUD/; do
+            dir="${dir%/}"
+            [ ! -d "$dir" ] && continue
+            name=$(basename "$dir")
+            addir="${dir%OUD}"
+            uid=$(ls -ldn "$dir" 2>/dev/null | awk '{print $3}')
+            [ -z "$uid" ] && continue
+            if [ "$uid" -gt 2000000 ]; then
+              if [ -d "$addir" ]; then
+                echo "$dir"
+              fi
             fi
-          fi
-        done
+          done
       register: dual_auth_oud_to_move
       changed_when: false
 
-
     - name: Move OUD dir inside AD dir and chown to AD user
-      ansible.builtin.shell: |
-        src="{{ item }}"
-        name=$(basename "$src")
-        addir="${src%OUD}"
-        dst="${addir}/${name}"
-        username=$(basename "$addir")
-        if [ -d "$src" ]; then
-          mv "$src" "$dst"
-          # Resolve AD UID/GID via sssd. Falls back gracefully if sssd
-          # hasn't fully settled yet - ownership can be corrected manually.
-          uid=$(id -u "$username" 2>/dev/null)
-          gid=$(id -g "$username" 2>/dev/null)
-          if [ -n "$uid" ] && [ "$uid" -gt 0 ]; then
-            chown -R "$uid:$gid" "$dst"
-            echo "moved and chowned to $uid:$gid"
+      ansible.builtin.shell:
+        cmd: |
+          src="{{ item }}"
+          name=$(basename "$src")
+          addir="${src%OUD}"
+          dst="${addir}/${name}"
+          username=$(basename "$addir")
+          if [ -d "$src" ]; then
+            mv "$src" "$dst"
+            # Resolve AD UID/GID via sssd. Falls back gracefully if sssd has
+            # not fully settled yet - ownership can be corrected manually.
+            uid=$(id -u "$username" 2>/dev/null)
+            gid=$(id -g "$username" 2>/dev/null)
+            if [ -n "$uid" ] && [ "$uid" -gt 0 ]; then
+              chown -R "$uid:$gid" "$dst"
+              echo "moved and chowned to $uid:$gid"
+            else
+              echo "moved (chown skipped - $username not resolvable via sssd)"
+            fi
           else
-            echo "moved (chown skipped - $username not resolvable via sssd)"
+            echo "skipped"
           fi
-        else
-          echo "skipped"
-        fi
       loop: "{{ dual_auth_oud_to_move.stdout_lines }}"
       register: dual_auth_move_oud_result
       changed_when: "'moved' in dual_auth_move_oud_result.stdout"
