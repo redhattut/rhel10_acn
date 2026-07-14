@@ -116,17 +116,21 @@ parse_service_status() {
     SVC_FINAL_LINE=""
     SVC_OVERALL_STATUS="UNKNOWN"
 
-    local clean svc status
+    local line bracket status svc
     while IFS= read -r line; do
-        # strip leading tree-drawing character (-, |, \, /) and whitespace
-        clean="$(echo "$line" | sed -E 's/^[[:space:]]*[-|\\/][[:space:]]*//')"
+        # Only lines with a bracketed status token are relevant - grab the
+        # LAST such bracket on the line (handles any leading decoration).
+        bracket="$(grep -oE '\[[A-Za-z]+\]' <<< "$line" | tail -1)"
+        [[ -z "$bracket" ]] && continue
+        status="${bracket#\[}"
+        status="${status%\]}"
 
-        if [[ "$clean" =~ ^[Aa]ll[[:space:]]services[[:space:]]are[[:space:]]running[[:space:]]+\[([A-Za-z]+)\]$ ]]; then
-            SVC_OVERALL_STATUS="${BASH_REMATCH[1]}"
+        if grep -qi 'all services are running' <<< "$line"; then
+            SVC_OVERALL_STATUS="$status"
             SVC_FINAL_LINE="All services are running"
-        elif [[ "$clean" =~ ^displaying[[:space:]]+(.+[^[:space:]])[[:space:]]+\[([A-Za-z]+)\]$ ]]; then
-            svc="${BASH_REMATCH[1]}"
-            status="${BASH_REMATCH[2]}"
+        elif grep -qi 'displaying' <<< "$line"; then
+            # service name = text between "displaying" and the bracket
+            svc="$(sed -E 's/^.*[Dd]isplaying[[:space:]]+//; s/[[:space:]]*\[[A-Za-z]+\].*$//' <<< "$line")"
             if [[ "$status" != "OK" ]]; then
                 SVC_NONOK_LINES+=("${svc}|${status}")
             fi
