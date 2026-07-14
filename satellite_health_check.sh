@@ -95,16 +95,6 @@ ssh_run() {
     ssh $SSH_OPTS "${host}" "$cmd" 2>/dev/null
 }
 
-# Some sudoers configs set "Defaults requiretty", which makes sudo refuse to
-# run at all over a plain non-interactive SSH exec (fails with "sorry, you
-# must have a tty to run sudo"). Forcing a pseudo-terminal with -tt works
-# around that. Only used for the sudo satellite-maintain call - other checks
-# (df, free, /proc/stat) don't need sudo and stay on the plain ssh_run above.
-ssh_run_tty() {
-    local host="$1" cmd="$2"
-    ssh -tt $SSH_OPTS "${host}" "$cmd" </dev/null 2>&1 | tr -d '\r'
-}
-
 # ---------------------------------------------------------------------------
 # Parse `satellite-maintain service status -b` output.
 #
@@ -118,7 +108,10 @@ ssh_run_tty() {
 # Sets globals: SVC_OVERALL_STATUS, SVC_NONOK_LINES (array), SVC_FINAL_LINE
 # ---------------------------------------------------------------------------
 parse_service_status() {
-    local raw="$1"
+    local raw
+    # Strip ANSI escape/cursor-control sequences and stray carriage returns
+    # defensively, in case a host's terminal detection still animates output.
+    raw="$(printf '%s' "$1" | sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '\r')"
     SVC_NONOK_LINES=()
     SVC_FINAL_LINE=""
     SVC_OVERALL_STATUS="UNKNOWN"
@@ -190,7 +183,7 @@ check_host() {
 
     # --- satellite-maintain service status (merged health/service block) ---
     local svc_raw
-    svc_raw="$(ssh_run_tty "$host" "sudo satellite-maintain service status -b 2>&1")"
+    svc_raw="$(ssh_run "$host" "satellite-maintain service status -b 2>&1")"
     parse_service_status "$svc_raw"
 
     pad_line "Satellite Service Status" "$SVC_OVERALL_STATUS"
