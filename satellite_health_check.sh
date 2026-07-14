@@ -29,7 +29,6 @@ HOSTS=(
     "lmrg10bb|CAPSULE"
 )
 
-SSH_USER="${SSH_USER:-svc_sat_health}"
 SSH_OPTS="-o ConnectTimeout=8 -o StrictHostKeyChecking=no -o BatchMode=yes"
 
 # Disk thresholds are based on FREE space remaining, not used space.
@@ -93,7 +92,17 @@ pad_line() {
 
 ssh_run() {
     local host="$1" cmd="$2"
-    ssh $SSH_OPTS "${SSH_USER}@${host}" "$cmd" 2>/dev/null
+    ssh $SSH_OPTS "${host}" "$cmd" 2>/dev/null
+}
+
+# Some sudoers configs set "Defaults requiretty", which makes sudo refuse to
+# run at all over a plain non-interactive SSH exec (fails with "sorry, you
+# must have a tty to run sudo"). Forcing a pseudo-terminal with -tt works
+# around that. Only used for the sudo satellite-maintain call - other checks
+# (df, free, /proc/stat) don't need sudo and stay on the plain ssh_run above.
+ssh_run_tty() {
+    local host="$1" cmd="$2"
+    ssh -tt $SSH_OPTS "${host}" "$cmd" </dev/null 2>&1 | tr -d '\r'
 }
 
 # ---------------------------------------------------------------------------
@@ -131,11 +140,14 @@ parse_service_status() {
         fi
     done <<< "$raw"
 
-    # If we never matched a final line, something's off (unreachable command,
-    # unexpected output format, etc.) - treat as FAIL so it isn't silently missed.
+    # If we never matched a final line, we couldn't parse the output at all -
+    # this means the command didn't run as expected (SSH/sudo/tty/permission
+    # issue, unexpected output format, etc.). This is NOT the same as Satellite
+    # reporting an actual failure, so it must never be labeled FAIL - mark it
+    # UNKNOWN and let the caller surface the raw output for troubleshooting.
     if [[ "$SVC_FINAL_LINE" == "" ]]; then
-        SVC_OVERALL_STATUS="FAIL"
-        SVC_FINAL_LINE="All services are running"
+        SVC_OVERALL_STATUS="UNKNOWN"
+        SVC_FINAL_LINE=""
     fi
 }
 
@@ -178,22 +190,31 @@ check_host() {
 
     # --- satellite-maintain service status (merged health/service block) ---
     local svc_raw
-    svc_raw="$(ssh_run "$host" "sudo satellite-maintain service status -b 2>&1")"
+    svc_raw="$(ssh_run_tty "$host" "sudo satellite-maintain service status -b 2>&1")"
     parse_service_status "$svc_raw"
 
     pad_line "Satellite Service Status" "$SVC_OVERALL_STATUS"
-    if [[ "$SVC_OVERALL_STATUS" != "OK" ]]; then
-        host_had_fail=1
-        ACTION_ITEMS+=("$host - satellite-maintain reports overall status $SVC_OVERALL_STATUS")
-    fi
 
-    for entry in "${SVC_NONOK_LINES[@]:-}"; do
-        [[ -z "$entry" ]] && continue
-        IFS='|' read -r svc status <<< "$entry"
-        printf "    - %-48s [%s]\n" "$svc" "$status"
-        ACTION_ITEMS+=("$host - service $svc reported [$status]")
-    done
-    printf "    - %-48s [%s]\n" "$SVC_FINAL_LINE" "$SVC_OVERALL_STATUS"
+    if [[ "$SVC_OVERALL_STATUS" == "UNKNOWN" ]]; then
+        host_had_fail=1
+        printf "    - Could not parse satellite-maintain output (SSH/sudo/permission issue?)\n"
+        printf "    - Raw output from host:\n"
+        echo "$svc_raw" | sed 's/^/        /'
+        ACTION_ITEMS+=("$host - could not parse satellite-maintain output, see raw output in report")
+    else
+        if [[ "$SVC_OVERALL_STATUS" != "OK" ]]; then
+            host_had_fail=1
+            ACTION_ITEMS+=("$host - satellite-maintain reports overall status $SVC_OVERALL_STATUS")
+        fi
+
+        for entry in "${SVC_NONOK_LINES[@]:-}"; do
+            [[ -z "$entry" ]] && continue
+            IFS='|' read -r svc status <<< "$entry"
+            printf "    - %-48s [%s]\n" "$svc" "$status"
+            ACTION_ITEMS+=("$host - service $svc reported [$status]")
+        done
+        printf "    - %-48s [%s]\n" "$SVC_FINAL_LINE" "$SVC_OVERALL_STATUS"
+    fi
 
     # --- disk: /var/log and /var/lib/pulp ---
     printf "\n  Disk Space\n"
@@ -221,7 +242,7 @@ check_host() {
             ACTION_ITEMS+=("$host - $mount at ${free_pct}% free (WARN)")
         fi
 
-        printf "    %-14s %s / %s  (%s%% used, %s%% free) [ %s ]\n" "$mount" "$used" "$size" "$pct" "$free_pct" "$status"
+        printf "%-74s[ %s ]\n" "$(printf "    %-14s %s / %s  (%s%% used, %s%% free)" "$mount" "$used" "$size" "$pct" "$free_pct")" "$status"
     done
 
     # --- CPU utilization % ---
@@ -241,7 +262,7 @@ check_host() {
         cpu_pct="?"
         cpu_status="UNKNOWN"
     fi
-    printf "\n  CPU Utilization      %s%%                           [ %s ]\n" "$cpu_pct" "$cpu_status"
+    printf "\n%-74s[ %s ]\n" "$(printf "  CPU Utilization      %s%%" "$cpu_pct")" "$cpu_status"
 
     # --- memory ---
     local mem_raw mem_used mem_total mem_pct mem_status
@@ -261,7 +282,7 @@ check_host() {
         mem_pct="?"
         mem_status="UNKNOWN"
     fi
-    printf "  Memory Usage         %sM / %sM used (%s%%)          [ %s ]\n\n" "$mem_used" "$mem_total" "$mem_pct" "$mem_status"
+    printf "%-74s[ %s ]\n\n" "$(printf "  Memory Usage         %sM / %sM used (%s%%)" "$mem_used" "$mem_total" "$mem_pct")" "$mem_status"
 
     # --- tally host-level pass/fail ---
     if [[ "$host_had_fail" -eq 1 ]]; then
