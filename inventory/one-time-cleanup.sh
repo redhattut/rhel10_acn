@@ -2,7 +2,7 @@ DAT=/usr/local/pnc/bin/RHEL_Inventory_v2/data/RHEL_DEPLOYMENTS.dat
 
 wc -l "$DAT"
 
-# Dedup on short hostname, keep first occurrence of each host, write record as-is
+# Dedup on short hostname, preserve original order, write record as-is
 awk '
 {
     h = $2; sub(/\..*/, "", h)
@@ -11,7 +11,7 @@ awk '
         print $0
     }
 }
-' "$DAT" | sort > "${DAT}.dedup"
+' "$DAT" > "${DAT}.dedup"
 
 wc -l "${DAT}.dedup"
 
