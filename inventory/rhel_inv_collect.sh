@@ -96,36 +96,27 @@ log SECTION "Phase 1 — Deployment scan (new host detection)"
 
 # RHEL_DEPLOYMENTS.dat management during parallel validation period
 # -----------------------------------------------------------------------
-# During parallel validation, the legacy script records hostnames as FQDNs
-# (e.g. lapt010d.rnd.pncint.net) while v2 uses short names (lapt010d).
-# The dedup key is the short hostname — strip everything from the first dot
-# on both sides before comparing so the same host is never recorded twice
-# regardless of which name format was used.
-#
-# Nightly sync merges any records from the legacy dat not already in v2.
-# Safe after cutover — once legacy stops writing, the sync is a no-op.
+# Legacy dat has a mix of FQDNs (recent hosts) and short names (older hosts).
+# We preserve records exactly as written — no normalization of the hostname
+# field. The dedup key uses the short form (strip from first dot) only for
+# comparison so lapt010d and lapt010d.rnd.pncint.net are recognized as the
+# same host and not double-counted, but the record itself is kept as-is.
 LEGACY_DEPLOY="/usr/local/pnc/bin/RHEL_Inventory/data/RHEL_DEPLOYMENTS.dat"
 if [[ ! -f "$DEPLOYMENTDATA" ]]; then
     if [[ -f "$LEGACY_DEPLOY" ]]; then
         mkdir -p "$(dirname "$DEPLOYMENTDATA")"
-        # Seed with dedup on short hostname so we don't inherit FQDNs
-        awk '
-            !seen[ substr($2, 1, index($2".",".")-1) ]++ {
-                # Normalize hostname to short form when writing
-                h = $2; sub(/\..*/, "", h)
-                print $1, h, $3, $4
-            }
-        ' "$LEGACY_DEPLOY" > "$DEPLOYMENTDATA"
+        cp "$LEGACY_DEPLOY" "$DEPLOYMENTDATA"
         DEPCOUNT=$(wc -l < "$DEPLOYMENTDATA")
-        log INFO "Auto-seeded RHEL_DEPLOYMENTS.dat from legacy ($DEPCOUNT records, short-name normalized): $DEPLOYMENTDATA"
+        log INFO "Auto-seeded RHEL_DEPLOYMENTS.dat from legacy ($DEPCOUNT records): $DEPLOYMENTDATA"
     else
         log WARN "DEPLOYMENTDATA not found and legacy source not available: $LEGACY_DEPLOY"
         log WARN "BuildDate fallback for legacy hosts will be n/a until manually seeded"
     fi
 elif [[ -f "$LEGACY_DEPLOY" && "${TEST_MODE:-0}" -eq 0 ]]; then
     # Nightly sync — merge records from legacy dat not yet in v2 dat.
-    # Both sides normalized to short hostname for dedup so FQDN records
-    # in legacy don't create duplicates of short-name records in v2.
+    # Dedup key is the short hostname (strip from first dot) so FQDN records
+    # in legacy don't duplicate short-name records already in v2, and vice
+    # versa. The record is written exactly as it appears in the legacy dat.
     _sync_added=$(awk '
         NR==FNR {
             h = $2; sub(/\..*/, "", h)
@@ -135,7 +126,7 @@ elif [[ -f "$LEGACY_DEPLOY" && "${TEST_MODE:-0}" -eq 0 ]]; then
         {
             h = $2; sub(/\..*/, "", h)
             if (!(h in known) && $1 !~ /^unknown/ && NF >= 4) {
-                print $1, h, $3, $4
+                print $0
             }
         }
     ' "$DEPLOYMENTDATA" "$LEGACY_DEPLOY" \
