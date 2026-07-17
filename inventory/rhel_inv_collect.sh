@@ -96,43 +96,53 @@ log SECTION "Phase 1 — Deployment scan (new host detection)"
 
 # RHEL_DEPLOYMENTS.dat management during parallel validation period
 # -----------------------------------------------------------------------
-# During parallel validation, the legacy script runs alongside v2 and
-# both append to their own separate dat files each night. Without syncing,
-# v2's deployment counts will always lag because the legacy script appended
-# all the historical records to the legacy dat, while v2 only sees new
-# hosts it discovers itself each night.
+# During parallel validation, the legacy script records hostnames as FQDNs
+# (e.g. lapt010d.rnd.pncint.net) while v2 uses short names (lapt010d).
+# The dedup key is the short hostname — strip everything from the first dot
+# on both sides before comparing so the same host is never recorded twice
+# regardless of which name format was used.
 #
-# Strategy:
-#   1. Auto-seed: if v2 dat doesn't exist yet, copy the full legacy dat.
-#   2. Nightly sync: merge any records in the legacy dat that aren't in v2's
-#      dat yet (identified by hostname field $2). This keeps v2 current with
-#      all deployments the legacy script is still recording during the
-#      parallel period, without duplicating records v2 already has.
-#      Safe to leave enabled after cutover — once legacy stops writing,
-#      there will simply be no new records to merge.
-#
+# Nightly sync merges any records from the legacy dat not already in v2.
+# Safe after cutover — once legacy stops writing, the sync is a no-op.
 LEGACY_DEPLOY="/usr/local/pnc/bin/RHEL_Inventory/data/RHEL_DEPLOYMENTS.dat"
 if [[ ! -f "$DEPLOYMENTDATA" ]]; then
     if [[ -f "$LEGACY_DEPLOY" ]]; then
         mkdir -p "$(dirname "$DEPLOYMENTDATA")"
-        cp "$LEGACY_DEPLOY" "$DEPLOYMENTDATA"
+        # Seed with dedup on short hostname so we don't inherit FQDNs
+        awk '
+            !seen[ substr($2, 1, index($2".",".")-1) ]++ {
+                # Normalize hostname to short form when writing
+                h = $2; sub(/\..*/, "", h)
+                print $1, h, $3, $4
+            }
+        ' "$LEGACY_DEPLOY" > "$DEPLOYMENTDATA"
         DEPCOUNT=$(wc -l < "$DEPLOYMENTDATA")
-        log INFO "Auto-seeded RHEL_DEPLOYMENTS.dat from legacy ($DEPCOUNT records): $DEPLOYMENTDATA"
+        log INFO "Auto-seeded RHEL_DEPLOYMENTS.dat from legacy ($DEPCOUNT records, short-name normalized): $DEPLOYMENTDATA"
     else
         log WARN "DEPLOYMENTDATA not found and legacy source not available: $LEGACY_DEPLOY"
         log WARN "BuildDate fallback for legacy hosts will be n/a until manually seeded"
     fi
 elif [[ -f "$LEGACY_DEPLOY" && "${TEST_MODE:-0}" -eq 0 ]]; then
-    # Nightly sync — add any records in legacy dat not yet in v2 dat.
-    # Uses hostname ($2) as the dedup key — same as rhel_deploy_scan.sh.
+    # Nightly sync — merge records from legacy dat not yet in v2 dat.
+    # Both sides normalized to short hostname for dedup so FQDN records
+    # in legacy don't create duplicates of short-name records in v2.
     _sync_added=$(awk '
-        NR==FNR { known[$2]=1; next }
-        !($2 in known) && $1 !~ /^unknown/ && NF >= 4
+        NR==FNR {
+            h = $2; sub(/\..*/, "", h)
+            known[h] = 1
+            next
+        }
+        {
+            h = $2; sub(/\..*/, "", h)
+            if (!(h in known) && $1 !~ /^unknown/ && NF >= 4) {
+                print $1, h, $3, $4
+            }
+        }
     ' "$DEPLOYMENTDATA" "$LEGACY_DEPLOY" \
         | tee -a "$DEPLOYMENTDATA" \
         | wc -l)
     if [[ $_sync_added -gt 0 ]]; then
-        log INFO "Legacy dat sync: $_sync_added new deployment record(s) merged from $LEGACY_DEPLOY"
+        log INFO "Legacy dat sync: $_sync_added new record(s) merged from $LEGACY_DEPLOY"
     else
         log INFO "Legacy dat sync: v2 dat is current — no new records from legacy"
     fi
@@ -507,12 +517,6 @@ log SECTION "Phase 4.6 — Midrange Mod CSV and Compare JSON promotion"
 
 mkdir -p "$MRG_ARCHIVE_DIR" "$COMPARE_DATA_DIR"
 
-# Archive directory for the combined Compare JSON — mirrors MRG_ARCHIVE_DIR.
-# Until now Server Compare data had zero history: only the live per-host
-# files existed, with no way to see what changed run-over-run.
-COMPARE_ARCHIVE_DIR="${COMPARE_ARCHIVE_DIR:-${COMPARE_DATA_DIR}/archive}"
-mkdir -p "$COMPARE_ARCHIVE_DIR"
-
 # SELinux context so httpd can serve the JSON files
 chcon -R -t httpd_sys_content_t "$COMPARE_DATA_DIR" 2>/dev/null || \
     restorecon -R "$COMPARE_DATA_DIR" 2>/dev/null || true
@@ -543,24 +547,7 @@ fi
 rm -f "$MRGCSVTEMP"
 
 # --- Split combined JSON array into per-host files ---------------------------
-# Carry-forward behavior: each host's hostname.json persists across runs.
-# If this run's entry for a host is the "reachable":false stub (SSHFAIL or
-# TIMEOUT), we do NOT overwrite an existing good file — the host's last
-# known-good Server Compare data stays in place. Only reachable hosts (or
-# hosts with no existing file yet) get written. This mirrors the dat
-# carry-forward behavior for the main inventory and Server Compare Tool.
 if [[ -s "$MRGJSONTMP" ]]; then
-    # Archive the combined JSON array before splitting — gives Server
-    # Compare data the same dated history that Midrange Mod CSV already has.
-    COMPARE_ARCHIVE_FILE="${COMPARE_ARCHIVE_DIR}/$(basename "${MRGJSONTMP%.tmp}")"
-    cp "$MRGJSONTMP" "$COMPARE_ARCHIVE_FILE"
-    log INFO "Compare JSON archived: $COMPARE_ARCHIVE_FILE"
-
-    DELETED_COMPARE=$(find "$COMPARE_ARCHIVE_DIR" -name "compare_data_*.json" \
-        -type f -mtime +"${DAYS_TO_KEEP_MRG:-31}" -delete -print | wc -l)
-    [[ $DELETED_COMPARE -gt 0 ]] && \
-        log INFO "Compare JSON archive pruned: $DELETED_COMPARE file(s) older than ${DAYS_TO_KEEP_MRG:-31} days removed"
-
     log INFO "Compare JSON: splitting $MRGJSONTMP -> $COMPARE_DATA_DIR"
     _py_out=$(python3 2>&1 << PYEOF
 import json, os, sys
@@ -574,24 +561,17 @@ try:
         entries = json.load(f)
 except Exception as e:
     print(f"ERROR parsing {json_file}: {e}", file=sys.stderr)
-    print("0 0 0")
+    print("0 0")
     sys.exit(0)
 
-written  = 0
-failed   = 0
-carried  = 0
+written = 0
+failed  = 0
 for entry in entries:
     host = entry.get("host", "")
     if not host:
         failed += 1
         continue
     dest = os.path.join(out_dir, f"{host}.json")
-
-    # Unreachable stub this run — preserve existing good data if present.
-    if entry.get("reachable") is False and os.path.exists(dest):
-        carried += 1
-        continue
-
     try:
         with open(dest, "w") as f:
             json.dump(entry, f, indent=2)
@@ -601,13 +581,12 @@ for entry in entries:
         print(f"ERROR writing {dest}: {e}", file=sys.stderr)
         failed += 1
 
-print(f"{written} {failed} {carried}")
+print(f"{written} {failed}")
 PYEOF
 )
     MRG_JSON_COUNT=$(echo "$_py_out" | tail -1 | awk '{print $1}')
     MRG_JSON_FAIL=$(echo "$_py_out" | tail -1 | awk '{print $2}')
-    MRG_JSON_CARRIED=$(echo "$_py_out" | tail -1 | awk '{print $3}')
-    log INFO "Compare JSON split: $MRG_JSON_COUNT host files written, $MRG_JSON_CARRIED carried forward (unreachable, kept prior data), $MRG_JSON_FAIL failed"
+    log INFO "Compare JSON split: $MRG_JSON_COUNT host files written to $COMPARE_DATA_DIR ($MRG_JSON_FAIL failed)"
 else
     log WARN "MRGJSONTMP empty — Compare JSON files not generated"
 fi
@@ -657,45 +636,22 @@ _DEPLOY_FILE=""
 _CMDB_FILE=""
 [[ $CMDB_AVAILABLE -eq 1 ]] && _CMDB_FILE="$CMDBDATAFILE"
 
-# Previous dat files — used to carry forward data for TIMEOUT/SSHFAIL hosts.
-# Walks back through ALL available rotated generations (.1.gz through
-# .${ROTATE_INVENTORY}.gz), not just yesterday's. This matters when a host
-# has been unreachable for multiple consecutive days: day 2's .1.gz is
-# itself a TIMEOUT record with no real data, so without walking further
-# back the host's data collapses to all n/a even though good data exists
-# from 2, 3, or more days ago.
-#
-# Decompressed oldest-to-newest into a space-separated list of temp files;
-# the awk pass below reads them in that order so prev[host] naturally ends
-# up holding the MOST RECENT usable record once all files are read (last
-# write wins on a per-host basis).
-_PREV_DAT_FILES=""
-_PREV_DAT_TMPS=()
-_PREV_GENS_FOUND=0
-
-for (( _g=ROTATE_INVENTORY; _g>=1; _g-- )); do
-    _cand="${INVENTORYDATA}.${_g}.gz"
-    if [[ -f "$_cand" ]]; then
-        _tmp=$(mktemp /tmp/rhel_prev_dat.XXXXXX)
-        if zcat "$_cand" > "$_tmp" 2>/dev/null; then
-            _PREV_DAT_FILES+="${_PREV_DAT_FILES:+ }${_tmp}"
-            _PREV_DAT_TMPS+=("$_tmp")
-            (( _PREV_GENS_FOUND++ ))
-        else
-            rm -f "$_tmp"
-        fi
-    fi
-done
-
-# Legacy uncompressed .1 fallback (first run after migrating retention scheme,
-# or if gzip ever fails) — only used when no .gz generations were found at all.
-if [[ $_PREV_GENS_FOUND -eq 0 && -f "${INVENTORYDATA}.1" ]]; then
-    _PREV_DAT_FILES="${INVENTORYDATA}.1"
-    _PREV_GENS_FOUND=1
-fi
-
-if [[ $_PREV_GENS_FOUND -gt 0 ]]; then
-    log INFO "Previous dat loaded for TIMEOUT/SSHFAIL carry-forward: ${_PREV_GENS_FOUND} generation(s) (up to ${ROTATE_INVENTORY} days back)"
+# Previous dat file — used to carry forward yesterday data for TIMEOUT hosts
+# (hosts pssh could not reach get their prior scan data preserved, matching
+# legacy RHEL_inventory_refresh.sh behavior which used RHEL_INVENTORY.dat.1.gz)
+# Phase 4 has already rotated the dat so .1.gz is yesterday run.
+_PREV_DAT_FILE=""
+_PREV_DAT_TMP=""
+if [[ -f "${INVENTORYDATA}.1.gz" ]]; then
+    _PREV_DAT_TMP=$(mktemp /tmp/rhel_prev_dat.XXXXXX)
+    zcat "${INVENTORYDATA}.1.gz" > "$_PREV_DAT_TMP" 2>/dev/null \
+        && _PREV_DAT_FILE="$_PREV_DAT_TMP" \
+        || rm -f "$_PREV_DAT_TMP"
+    [[ -n "$_PREV_DAT_FILE" ]] && \
+        log INFO "Previous dat loaded for TIMEOUT carry-forward: ${INVENTORYDATA}.1.gz"
+elif [[ -f "${INVENTORYDATA}.1" ]]; then
+    _PREV_DAT_FILE="${INVENTORYDATA}.1"
+    log INFO "Previous dat loaded for TIMEOUT carry-forward: ${INVENTORYDATA}.1"
 else
     log INFO "No previous dat found — TIMEOUT hosts will show n/a for scan fields (first run?)"
 fi
@@ -722,7 +678,7 @@ fi
 #   Strip "Greenfield-" prefix; all known codes pass through as-is.
 #   Add new datacenters here when they come online.
 # ---------------------------------------------------------------------------
-awk -v prev_dat_files="$_PREV_DAT_FILES" \
+awk -v prev_dat_file="$_PREV_DAT_FILE" \
     -v deploy_file="$_DEPLOY_FILE" \
     -v cmdb_file="$_CMDB_FILE" \
     -v inv_file="$INVENTORYDATA" \
@@ -740,12 +696,6 @@ function expand_loc(loc,    l) {
 # ---- Helper: return n/a if value is empty or literal "n/a" ----
 function na(v) { return (v == "" || v == "n/a") ? "n/a" : v }
 
-# ---- Build set membership for prev_dat_files (space-separated list) ----
-BEGIN {
-    n_prev = split(prev_dat_files, prev_arr, " ")
-    for (pi = 1; pi <= n_prev; pi++) is_prev_file[prev_arr[pi]] = 1
-}
-
 # ============================================================
 # Pass 1 — DEPLOYMENTDATA: build deploy_date[host] lookup
 # Format: YYYY-MM-DD hostname Virt|Phys OSver
@@ -753,17 +703,15 @@ BEGIN {
 BEGINFILE { current_file = FILENAME }
 
 # ============================================================
-# Pass 0 — PREV_DAT: build prev[host] lookup, walking back through
-# multiple generations (oldest file read first, newest last) so that
-# prev[host] ends up holding the MOST RECENT usable record per host.
-# A host down for 3 days still finds its last good data from generation
-# 3, 4, etc. instead of collapsing to all n/a after just one day.
+# Pass 0 — PREV_DAT: build prev[host] lookup from yesterday
+# Stores the entire 28-field space-delimited record so TIMEOUT
+# hosts can carry forward their previous scan real data.
 # ============================================================
-(FILENAME in is_prev_file) && !/^#/ && NF >= 3 {
-    # Store previous record for TIMEOUT/SSHFAIL carry-forward.
+current_file == prev_dat_file && !/^#/ && NF >= 3 {
+    # Store previous record for TIMEOUT carry-forward.
     # Include TIMEOUT_ records (multi-day unreachable) so the carry-forward
-    # chain persists — a host unreachable for several consecutive runs still
-    # carries its last known good data rather than collapsing to all n/a.
+    # chain persists — a host unreachable for 3 consecutive days still carries
+    # its last known good data rather than collapsing to all n/a.
     # Exclude bare TIMEOUT/SSHFAIL (no real data) and header lines.
     if ($2 != "TIMEOUT" && $2 != "SSHFAIL" && $3 != "TIMEOUT" && $3 != "SSHFAIL") {
         prev[$1] = $0
@@ -772,7 +720,10 @@ BEGINFILE { current_file = FILENAME }
 }
 
 current_file == deploy_file && !/^#/ && NF >= 2 {
-    deploy_date[$2] = $1
+    # Normalize to short hostname — legacy dat uses FQDNs, v2 uses short names.
+    # Storing under the short name means both formats resolve correctly.
+    h = $2; sub(/\..*/, "", h)
+    deploy_date[h] = $1
     next
 }
 
@@ -810,33 +761,24 @@ current_file == inv_file && !/^#/ && NF >= 1 {
     # Skip non-RHEL hosts entirely — OS "?" means no /etc/redhat-release
     if ($3 == "?") { next }
 
-    # For TIMEOUT and SSHFAIL hosts: overlay the carried-forward record so
-    # real scan data (kernel, CPU, memory, location, etc.) is preserved
-    # instead of showing n/a across the board. Each failure mode keeps its
-    # own distinct type suffix so the report can still tell them apart:
-    #   TIMEOUT host  -> TIMEOUT_Virt / TIMEOUT_Phys / TIMEOUT_Cloud
-    #   SSHFAIL host  -> SSHFAIL_Virt / SSHFAIL_Phys / SSHFAIL_Cloud
-    # The underlying carried-forward fields (kernel, memory, location, CMDB,
-    # etc.) are identical either way — only the failure-type label differs.
-    if ((typ == "TIMEOUT" || typ == "SSHFAIL") && (host in prev)) {
-        fail_prefix = typ
+    # For TIMEOUT hosts: overlay yesterday dat record so real scan
+    # data (kernel, CPU, memory etc.) is preserved rather than showing n/a.
+    # This matches legacy behaviour — RHEL_INVENTORY.dat.1.gz carry-forward.
+    # Type becomes TIMEOUT_Virt or TIMEOUT_Phys based on yesterday type.
+    if (typ == "TIMEOUT" && (host in prev)) {
         n = split(prev[host], pf, " ")
-        # Rebuild $2-$28 from the carried-forward record
+        # Rebuild $2-$28 from yesterday record
         for (i = 1; i <= n; i++) $i = pf[i]
-        # Strip any TIMEOUT_/SSHFAIL_ prefix from prev type to avoid
-        # compounding (e.g. SSHFAIL_Virt yesterday -> Virt -> SSHFAIL_Virt
-        # today, not SSHFAIL_SSHFAIL_Virt or a mismatched failure label)
+        # Strip TIMEOUT_ prefix from prev type to avoid compounding
+        # (TIMEOUT_Virt from yesterday → Virt → TIMEOUT_Virt today, not TIMEOUT_TIMEOUT_Virt)
         prev_typ = pf[2]
-        sub(/^(TIMEOUT|SSHFAIL)_/, "", prev_typ)
-        if (prev_typ == "Virt" || prev_typ == "Cloud" || prev_typ == "TIMEOUT" || prev_typ == "SSHFAIL") typ = fail_prefix "_Virt"
-        else if (prev_typ == "Phys") typ = fail_prefix "_Phys"
-        else typ = fail_prefix "_" prev_typ
+        sub(/^TIMEOUT_/, "", prev_typ)
+        if (prev_typ == "Virt" || prev_typ == "Cloud" || prev_typ == "TIMEOUT") typ = "TIMEOUT_Virt"
+        else if (prev_typ == "Phys") typ = "TIMEOUT_Phys"
+        else typ = "TIMEOUT_" prev_typ
     } else if (typ == "TIMEOUT") {
         # No previous data — use TIMEOUT_Virt with n/a fields
         typ = "TIMEOUT_Virt"
-    } else if (typ == "SSHFAIL") {
-        # No previous data — use SSHFAIL_Virt with n/a fields
-        typ = "SSHFAIL_Virt"
     }
 
     loc = expand_loc($21)
@@ -844,11 +786,9 @@ current_file == inv_file && !/^#/ && NF >= 1 {
     # IP address in location field — repurposed server with duplicate config block
     if (loc ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) loc = "unknown"
 
-    # Cloud datacenter — set type to Cloud, TIMEOUT_Cloud, or SSHFAIL_Cloud
-    # based on location, preserving whichever failure mode (if any) applies.
+    # Cloud datacenter — set type to Cloud or TIMEOUT_Cloud based on location
     if (loc == "AZCE" || loc == "AZE2") {
         if (typ ~ /^TIMEOUT/) typ = "TIMEOUT_Cloud"
-        else if (typ ~ /^SSHFAIL/) typ = "SSHFAIL_Cloud"
         else typ = "Cloud"
     }
 
@@ -889,15 +829,13 @@ END {
     print matched+0 ":" missing+0 > stats_file
 }
 ' \
-    ${_PREV_DAT_FILES:+$_PREV_DAT_FILES} \
+    ${_PREV_DAT_FILE:+"$_PREV_DAT_FILE"} \
     ${_DEPLOY_FILE:+"$_DEPLOY_FILE"} \
     ${_CMDB_FILE:+"$_CMDB_FILE"} \
     "$INVENTORYDATA"
 
-# Clean up all decompressed prev dat generation temp files
-if [[ ${#_PREV_DAT_TMPS[@]} -gt 0 ]]; then
-    rm -f "${_PREV_DAT_TMPS[@]}"
-fi
+# Clean up decompressed prev dat temp file
+[[ -n "$_PREV_DAT_TMP" && -f "$_PREV_DAT_TMP" ]] && rm -f "$_PREV_DAT_TMP"
 
 # Read counts written by awk END block
 if [[ -f "${DATA_DIR}/${INVENTDATACSV}.stats" ]]; then
