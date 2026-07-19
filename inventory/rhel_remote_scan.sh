@@ -181,18 +181,45 @@ HW_SERIAL="${HW_SERIAL// /_}"
 HW_SERIAL="${HW_SERIAL:=n/a}"
 
 # =============================================================================
-# PNC_PROVISION_CONFIG — all fields sourced from here
+# PNC_PROVISION_CONFIG — parse defensively instead of sourcing
 # =============================================================================
+# Some hosts have a malformed second block in this file (added by VCO/BladeLogic)
+# where values appear on separate lines from their keys, making the file
+# unparseable as shell syntax. Sourcing it blindly causes bash to abort
+# mid-file, leaving LOCATION, ENVIRONMENT, CIDEVICE, VCENTER etc. unset.
+# Instead, grep for each variable by name and extract the value directly.
+# This is immune to malformed syntax anywhere in the file.
 
-# Source the file quietly; it exports variables we use directly
-. /boot/PNC_PROVISION_CONFIG > /dev/null 2>&1
+_PNC_CONF=/boot/PNC_PROVISION_CONFIG
 
-BUILDTYPE="${BUILDTYPE:-n/a}"
-DBTYPE="${DBTYPE:-n/a}"
-LOCATION="${LOCATION:-n/a}"
-CIDEVICE="${CIDEVICE:-n/a}"
-VCENTER="${VCENTER:-n/a}"
-ENVIRONMENT="${ENVIRONMENT:-n/a}"
+_parse_pnc() {
+    local key="$1"
+    local val=""
+    # Match KEY=value or KEY="value" — take last occurrence so the
+    # newer VCO block (appended at bottom) wins over the original block.
+    val=$(grep -i "^${key}=" "$_PNC_CONF" 2>/dev/null \
+          | tail -1 \
+          | sed "s/^[^=]*=//;s/^[\"']//;s/[\"']$//")
+    echo "${val:-n/a}"
+}
+
+if [[ -f "$_PNC_CONF" ]]; then
+    BUILDTYPE="$(_parse_pnc BUILDTYPE)"
+    DBTYPE="$(_parse_pnc DBTYPE)"
+    LOCATION="$(_parse_pnc LOCATION)"
+    CIDEVICE="$(_parse_pnc CIDEVICE)"
+    VCENTER="$(_parse_pnc VCENTER)"
+    ENVIRONMENT="$(_parse_pnc ENVIRONMENT)"
+    PROVISIONDATE="$(_parse_pnc PROVISIONDATE)"
+else
+    BUILDTYPE="n/a"
+    DBTYPE="n/a"
+    LOCATION="n/a"
+    CIDEVICE="n/a"
+    VCENTER="n/a"
+    ENVIRONMENT="n/a"
+    PROVISIONDATE="n/a"
+fi
 
 # BuildDate — prefer PROVISIONDATE from config (modern SOE hosts)
 # Falls back to n/a; rhel_inv_collect.sh will fill from RHEL_DEPLOYMENTS.dat
@@ -384,30 +411,11 @@ fi
 # =============================================================================
 # One PKG line per installed RPM:
 #   PKG|hostname,pkgname,version,release,installdate
-#
-# If the RPM database is corrupt, rpm -qa writes errors to stderr and
-# produces no usable output. We capture stderr, detect the corruption
-# strings, and emit a PKG|RPM_DB_ERROR sentinel so the jumpbox filter
-# can track the host in rpm_db_errors.dat and skip writing to PACKAGETEMP.
-# The INV| line above is still emitted — all other data is collected normally.
 
-_rpm_stderr_tmp=$(mktemp /tmp/rpm_err.XXXXXX 2>/dev/null || echo "/tmp/rpm_err.$$")
-_rpm_out=$(rpm -qa --queryformat '%{NAME} %{VERSION} %{RELEASE} %{installtime}\n' \
-    2>"$_rpm_stderr_tmp")
-_rpm_rc=$?
-
-_rpm_err=$(cat "$_rpm_stderr_tmp" 2>/dev/null)
-rm -f "$_rpm_stderr_tmp"
-
-if echo "$_rpm_err" | grep -qiE 'rpmdb|BDB|DB_RUNRECOVERY|cannot open Packages'; then
-    # RPM DB corrupt — signal filter to skip packages but keep host in inventory
-    echo "PKG|RPM_DB_ERROR:${HOST}"
-else
-    echo "$_rpm_out" \
-        | sort -k 1,1 -u \
-        | while read -r a b c d; do
-            [[ -z "$a" ]] && continue
-            installdate=$(date +%m/%d/%Y_%T -d "@${d}" 2>/dev/null)
-            echo "PKG|${HOST},${a},${b},${c},${installdate}"
-          done
-fi
+rpm -qa --queryformat '%{NAME} %{VERSION} %{RELEASE} %{installtime}\n' \
+    2>/dev/null \
+    | sort -k 1,1 -u \
+    | while read -r a b c d; do
+        installdate=$(date +%m/%d/%Y_%T -d "@${d}" 2>/dev/null)
+        echo "PKG|${HOST},${a},${b},${c},${installdate}"
+    done
