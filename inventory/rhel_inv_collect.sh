@@ -691,7 +691,9 @@ function na(v) { return (v == "" || v == "n/a") ? "n/a" : v }
 # Pass 1 — DEPLOYMENTDATA: build deploy_date[host] lookup
 # Format: YYYY-MM-DD hostname Virt|Phys OSver
 # ============================================================
-BEGINFILE { current_file = FILENAME }
+# ---- Track current file without BEGINFILE (not all awk support it) ----
+# FNR resets to 1 on each new file — detect file transitions via FILENAME.
+{ if (FILENAME != current_file) current_file = FILENAME }
 
 # ============================================================
 # Pass 0 — PREV_DAT: build prev[host] lookup from yesterday
@@ -820,7 +822,7 @@ END {
     print matched+0 ":" missing+0 > stats_file
 }
 ' \
-    ${_PREV_DAT_FILE:+"$_PREV_DAT_FILE"} \
+    ${_PREV_DAT_FILES:+$_PREV_DAT_FILES} \
     ${_DEPLOY_FILE:+"$_DEPLOY_FILE"} \
     ${_CMDB_FILE:+"$_CMDB_FILE"} \
     "$INVENTORYDATA"
