@@ -87,13 +87,14 @@ FED_DB_TMP="${DATA_DIR}/fed_enclave_db.tmp"
 FED_PKG_TMP="${DATA_DIR}/fed_enclave_pkg.tmp"
 FED_MID_MOD_TMP="${DATA_DIR}/fed_enclave_midrange_mod.tmp"
 FED_CMP_DATA_TMP="${DATA_DIR}/fed_enclave_compare_data.tmp"
+FED_UPG_TMP="${DATA_DIR}/fed_enclave_upgrade.tmp"
 ERRDIR="${DATA_DIR}/errdir_fed.$(date +%Y%m%d_%H%M)"
 mkdir -p "$ERRDIR"
 
 # Temp dat file — promoted atomically at end
 FED_DAT_TMP="${DATA_DIR}/fed_enclave_raw.tmp"
 rm -f "$FED_DAT_TMP" "$FED_ID_TMP" "$FED_DB_TMP" "$FED_PKG_TMP" \
-      "$FED_MID_MOD_TMP" "$FED_CMP_DATA_TMP"
+      "$FED_MID_MOD_TMP" "$FED_CMP_DATA_TMP" "$FED_UPG_TMP"
 
 # pssh settings — same as main scan
 PSSH_BATCH=75
@@ -133,7 +134,8 @@ _fed_pssh_input \
         "$FED_DB_TMP" \
         "$FED_PKG_TMP" \
         "$FED_MID_MOD_TMP" \
-        "$FED_CMP_DATA_TMP"
+        "$FED_CMP_DATA_TMP" \
+        "$FED_UPG_TMP"
 
 SCAN_RC=$?
 END_TIME=$(date +%s)
@@ -218,6 +220,15 @@ else
     log INFO "Fed Enclave MRG json : empty — check if RHEL_data_gather.sh ran"
 fi
 
+FED_UPG_OUT="${DATA_DIR}/fed_enclave_upgrade.dat"
+if [[ -s "$FED_UPG_TMP" ]]; then
+    mv "$FED_UPG_TMP" "$FED_UPG_OUT"
+    log INFO "Fed Enclave UPG csv  : $FED_UPG_OUT ($(wc -l < "$FED_UPG_OUT") records)"
+else
+    rm -f "$FED_UPG_TMP"
+    log INFO "Fed Enclave UPG csv  : empty — no upgrade eligibility data collected"
+fi
+
 # Clean up stale error directories older than 7 days
 find "$PGMDIR" -type d -name "errdir_fed*" -mtime +7 \
     -exec rm -rf \'{}\' \; 2>/dev/null
@@ -230,5 +241,6 @@ log INFO "  DB:  ${DATA_DIR}/fed_enclave_db.dat"
 log INFO "  PKG: ${DATA_DIR}/fed_enclave_pkg.csv"
 log INFO "  MRG: ${DATA_DIR}/fed_enclave_midrange_mod.dat"
 log INFO "  JSON:${DATA_DIR}/fed_enclave_compare_data.dat"
+log INFO "  UPG: ${DATA_DIR}/fed_enclave_upgrade.dat"
 
 exit 0
