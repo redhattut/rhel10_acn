@@ -181,45 +181,18 @@ HW_SERIAL="${HW_SERIAL// /_}"
 HW_SERIAL="${HW_SERIAL:=n/a}"
 
 # =============================================================================
-# PNC_PROVISION_CONFIG — parse defensively instead of sourcing
+# PNC_PROVISION_CONFIG — all fields sourced from here
 # =============================================================================
-# Some hosts have a malformed second block in this file (added by VCO/BladeLogic)
-# where values appear on separate lines from their keys, making the file
-# unparseable as shell syntax. Sourcing it blindly causes bash to abort
-# mid-file, leaving LOCATION, ENVIRONMENT, CIDEVICE, VCENTER etc. unset.
-# Instead, grep for each variable by name and extract the value directly.
-# This is immune to malformed syntax anywhere in the file.
 
-_PNC_CONF=/boot/PNC_PROVISION_CONFIG
+# Source the file quietly; it exports variables we use directly
+. /boot/PNC_PROVISION_CONFIG > /dev/null 2>&1
 
-_parse_pnc() {
-    local key="$1"
-    local val=""
-    # Match KEY=value or KEY="value" — take last occurrence so the
-    # newer VCO block (appended at bottom) wins over the original block.
-    val=$(grep -i "^${key}=" "$_PNC_CONF" 2>/dev/null \
-          | tail -1 \
-          | sed "s/^[^=]*=//;s/^[\"']//;s/[\"']$//")
-    echo "${val:-n/a}"
-}
-
-if [[ -f "$_PNC_CONF" ]]; then
-    BUILDTYPE="$(_parse_pnc BUILDTYPE)"
-    DBTYPE="$(_parse_pnc DBTYPE)"
-    LOCATION="$(_parse_pnc LOCATION)"
-    CIDEVICE="$(_parse_pnc CIDEVICE)"
-    VCENTER="$(_parse_pnc VCENTER)"
-    ENVIRONMENT="$(_parse_pnc ENVIRONMENT)"
-    PROVISIONDATE="$(_parse_pnc PROVISIONDATE)"
-else
-    BUILDTYPE="n/a"
-    DBTYPE="n/a"
-    LOCATION="n/a"
-    CIDEVICE="n/a"
-    VCENTER="n/a"
-    ENVIRONMENT="n/a"
-    PROVISIONDATE="n/a"
-fi
+BUILDTYPE="${BUILDTYPE:-n/a}"
+DBTYPE="${DBTYPE:-n/a}"
+LOCATION="${LOCATION:-n/a}"
+CIDEVICE="${CIDEVICE:-n/a}"
+VCENTER="${VCENTER:-n/a}"
+ENVIRONMENT="${ENVIRONMENT:-n/a}"
 
 # BuildDate — prefer PROVISIONDATE from config (modern SOE hosts)
 # Falls back to n/a; rhel_inv_collect.sh will fill from RHEL_DEPLOYMENTS.dat
@@ -416,6 +389,98 @@ rpm -qa --queryformat '%{NAME} %{VERSION} %{RELEASE} %{installtime}\n' \
     2>/dev/null \
     | sort -k 1,1 -u \
     | while read -r a b c d; do
+        [[ -z "$a" ]] && continue
         installdate=$(date +%m/%d/%Y_%T -d "@${d}" 2>/dev/null)
         echo "PKG|${HOST},${a},${b},${c},${installdate}"
     done
+# =============================================================================
+# OUTPUT — UPG tag (RHEL 8 to 9 upgrade eligibility)
+# =============================================================================
+# One UPG line per host:
+#   UPG|hostname,location,mnemonic,environment,os_display,eligibility,comments
+#
+# Eligibility values:
+#   ELIGIBLE    — passes all checks, ready to upgrade
+#   CONDITIONAL — rootvg < 22 GB; eligible after disk expansion
+#   INELIGIBLE  — hard blocker (previous upgrade, low /boot, DB server, not RHEL 8)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# ELIGIBILITY CRITERIA — edit each numbered section to change the rules.
+# Priority order: lower number = checked/reported first in comments.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_upg_host="$HOST"
+_upg_loc="${LOCATION:-Unknown}"
+_upg_loc="${_upg_loc//Greenfield-/}"    # strip Greenfield- prefix
+_upg_mnemo=$(echo "$HOST" | sed 's/^[a-z]//' | grep -o '^[a-z]*' | tr '[:lower:]' '[:upper:]')
+_upg_mnemo="${_upg_mnemo:-Unknown}"
+_upg_env="${ENVIRONMENT:-Unknown}"
+_upg_os="Unknown"
+_upg_status="ELIGIBLE"
+_upg_issue=""
+_upg_pri=99
+
+_upg_set_issue() {
+    local msg="$1" pri="$2"
+    if [[ -z "$_upg_issue" || "$pri" -lt "$_upg_pri" ]]; then
+        _upg_issue="$msg"
+        _upg_pri="$pri"
+        _upg_status="INELIGIBLE"
+    fi
+}
+
+# ── Criterion 1: OS version — must be RHEL 8.x ─────────────────────────────
+_upg_ver=""
+if [[ -f /etc/redhat-release ]]; then
+    _upg_ver=$(grep -oP 'release \K[0-9]+\.[0-9]+' /etc/redhat-release 2>/dev/null || echo "")
+fi
+
+if [[ "$_upg_ver" =~ ^7\. ]]; then
+    # RHEL 7: exit silently — no UPG line emitted
+    exit 0
+elif [[ "$_upg_ver" =~ ^8\. ]]; then
+    _upg_os="RHEL 8"
+elif [[ "$_upg_ver" =~ ^9\. ]]; then
+    _upg_os="RHEL 9"
+    _upg_set_issue "Already running RHEL 9" 1
+elif [[ -n "$_upg_ver" ]]; then
+    _upg_os="RHEL $_upg_ver"
+    _upg_set_issue "Not RHEL 8 — found RHEL $_upg_ver" 1
+else
+    _upg_os="Unknown"
+    _upg_set_issue "Unable to detect OS version" 1
+fi
+
+# ── Criterion 2: No previous upgrade (7→8 leapp) ───────────────────────────
+if [[ -f /etc/os_upgrade ]]; then
+    _upg_set_issue "Previous RHEL 7 to 8 upgrade detected — not eligible for second in-place upgrade" 2
+fi
+
+# ── Criterion 3: /boot partition space — minimum 1024 MB (2 GB required) ───
+_upg_boot=$(df -m /boot 2>/dev/null | awk 'NR==2 {print $4}')
+_upg_boot="${_upg_boot:-0}"
+if [[ "$_upg_boot" -lt 1024 ]]; then
+    _upg_set_issue "Low /boot space — ${_upg_boot}MB free, 2GB required" 3
+fi
+
+# ── Criterion 4: Not a DB server — DBTYPE must be unset ────────────────────
+if grep -q "^DBTYPE=.\+[^[:space:]]" /boot/PNC_PROVISION_CONFIG 2>/dev/null; then
+    _upg_set_issue "Database servers are not certified for RHEL 9 in-place upgrade" 4
+fi
+
+# ── Criterion 5: rootvg free space — minimum 22 GB ─────────────────────────
+# NOTE: < 22 GB is CONDITIONAL (disk expansion needed), not hard INELIGIBLE.
+# These hosts are counted as eligible in the KPI rate.
+_upg_rootvg=$(vgs --noheadings --units g --nosuffix rootvg 2>/dev/null | awk '{printf "%d", $7}')
+_upg_rootvg="${_upg_rootvg:-0}"
+if [[ "$_upg_status" == "ELIGIBLE" && "$_upg_rootvg" -lt 22 ]]; then
+    _upg_status="CONDITIONAL"
+    _upg_issue="Disk expansion required — rootvg ${_upg_rootvg}G free, 22G needed. Expand rootvg then request upgrade."
+fi
+
+# ── Final status ─────────────────────────────────────────────────────────────
+if [[ "$_upg_status" == "ELIGIBLE" ]]; then
+    _upg_issue="Meets all requirements"
+fi
+
+echo "UPG|${_upg_host},${_upg_loc},${_upg_mnemo},${_upg_env},${_upg_os},${_upg_status},${_upg_issue}"

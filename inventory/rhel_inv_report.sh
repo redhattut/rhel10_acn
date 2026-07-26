@@ -69,21 +69,10 @@ rm -f "$APPDATAPLAT" "$APPDATAREL" "$LOCDATAPLAT" "$LOCDATAREL"
 awk -v lp="$LOCDATAPLAT" -v lr="$LOCDATAREL" \
     -v ap="$APPDATAPLAT" -v ar="$APPDATAREL" \
     '!/^#/ {
-        if ($3 == "?") next
-
-        # Normalise location: strip "Greenfield-" prefix so GF0/GF1/GF2
-        # appear as a single canonical uppercase code in all lookup files.
-        loc = $21
-        sub(/^[Gg]reenfield-/, "", loc)
-
-        print loc " " $2  >> lp
-        print loc " " $3  >> lr
-
-        # Only write app code rows for real codes — n/a means SSHFAIL/TIMEOUT
-        if ($26 != "n/a" && $26 != "") {
-            print $26 " " $2  >> ap
-            print $26 " " $3  >> ar
-        }
+        print $21 " " $2  >> lp
+        print $21 " " $3  >> lr
+        print $26 " " $2  >> ap
+        print $26 " " $3  >> ar
     }' "$INVENTORYDATA"
 
 log INFO "Intermediate files built"
@@ -104,43 +93,27 @@ for ver in "${OS_VERSIONS[@]}"; do
 "
 done
 
-# Build dynamic awk snippets from LOCATIONS array
-# Each location gets a LOC_<code> variable, safe for shell variable names
-# (hyphens replaced with underscores).
-LOC_AWK_INIT=""
-LOC_AWK_COUNTS=""
-LOC_AWK_PRINTF=""
-# Also build the is_cloud test string for the awk cloud classifier
-LOC_CLOUD_TEST=""
-for loc_code in "${LOCATIONS[@]}"; do
-    varname="LOC_${loc_code//-/_}"
-    LOC_AWK_INIT+="${varname}=0;"
-    LOC_AWK_COUNTS+="        if (loc==\"${loc_code}\") ${varname}++
-"
-    LOC_AWK_PRINTF+="    printf \"${varname}=%d\\n\", ${varname}+0
-"
-done
-
 eval "$(awk \
     'BEGIN{total=0;virt=0;phys=0;cloud=0;fail=0
            ernd=0;euat=0;eqa=0;eprod=0
-           '"$LOC_AWK_INIT"'}
+           lgf0=0;lgf1=0;lgf2=0;lazce=0;laze2=0}
     !/^#/{
-        if ($3 == "?") next
         total++
         loc=$21
         sub(/^Greenfield-/,"",loc)
-        # SSHFAIL and TIMEOUT both count as unreachable — folded into one counter.
-        # Neither is counted toward virt/phys/cloud since they are failure states.
-        if ($2 ~ /^SSHFAIL/ || $2 ~ /^TIMEOUT/) { fail++ }
-        else if (loc=="AZCE"||loc=="AZE2") cloud++
-        else if ($2=="Virt")  virt++
-        else if ($2=="Phys")  phys++
+        if (loc=="AZCE"||loc=="AZE2") cloud++
+        else if ($2=="Virt") virt++
+        else if ($2=="Phys") phys++
+        if ($2=="SSHFAIL"||$3=="SSHFAIL") fail++
         if ($27=="RND")  ernd++
         if ($27=="UAT")  euat++
         if ($27=="QA")   eqa++
         if ($27=="PROD") eprod++
-'"$LOC_AWK_COUNTS"'
+        if (loc=="GF0")  lgf0++
+        if (loc=="GF1")  lgf1++
+        if (loc=="GF2")  lgf2++
+        if (loc=="AZCE") lazce++
+        if (loc=="AZE2") laze2++
     }
     END{
         printf "TOTAL_HOSTS=%d\n",    total
@@ -152,17 +125,21 @@ eval "$(awk \
         printf "ENV_UAT=%d\n",  euat
         printf "ENV_QA=%d\n",   eqa
         printf "ENV_PROD=%d\n", eprod
-'"$LOC_AWK_PRINTF"'
+        printf "LOC_GF0=%d\n",  lgf0
+        printf "LOC_GF1=%d\n",  lgf1
+        printf "LOC_GF2=%d\n",  lgf2
+        printf "LOC_AZCE=%d\n", lazce
+        printf "LOC_AZE2=%d\n", laze2
     }' "$INVENTORYDATA")"
 
-eval "$(awk '!/^#/ && $3 != "?" {
+eval "$(awk '{
 '"$OS_AWK_COUNTS"'
 }
 END{
 '"$OS_AWK_PRINTF"'
 }' "$INVENTORYDATA")"
 
-log INFO "Virtual: $VIRTUAL_SERVERS  Physical: $PHYSICAL_SERVERS  Cloud: $CLOUD_SERVERS  SSH/Timeout failures: $SSHFAIL"
+log INFO "Virtual: $VIRTUAL_SERVERS  Physical: $PHYSICAL_SERVERS  Cloud: $CLOUD_SERVERS  SSH failures: $SSHFAIL"
 
 # =============================================================================
 # config.js — RHEL versions JSON fragment
@@ -400,19 +377,6 @@ RPT_Main() {
   </div>
 
   <section class="kpis">
-    <div class="kpi total">
-      <span class="ic ic-green">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="2" y="3" width="20" height="14" rx="2"/>
-          <line x1="8" y1="21" x2="16" y2="21"/>
-          <line x1="12" y1="17" x2="12" y2="21"/>
-        </svg>
-      </span>
-      <span class="meta">
-        <span class="num" data-kpi="total">${TOTAL_HOSTS}</span>
-        <span class="lab">Total managed servers</span>
-      </span>
-    </div>
     <div class="kpi">
       <span class="ic ic-blue">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -449,7 +413,7 @@ RPT_Main() {
       <span class="ic ic-red">!</span>
       <span class="meta">
         <span class="num" data-kpi="ssh">${SSHFAIL}</span>
-        <span class="lab">Hosts unreachable (SSH)</span>
+        <span class="lab">Hosts unreachable by SSH</span>
       </span>
     </div>
   </section>
@@ -652,14 +616,10 @@ RPT_by_Location() {
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1.4rem">
 LOCEOF
 
-    # Iterate the canonical location list from conf (LOCATIONS array),
-    # then append n/a so SSHFAIL/TIMEOUT hosts are represented.
-    # This prevents raw IPs or malformed values in $21 from appearing as cards.
-    local _loc_list=("${LOCATIONS[@]}" "n/a")
-
-    for LOC in "${_loc_list[@]}"; do
+    awk '!/^\?/{print $1}' "$LOCDATAPLAT" | sort -u \
+    | while read -r LOC; do
         [[ -z "$LOC" ]] && continue
-        STOTAL=$(grep -c "^$LOC " "$LOCDATAPLAT" 2>/dev/null || true)
+        STOTAL=$(grep -c "^$LOC " "$LOCDATAPLAT" 2>/dev/null || echo 0)
         STOTAL=$(( STOTAL + 0 ))
         [[ $STOTAL -eq 0 ]] && continue
 
@@ -699,7 +659,7 @@ LOCBEOF
 # =============================================================================
 RPT_by_Mnemonic() {
     local GRAND
-    GRAND=$(awk '!/^#/ && $3 != "?" && $26 != "n/a" && $26 != ""' "$INVENTORYDATA" | wc -l)
+    GRAND=$(grep -vc "^#" "$INVENTORYDATA" 2>/dev/null || echo 0)
 
     # Build series metadata from OS_SERIES conf array
     # Each entry: "Label:ver1,ver2,..."  e.g. "RHEL 8.x Series:8.8,8.10"
@@ -726,9 +686,9 @@ RPT_by_Mnemonic() {
         done
         printf "\n"
 
-        awk '{print $1}' "$APPDATAPLAT" | sort -u \
+        awk '!/^#/{print $26}' "$INVENTORYDATA" | sort -u \
         | while read -r APP; do
-            [[ -z "$APP" ]] && continue
+            [[ -z "$APP" || "$APP" == "n/a" ]] && continue
             local STOTAL; STOTAL=$(grep -c "^$APP " "$APPDATAPLAT" 2>/dev/null || echo 0)
             STOTAL=$(( STOTAL + 0 ))
             [[ $STOTAL -eq 0 ]] && continue
@@ -748,7 +708,7 @@ RPT_by_Mnemonic() {
             printf "\n"
         done
     } > "$APP_CSV"
-    log INFO "Application CSV written: $APP_CSV" >&2
+    log INFO "Application CSV written: $APP_CSV"
 
     _html_head "RHEL Operations — Inventory by Application Code"
     _sidebar ""
@@ -795,7 +755,7 @@ APPEOF2
     echo "          </tr></thead>"
     echo "          <tbody id=\"appBody\">"
 
-    awk '{print $1}' "$APPDATAPLAT" | sort -u \
+    awk '!/^#/{print $26}' "$INVENTORYDATA" | sort -u \
     | while read -r APP; do
         [[ -z "$APP" || "$APP" == "n/a" ]] && continue
         local STOTAL; STOTAL=$(grep -c "^$APP " "$APPDATAPLAT" 2>/dev/null || echo 0)
@@ -871,7 +831,7 @@ $(printf '%b' "$GT_COLS")            </tr>
       const va = a.querySelectorAll('td')[col].textContent.trim();
       const vb = b.querySelectorAll('td')[col].textContent.trim();
       return col === 0 ? va.localeCompare(vb) * dir
-                       : ((parseInt(va)||0) - (parseInt(vb)||0)) * dir;
+                       : (parseInt(va)||0 - (parseInt(vb)||0)) * dir;
     });
     const tb = document.getElementById('appBody');
     rows.forEach(function(r){ tb.insertBefore(r, tb.lastElementChild); });
@@ -900,20 +860,6 @@ APPJSEOF
 _render_deploy_card() {
     local heading="$1"
     local datafile="$2"
-
-    # Empty file = current month with no deployments yet — render a placeholder card
-    if [[ ! -s "$datafile" ]]; then
-        cat << EMPTYEOF
-    <section class="card">
-      <div class="month-head">
-        <h2>${heading}</h2>
-        <span class="total"><b>0</b> deployments</span>
-      </div>
-      <p class="deploy-empty-note">No new deployments recorded this month yet.</p>
-    </section>
-EMPTYEOF
-        return
-    fi
 
     local total=0 virt=0 phys=0 cloud=0
     eval "$(awk 'BEGIN{t=0;v=0;p=0;c=0}
@@ -1032,11 +978,7 @@ MFEOF
         local cpct; cpct=$(awk -v n="${month_counts[$i]}" -v d="$max_cnt" 'BEGIN{printf "%.1f", n/d*100}')
         local peak_cls=""
         [[ $i -eq $peak_idx ]] && peak_cls=" peak"
-        # bar-1/bar-2/bar-3 give each column a distinct color by position,
-        # independent of which one is flagged "peak" — fixes oldest/newest
-        # bars rendering identically when peak only marks the highest value.
-        local pos_cls=" bar-$(( i + 1 ))"
-        echo "      <div class=\"col${peak_cls}${pos_cls}\"><div class=\"colbar-wrap\"><div class=\"colbar${pos_cls}\" style=\"height:${cpct}%\"><span class=\"colval\">${month_counts[$i]}</span></div></div><span class=\"collabel\">${month_labels[$i]}</span></div>"
+        echo "      <div class=\"col${peak_cls}\"><div class=\"colbar-wrap\"><div class=\"colbar\" style=\"height:${cpct}%\"><span class=\"colval\">${month_counts[$i]}</span></div></div><span class=\"collabel\">${month_labels[$i]}</span></div>"
     done
     echo "    </div>"
     echo "  </section>"
@@ -1051,12 +993,7 @@ MFEOF
         local mname; mname=$(date -d "${y}-${mpad}-01" '+%B' 2>/dev/null || echo "Month $mpad")
         local _mdtmp; _mdtmp=$(mktemp /tmp/rhel_mdata.XXXXXX)
         awk -v p="${y}-${mpad}" '$1~p' "$DEPLOYMENTDATA" > "$_mdtmp"
-        # Always render the current month (i=0) even if count is zero —
-        # without this, a month with no deployments yet is silently skipped
-        # and the previous month appears first, which is confusing.
-        if [[ -s "$_mdtmp" ]] || [[ $i -eq 0 ]]; then
-            _render_deploy_card "${mname} ${y}" "$_mdtmp"
-        fi
+        [[ -s "$_mdtmp" ]] && _render_deploy_card "${mname} ${y}" "$_mdtmp"
         rm -f "$_mdtmp"
     done
 
@@ -1122,8 +1059,7 @@ AEOF
         local apct; apct=$(awk -v n="${bar_counts[$i]}" -v d="$max_cnt" 'BEGIN{printf "%.1f", n/d*100}')
         local peak_cls=""
         [[ $i -eq $peak_idx ]] && peak_cls=" peak"
-        local pos_cls=" bar-$(( i + 1 ))"
-        echo "      <div class=\"col${peak_cls}${pos_cls}\"><div class=\"colbar-wrap\"><div class=\"colbar${pos_cls}\" style=\"height:${apct}%\"><span class=\"colval\">${bar_counts[$i]}</span></div></div><span class=\"collabel\">${bar_labels[$i]}</span></div>"
+        echo "      <div class=\"col${peak_cls}\"><div class=\"colbar-wrap\"><div class=\"colbar\" style=\"height:${apct}%\"><span class=\"colval\">${bar_counts[$i]}</span></div></div><span class=\"collabel\">${bar_labels[$i]}</span></div>"
     done
     echo "    </div>"
     echo "  </section>"
@@ -1362,6 +1298,386 @@ log INFO "Annual_Redhat_Linux_Depoloyment_Report.html done"
 
 RPT_Midrange_Archive
 log INFO "Midrange_Mod/index.html done"
+
+# =============================================================================
+# RPT_Upgrade — Upgrade/index.html + Upgrade/style.css
+# =============================================================================
+# upgrade_data.js is generated by rhel_inv_collect.sh (Phase 3a.5).
+# This function writes the page skeleton and stylesheet that load it.
+# UPGRADE_WEB_DIR defaults to WEBDIR/Upgrade if not set in conf.
+# =============================================================================
+RPT_Upgrade() {
+    local _upg_dir="${UPGRADE_WEB_DIR:-${WEBDIR}/Upgrade}"
+    mkdir -p "$_upg_dir"
+
+    local _updated; _updated=$(date '+%b %d, %Y')
+
+    # ── style.css ────────────────────────────────────────────────────────────
+    cat > "${_upg_dir}/style.css" << 'UPGCSS'
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #f3f6fc; --card: #ffffff; --line: #e7edf6; --line-soft: #eef2f9;
+  --ink: #1d2840; --text: #46546e; --muted: #8693ab; --faint: #aab5c8;
+  --blue: #3b6ef0; --indigo: #5b6ef5; --violet: #8b5cf6;
+  --teal: #14b3a6; --green: #21b573; --amber: #f5a623; --red: #ec4055;
+  --radius: 16px; --radius-md: 12px; --radius-sm: 9px;
+  --shadow: 0 1px 2px rgba(17,28,53,.04), 0 6px 20px rgba(17,28,53,.06);
+  --shadow-sm: 0 1px 2px rgba(17,28,53,.05), 0 2px 8px rgba(17,28,53,.05);
+  --sans: system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+}
+body { font-family:var(--sans); font-size:14px; line-height:1.55; color:var(--text); background:var(--bg); -webkit-font-smoothing:antialiased; min-height:100vh; }
+a { color:inherit; text-decoration:none; }
+.page { max-width:1400px; margin:0 auto; padding:2rem 1.75rem 3rem; }
+.page-header { background:linear-gradient(135deg,#1e3a6e,#2d5edc,#4a3fa0); border-radius:var(--radius); padding:2rem 2.2rem 1.8rem; margin-bottom:1.6rem; color:#fff; }
+.header-top { display:flex; align-items:flex-start; justify-content:space-between; gap:1.5rem; flex-wrap:wrap; margin-bottom:1.4rem; }
+.header-title h1 { font-size:1.75rem; font-weight:750; letter-spacing:-.02em; line-height:1.2; }
+.header-title p { font-size:.88rem; opacity:.8; margin-top:.35rem; }
+.header-actions { display:flex; gap:.6rem; flex-wrap:wrap; align-items:center; }
+.btn { display:inline-flex; align-items:center; gap:.45rem; padding:.6rem 1.15rem; border-radius:var(--radius-sm); font-size:.83rem; font-weight:650; cursor:pointer; transition:.14s ease; border:1px solid transparent; white-space:nowrap; font-family:inherit; }
+.btn svg { width:14px; height:14px; flex:0 0 auto; }
+.btn-request { background:var(--green); color:#fff; border-color:rgba(255,255,255,.2); }
+.btn-request:hover { background:#1a9e62; }
+.btn-docs { background:rgba(255,255,255,.15); color:#fff; border-color:rgba(255,255,255,.3); }
+.btn-docs:hover { background:rgba(255,255,255,.25); }
+.btn-faq { background:rgba(255,255,255,.15); color:#fff; border-color:rgba(255,255,255,.3); }
+.btn-faq:hover { background:rgba(255,255,255,.25); }
+.header-kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:.85rem; }
+.hkpi { background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.2); border-radius:var(--radius-md); padding:1rem 1.2rem; }
+.hkpi .num { display:block; font-size:1.9rem; font-weight:780; color:#fff; letter-spacing:-.03em; line-height:1; }
+.hkpi.eligible  .num { color:#6ee7b7; }
+.hkpi.ineligible .num { color:#f87171; }
+.hkpi.rate       .num { color:#c4b5fd; }
+.hkpi .lab { display:block; font-size:.76rem; color:rgba(255,255,255,.7); margin-top:.3rem; }
+.criteria-panel { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow-sm); margin-bottom:1.4rem; overflow:hidden; }
+.criteria-toggle { display:flex; align-items:center; gap:.75rem; width:100%; padding:1rem 1.4rem; background:none; border:none; cursor:pointer; text-align:left; font-family:inherit; transition:.14s ease; }
+.criteria-toggle:hover { background:#f8faff; }
+.criteria-toggle strong { font-size:.9rem; font-weight:700; color:var(--ink); }
+.criteria-toggle .ct-sub { font-size:.79rem; color:var(--muted); font-weight:400; }
+.criteria-toggle .ct-chevron { margin-left:auto; color:var(--muted); font-size:.75rem; font-weight:600; }
+.criteria-body { display:none; padding:1.1rem 1.4rem 1.3rem; border-top:1px solid var(--line); }
+.criteria-body.open { display:block; }
+.criteria-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:.7rem; }
+.criteria-item { padding:.8rem 1rem; background:var(--bg); border-radius:var(--radius-sm); border:1px solid var(--line); }
+.criteria-item.conditional-note { border-color:#f5dba0; background:#fdf7ec; }
+.criteria-item.conditional-note .ci-label { color:#92400e; }
+.ci-label { font-size:.83rem; font-weight:700; color:var(--ink); margin-bottom:.2rem; }
+.ci-detail { font-size:.76rem; color:var(--muted); line-height:1.45; }
+.ci-detail a { color:var(--blue); text-decoration:underline; }
+.controls { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow-sm); padding:1rem 1.2rem; margin-bottom:1rem; display:flex; gap:.75rem; flex-wrap:wrap; align-items:center; }
+.search-wrap { flex:1 1 260px; position:relative; }
+.search-wrap svg { position:absolute; left:.8rem; top:50%; transform:translateY(-50%); width:15px; height:15px; color:var(--muted); pointer-events:none; }
+.search-wrap input { width:100%; padding:.6rem .8rem .6rem 2.3rem; border:1px solid var(--line); border-radius:var(--radius-sm); font-size:.86rem; color:var(--ink); background:var(--bg); font-family:inherit; transition:.14s ease; }
+.search-wrap input:focus { outline:none; border-color:var(--blue); background:#fff; box-shadow:0 0 0 3px rgba(59,110,240,.1); }
+.filter-select { padding:.6rem .9rem; border:1px solid var(--line); border-radius:var(--radius-sm); font-size:.84rem; color:var(--ink); background:var(--card); cursor:pointer; font-family:inherit; }
+.filter-select:focus { outline:none; border-color:var(--blue); }
+.dl-btn { display:inline-flex; align-items:center; gap:.4rem; padding:.6rem 1rem; border-radius:var(--radius-sm); font-size:.82rem; font-weight:650; background:var(--blue); color:#fff; border:none; cursor:pointer; transition:.14s ease; font-family:inherit; }
+.dl-btn:hover { background:#2d5edc; }
+.dl-btn svg { width:14px; height:14px; }
+.results-count { font-size:.8rem; color:var(--muted); margin-left:auto; white-space:nowrap; }
+.table-card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden; }
+.table-scroll { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; }
+thead { position:sticky; top:0; z-index:2; }
+th { background:linear-gradient(135deg,var(--indigo),var(--violet)); color:#fff; padding:11px 13px; text-align:left; font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; cursor:pointer; user-select:none; white-space:nowrap; }
+th:hover { filter:brightness(1.08); }
+.sort-arrow { opacity:.35; margin-left:.3rem; font-size:.65rem; }
+th.sort-active .sort-arrow { opacity:1; }
+td { padding:10px 13px; border-bottom:1px solid var(--line-soft); font-size:.84rem; color:var(--text); vertical-align:middle; }
+tr:last-child td { border-bottom:none; }
+tr:hover td { background:#f8faff; }
+.host-cell { font-weight:650; color:var(--ink); font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace; font-size:.8rem; min-width:140px; white-space:nowrap; }
+.badge { display:inline-flex; align-items:center; gap:.3rem; padding:.28rem .7rem; border-radius:999px; font-size:.75rem; font-weight:700; white-space:nowrap; }
+.badge-eligible    { background:#dcf5e7; color:#14532d; }
+.badge-conditional { background:#fef3c7; color:#78350f; }
+.badge-ineligible  { background:#fecdd3; color:#7f1d1d; }
+.badge-unknown     { background:#f1f5f9; color:#64748b; }
+.os-badge { padding:.22rem .55rem; border-radius:6px; font-size:.74rem; font-weight:700; white-space:nowrap; }
+.os-rhel8 { background:#dbeafe; color:#1e40af; }
+.os-rhel9 { background:#fef9c3; color:#854d0e; }
+.os-other { background:#f1f5f9; color:#64748b; }
+.comment-cell { min-width:280px; font-size:.8rem; color:var(--muted); line-height:1.4; white-space:normal; word-break:break-word; }
+.comment-cell.issue       { color:#7f1d1d; font-weight:600; }
+.comment-cell.conditional { color:#78350f; font-weight:600; }
+.comment-cell.unknown     { color:#64748b; font-style:italic; }
+.pagination { display:flex; align-items:center; justify-content:space-between; padding:.9rem 1.3rem; border-top:1px solid var(--line); background:#fbfcff; gap:1rem; flex-wrap:wrap; }
+.page-info { font-size:.8rem; color:var(--muted); }
+.page-btns { display:flex; gap:.3rem; flex-wrap:wrap; }
+.page-btn { padding:.38rem .72rem; border:1px solid var(--line); border-radius:8px; font-size:.8rem; color:var(--text); background:var(--card); cursor:pointer; transition:.12s ease; font-family:inherit; }
+.page-btn:hover:not([disabled]) { border-color:var(--blue); color:var(--blue); }
+.page-btn.active { background:var(--blue); color:#fff; border-color:var(--blue); }
+.page-btn[disabled] { opacity:.35; cursor:not-allowed; }
+.foot { display:flex; justify-content:space-between; flex-wrap:wrap; gap:.5rem; font-size:.79rem; color:var(--muted); padding:1.5rem 0 2.5rem; margin-top:.5rem; }
+.foot a { color:var(--blue); }
+@media(max-width:900px) { .header-kpis { grid-template-columns:repeat(2,1fr); } }
+@media(max-width:600px) { .header-top { flex-direction:column; } }
+UPGCSS
+
+    log INFO "Upgrade/style.css written"
+
+    # ── index.html ───────────────────────────────────────────────────────────
+    cat > "${_upg_dir}/index.html" << UPGHT
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>RHEL 8 to 9 Upgrade Eligibility Report</title>
+<link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+<div class="page">
+
+  <header class="page-header">
+    <div class="header-top">
+      <div class="header-title">
+        <h1>RHEL 8 &rarr; 9 Upgrade Eligibility</h1>
+        <p>Daily eligibility assessment across all managed RHEL 8 servers &mdash; including Fed enclave. Updated nightly.</p>
+      </div>
+      <div class="header-actions">
+        <a href="${UPGRADE_REQUEST_URL:-#}" target="_blank" rel="noopener" class="btn btn-request">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 11 12 6 7 11"/><line x1="12" y1="18" x2="12" y2="6"/></svg>
+          Request Upgrade
+        </a>
+        <a href="${UPGRADE_DOCS_URL:-#}" target="_blank" rel="noopener" class="btn btn-docs">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          Documentation
+        </a>
+        <a href="${UPGRADE_FAQ_URL:-#}" target="_blank" rel="noopener" class="btn btn-faq">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          FAQ
+        </a>
+      </div>
+    </div>
+    <div class="header-kpis">
+      <div class="hkpi"><span class="num" id="kpiTotal">&mdash;</span><span class="lab">Total RHEL 8 servers</span></div>
+      <div class="hkpi eligible"><span class="num" id="kpiElig">&mdash;</span><span class="lab">Eligible for upgrade</span></div>
+      <div class="hkpi ineligible"><span class="num" id="kpiInelig">&mdash;</span><span class="lab">Ineligible</span></div>
+      <div class="hkpi rate"><span class="num" id="kpiRate">&mdash;</span><span class="lab">Eligibility rate</span></div>
+    </div>
+  </header>
+
+  <div class="criteria-panel">
+    <button class="criteria-toggle" onclick="toggleCriteria()">
+      <strong>Eligibility Criteria</strong>
+      <span class="ct-sub">&nbsp;&mdash; checks run nightly on every RHEL 8 host</span>
+      <span class="ct-chevron" id="criteriaChevron">Show &#9662;</span>
+    </button>
+    <div class="criteria-body" id="criteriaBody">
+      <div class="criteria-grid">
+        <div class="criteria-item">
+          <div class="ci-label">1. OS Version &mdash; Must be RHEL 8.x</div>
+          <div class="ci-detail">RHEL 7, RHEL 9, and unknown versions are excluded. RHEL 7 hosts exit silently without producing output.</div>
+        </div>
+        <div class="criteria-item">
+          <div class="ci-label">2. No Previous Upgrade &mdash; /etc/os_upgrade must be absent</div>
+          <div class="ci-detail">Hosts previously upgraded from RHEL 7 to 8 via leapp are not eligible for a second in-place upgrade.</div>
+        </div>
+        <div class="criteria-item">
+          <div class="ci-label">3. /boot Partition &mdash; Minimum 1,024 MB (2 GB required)</div>
+          <div class="ci-detail">Insufficient /boot space is the most common hard blocker. The upgrade process requires at least 2 GB free.</div>
+        </div>
+        <div class="criteria-item">
+          <div class="ci-label">4. Not a DB Server &mdash; DBTYPE must be unset</div>
+          <div class="ci-detail">Servers with DBTYPE set in /boot/PNC_PROVISION_CONFIG are not yet certified for RHEL 9 in-place upgrade.</div>
+        </div>
+        <div class="criteria-item conditional-note">
+          <div class="ci-label">&#9889; Conditional &mdash; rootvg free space &lt; 22 GB</div>
+          <div class="ci-detail">These servers are upgrade-eligible once the volume group is expanded. <a href="${UPGRADE_DISK_REQUEST_URL:-#}" target="_blank" rel="noopener">Submit a disk expansion request</a> first, then request the upgrade. Counted toward the eligibility rate.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="search-wrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" id="searchInput" placeholder="Search by host, datacenter, mnemonic, environment, or comments&hellip;"/>
+    </div>
+    <select class="filter-select" id="eligFilter">
+      <option value="">All Eligibility</option>
+      <option value="ELIGIBLE">Eligible</option>
+      <option value="CONDITIONAL">Conditional</option>
+      <option value="INELIGIBLE">Ineligible</option>
+      <option value="UNKNOWN">Unknown (unreachable)</option>
+    </select>
+    <button class="dl-btn" onclick="window.location.href='RHEL8-9_Upgrade_Eligibility_Report.csv'">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download CSV
+    </button>
+    <span class="results-count" id="resultsCount"></span>
+  </div>
+
+  <div class="table-card">
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th onclick="sortTable('Host')" id="th-Host">Host<span class="sort-arrow">&#9650;</span></th>
+            <th onclick="sortTable('Datacenter')" id="th-Datacenter">Datacenter<span class="sort-arrow">&#9650;</span></th>
+            <th onclick="sortTable('Mnemonic')" id="th-Mnemonic">Mnemonic<span class="sort-arrow">&#9650;</span></th>
+            <th onclick="sortTable('Environment')" id="th-Environment">Environment<span class="sort-arrow">&#9650;</span></th>
+            <th onclick="sortTable('OS')" id="th-OS">OS<span class="sort-arrow">&#9650;</span></th>
+            <th onclick="sortTable('Eligibility')" id="th-Eligibility">Eligibility<span class="sort-arrow">&#9650;</span></th>
+            <th>Comments</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+    <div class="pagination">
+      <span class="page-info" id="pageInfo"></span>
+      <div class="page-btns" id="pageBtns"></div>
+    </div>
+  </div>
+
+  <footer class="foot">
+    <span>RHEL 8 &rarr; 9 Upgrade Eligibility Report &mdash; IaaS &middot; Linux Engineering</span>
+    <span>Updated ${_updated} &nbsp;|&nbsp; <a href="RHEL8-9_Upgrade_Eligibility_Report.csv">Download CSV</a></span>
+  </footer>
+</div>
+
+<script src="upgrade_data.js"></script>
+<script>
+const PAGE_SIZE = 50;
+let filteredData = [...serverData].sort((a,b) => a.Host.localeCompare(b.Host));
+let currentPage  = 1;
+let sortCol      = 'Host';
+let sortDir      = 'asc';
+
+function updateKPIs() {
+  const rhel8  = serverData.filter(r => r.OS === 'RHEL 8');
+  const total  = rhel8.length;
+  const elig   = rhel8.filter(r => r.Eligibility === 'ELIGIBLE' || r.Eligibility === 'CONDITIONAL').length;
+  const inelig = rhel8.filter(r => r.Eligibility === 'INELIGIBLE').length;
+  const rate   = total > 0 ? Math.round(elig / total * 100) : 0;
+  document.getElementById('kpiTotal').textContent  = total.toLocaleString();
+  document.getElementById('kpiElig').textContent   = elig.toLocaleString();
+  document.getElementById('kpiInelig').textContent = inelig.toLocaleString();
+  document.getElementById('kpiRate').textContent   = rate + '%';
+}
+
+function toggleCriteria() {
+  const body = document.getElementById('criteriaBody');
+  const chev = document.getElementById('criteriaChevron');
+  const open = body.classList.toggle('open');
+  chev.innerHTML = open ? 'Hide &#9652;' : 'Show &#9662;';
+}
+
+function sortTable(col) {
+  document.querySelectorAll('th').forEach(th => th.classList.remove('sort-active'));
+  if (sortCol === col) { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; }
+  else { sortCol = col; sortDir = 'asc'; }
+  const th = document.getElementById('th-' + col);
+  if (th) {
+    th.classList.add('sort-active');
+    th.querySelector('.sort-arrow').innerHTML = sortDir === 'asc' ? '&#9650;' : '&#9660;';
+  }
+  filteredData.sort((a, b) => {
+    const va = (a[col] || '').toLowerCase();
+    const vb = (b[col] || '').toLowerCase();
+    return sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+  });
+  currentPage = 1;
+  render();
+}
+
+function applyFilters() {
+  const q   = document.getElementById('searchInput').value.toLowerCase();
+  const eli = document.getElementById('eligFilter').value;
+  filteredData = serverData.filter(r => {
+    const matchQ   = !q   || Object.values(r).some(v => v.toLowerCase().includes(q));
+    const matchEli = !eli || r.Eligibility === eli;
+    return matchQ && matchEli;
+  });
+  filteredData.sort((a, b) => {
+    const va = (a[sortCol] || '').toLowerCase();
+    const vb = (b[sortCol] || '').toLowerCase();
+    return sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+  });
+  currentPage = 1;
+  render();
+}
+
+function badgeHTML(e) {
+  if (e === 'ELIGIBLE')    return '<span class="badge badge-eligible">&#10003; ELIGIBLE</span>';
+  if (e === 'CONDITIONAL') return '<span class="badge badge-conditional">&#9889; CONDITIONAL</span>';
+  if (e === 'INELIGIBLE')  return '<span class="badge badge-ineligible">&#10007; INELIGIBLE</span>';
+  return '<span class="badge badge-unknown">? UNKNOWN</span>';
+}
+function osBadge(os) {
+  if (os === 'RHEL 8') return '<span class="os-badge os-rhel8">RHEL 8</span>';
+  if (os === 'RHEL 9') return '<span class="os-badge os-rhel9">RHEL 9</span>';
+  return '<span class="os-badge os-other">' + os + '</span>';
+}
+function commentClass(e) {
+  if (e === 'CONDITIONAL') return 'comment-cell conditional';
+  if (e === 'INELIGIBLE')  return 'comment-cell issue';
+  if (e === 'UNKNOWN')     return 'comment-cell unknown';
+  return 'comment-cell';
+}
+
+function render() {
+  const total      = filteredData.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  currentPage      = Math.min(currentPage, totalPages);
+  const start      = (currentPage - 1) * PAGE_SIZE;
+  const end        = Math.min(start + PAGE_SIZE, total);
+  const pageData   = filteredData.slice(start, end);
+
+  document.getElementById('resultsCount').textContent =
+    total === 0 ? 'No results' : 'Showing ' + (start+1).toLocaleString() + '\u2013' + end.toLocaleString() + ' of ' + total.toLocaleString() + ' servers';
+
+  document.getElementById('tableBody').innerHTML = pageData.length === 0
+    ? '<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--muted)">No servers match your filters.</td></tr>'
+    : pageData.map(r => '<tr>' +
+        '<td class="host-cell">' + r.Host + '</td>' +
+        '<td>' + r.Datacenter + '</td>' +
+        '<td>' + r.Mnemonic + '</td>' +
+        '<td>' + r.Environment + '</td>' +
+        '<td>' + osBadge(r.OS) + '</td>' +
+        '<td>' + badgeHTML(r.Eligibility) + '</td>' +
+        '<td class="' + commentClass(r.Eligibility) + '">' + r.Comments + '</td>' +
+        '</tr>').join('');
+
+  document.getElementById('pageInfo').textContent =
+    total === 0 ? '' : 'Page ' + currentPage + ' of ' + totalPages;
+
+  const container = document.getElementById('pageBtns');
+  if (totalPages <= 1) { container.innerHTML = ''; return; }
+  const btns = [];
+  btns.push('<button class="page-btn" ' + (currentPage===1?'disabled':'') + ' onclick="goPage(' + (currentPage-1) + ')">&lsaquo;</button>');
+  const maxV = 7;
+  let s = Math.max(1, currentPage - Math.floor(maxV/2));
+  let e2 = Math.min(totalPages, s + maxV - 1);
+  if (e2 - s + 1 < maxV) s = Math.max(1, e2 - maxV + 1);
+  if (s > 1) { btns.push('<button class="page-btn" onclick="goPage(1)">1</button>'); if (s>2) btns.push('<span style="padding:.38rem .4rem;color:var(--muted)">&hellip;</span>'); }
+  for (let i=s; i<=e2; i++) btns.push('<button class="page-btn' + (i===currentPage?' active':'') + '" onclick="goPage(' + i + ')">' + i + '</button>');
+  if (e2 < totalPages) { if (e2<totalPages-1) btns.push('<span style="padding:.38rem .4rem;color:var(--muted)">&hellip;</span>'); btns.push('<button class="page-btn" onclick="goPage(' + totalPages + ')">' + totalPages + '</button>'); }
+  btns.push('<button class="page-btn" ' + (currentPage===totalPages?'disabled':'') + ' onclick="goPage(' + (currentPage+1) + ')">&rsaquo;</button>');
+  container.innerHTML = btns.join('');
+}
+
+function goPage(p) { currentPage = p; render(); window.scrollTo({top:0,behavior:'smooth'}); }
+
+document.getElementById('searchInput').addEventListener('input', applyFilters);
+document.getElementById('eligFilter').addEventListener('change', applyFilters);
+
+// Default sort indicator on Host column
+document.getElementById('th-Host').classList.add('sort-active');
+
+updateKPIs();
+render();
+</script>
+</body>
+</html>
+UPGHT
+
+    log INFO "Upgrade/index.html written"
+    log INFO "Upgrade web dir: $_upg_dir"
+}
+
+RPT_Upgrade
+log INFO "Upgrade/index.html done"
 
 # Non-responsive host list
 awk '!/^#/ && ($2=="SSHFAIL" || $3=="SSHFAIL") {print $1}' "$INVENTORYDATA" | sort > "${WEBDIR}/${LOSTLIST}"
