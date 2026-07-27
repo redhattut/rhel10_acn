@@ -52,7 +52,7 @@ log INFO "Publishing to: $WEBDIR"
 YEAR=$(date +%Y)
 UPDATED_HUMAN=$(date '+%b %-d, %Y')
 DEPLOY_CSV_BASE="${DEPLOYDATACSV##*/}"
-PKG_CSV_BASE=$(basename "${PACKAGEDATA:-RHEL_PACKAGES_v2.csv}")
+PKG_CSV_BASE=$(basename "${PACKAGEDATA:-RHEL_PACKAGES.csv}")
 
 # Footer text — sourced from conf; fall back gracefully if not set
 FOOTER_COMPANY="${SITE_FOOTER_COMPANY:-PNC}"
@@ -69,10 +69,15 @@ rm -f "$APPDATAPLAT" "$APPDATAREL" "$LOCDATAPLAT" "$LOCDATAREL"
 awk -v lp="$LOCDATAPLAT" -v lr="$LOCDATAREL" \
     -v ap="$APPDATAPLAT" -v ar="$APPDATAREL" \
     '!/^#/ {
-        print $21 " " $2  >> lp
-        print $21 " " $3  >> lr
-        print $26 " " $2  >> ap
-        print $26 " " $3  >> ar
+        if ($3 == "?") next
+        loc = $21
+        sub(/^[Gg]reenfield-/, "", loc)
+        print loc " " $2  >> lp
+        print loc " " $3  >> lr
+        if ($26 != "n/a" && $26 != "") {
+            print $26 " " $2  >> ap
+            print $26 " " $3  >> ar
+        }
     }' "$INVENTORYDATA"
 
 log INFO "Intermediate files built"
@@ -93,27 +98,37 @@ for ver in "${OS_VERSIONS[@]}"; do
 "
 done
 
+# Build dynamic awk snippets from LOCATIONS array
+LOC_AWK_INIT=""
+LOC_AWK_COUNTS=""
+LOC_AWK_PRINTF=""
+for loc_code in "${LOCATIONS[@]}"; do
+    varname="LOC_${loc_code//-/_}"
+    LOC_AWK_INIT+="${varname}=0;"
+    LOC_AWK_COUNTS+="        if (loc==\"${loc_code}\") ${varname}++
+"
+    LOC_AWK_PRINTF+="    printf \"${varname}=%d\\n\", ${varname}+0
+"
+done
+
 eval "$(awk \
     'BEGIN{total=0;virt=0;phys=0;cloud=0;fail=0
            ernd=0;euat=0;eqa=0;eprod=0
-           lgf0=0;lgf1=0;lgf2=0;lazce=0;laze2=0}
+           '"$LOC_AWK_INIT"'}
     !/^#/{
+        if ($3 == "?") next
         total++
         loc=$21
         sub(/^Greenfield-/,"",loc)
-        if (loc=="AZCE"||loc=="AZE2") cloud++
+        if ($2 ~ /^SSHFAIL/ || $2 ~ /^TIMEOUT/) { fail++ }
+        else if (loc=="AZCE"||loc=="AZE2") cloud++
         else if ($2=="Virt") virt++
         else if ($2=="Phys") phys++
-        if ($2=="SSHFAIL"||$3=="SSHFAIL") fail++
         if ($27=="RND")  ernd++
         if ($27=="UAT")  euat++
         if ($27=="QA")   eqa++
         if ($27=="PROD") eprod++
-        if (loc=="GF0")  lgf0++
-        if (loc=="GF1")  lgf1++
-        if (loc=="GF2")  lgf2++
-        if (loc=="AZCE") lazce++
-        if (loc=="AZE2") laze2++
+'"$LOC_AWK_COUNTS"'
     }
     END{
         printf "TOTAL_HOSTS=%d\n",    total
@@ -125,14 +140,10 @@ eval "$(awk \
         printf "ENV_UAT=%d\n",  euat
         printf "ENV_QA=%d\n",   eqa
         printf "ENV_PROD=%d\n", eprod
-        printf "LOC_GF0=%d\n",  lgf0
-        printf "LOC_GF1=%d\n",  lgf1
-        printf "LOC_GF2=%d\n",  lgf2
-        printf "LOC_AZCE=%d\n", lazce
-        printf "LOC_AZE2=%d\n", laze2
+'"$LOC_AWK_PRINTF"'
     }' "$INVENTORYDATA")"
 
-eval "$(awk '{
+eval "$(awk '!/^#/ && $3 != "?" {
 '"$OS_AWK_COUNTS"'
 }
 END{
@@ -377,6 +388,19 @@ RPT_Main() {
   </div>
 
   <section class="kpis">
+    <div class="kpi total">
+      <span class="ic ic-green">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="2" y="3" width="20" height="14" rx="2"/>
+          <line x1="8" y1="21" x2="16" y2="21"/>
+          <line x1="12" y1="17" x2="12" y2="21"/>
+        </svg>
+      </span>
+      <span class="meta">
+        <span class="num" data-kpi="total">${TOTAL_HOSTS}</span>
+        <span class="lab">Total managed servers</span>
+      </span>
+    </div>
     <div class="kpi">
       <span class="ic ic-blue">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -413,7 +437,7 @@ RPT_Main() {
       <span class="ic ic-red">!</span>
       <span class="meta">
         <span class="num" data-kpi="ssh">${SSHFAIL}</span>
-        <span class="lab">Hosts unreachable by SSH</span>
+        <span class="lab">Hosts unreachable (SSH)</span>
       </span>
     </div>
   </section>
@@ -616,10 +640,10 @@ RPT_by_Location() {
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1.4rem">
 LOCEOF
 
-    awk '!/^\?/{print $1}' "$LOCDATAPLAT" | sort -u \
-    | while read -r LOC; do
+    local _loc_list=("${LOCATIONS[@]}" "n/a")
+    for LOC in "${_loc_list[@]}"; do
         [[ -z "$LOC" ]] && continue
-        STOTAL=$(grep -c "^$LOC " "$LOCDATAPLAT" 2>/dev/null || echo 0)
+        STOTAL=$(grep -c "^$LOC " "$LOCDATAPLAT" 2>/dev/null || true)
         STOTAL=$(( STOTAL + 0 ))
         [[ $STOTAL -eq 0 ]] && continue
 
@@ -659,7 +683,7 @@ LOCBEOF
 # =============================================================================
 RPT_by_Mnemonic() {
     local GRAND
-    GRAND=$(grep -vc "^#" "$INVENTORYDATA" 2>/dev/null || echo 0)
+    GRAND=$(awk '!/^#/ && $3 != "?" && $26 != "n/a" && $26 != ""' "$INVENTORYDATA" | wc -l)
 
     # Build series metadata from OS_SERIES conf array
     # Each entry: "Label:ver1,ver2,..."  e.g. "RHEL 8.x Series:8.8,8.10"
@@ -686,10 +710,10 @@ RPT_by_Mnemonic() {
         done
         printf "\n"
 
-        awk '!/^#/{print $26}' "$INVENTORYDATA" | sort -u \
+        awk '{print $1}' "$APPDATAPLAT" | sort -u \
         | while read -r APP; do
-            [[ -z "$APP" || "$APP" == "n/a" ]] && continue
-            local STOTAL; STOTAL=$(grep -c "^$APP " "$APPDATAPLAT" 2>/dev/null || echo 0)
+            [[ -z "$APP" ]] && continue
+            local STOTAL; STOTAL=$(grep -c "^$APP " "$APPDATAPLAT" 2>/dev/null || true)
             STOTAL=$(( STOTAL + 0 ))
             [[ $STOTAL -eq 0 ]] && continue
             local VIRT; VIRT=$(awk -v a="$APP" '$1==a && $2=="Virt"' "$APPDATAPLAT" | wc -l)
@@ -708,7 +732,7 @@ RPT_by_Mnemonic() {
             printf "\n"
         done
     } > "$APP_CSV"
-    log INFO "Application CSV written: $APP_CSV"
+    log INFO "Application CSV written: $APP_CSV" >&2
 
     _html_head "RHEL Operations — Inventory by Application Code"
     _sidebar ""
@@ -755,10 +779,10 @@ APPEOF2
     echo "          </tr></thead>"
     echo "          <tbody id=\"appBody\">"
 
-    awk '!/^#/{print $26}' "$INVENTORYDATA" | sort -u \
+    awk '{print $1}' "$APPDATAPLAT" | sort -u \
     | while read -r APP; do
-        [[ -z "$APP" || "$APP" == "n/a" ]] && continue
-        local STOTAL; STOTAL=$(grep -c "^$APP " "$APPDATAPLAT" 2>/dev/null || echo 0)
+        [[ -z "$APP" ]] && continue
+        local STOTAL; STOTAL=$(grep -c "^$APP " "$APPDATAPLAT" 2>/dev/null || true)
         STOTAL=$(( STOTAL + 0 ))
         [[ $STOTAL -eq 0 ]] && continue
         local VIRT; VIRT=$(awk -v a="$APP" '$1==a && $2=="Virt"' "$APPDATAPLAT" | wc -l)
@@ -1302,17 +1326,11 @@ log INFO "Midrange_Mod/index.html done"
 # =============================================================================
 # RPT_Upgrade — Upgrade/index.html + Upgrade/style.css
 # =============================================================================
-# upgrade_data.js is generated by rhel_inv_collect.sh (Phase 3a.5).
-# This function writes the page skeleton and stylesheet that load it.
-# UPGRADE_WEB_DIR defaults to WEBDIR/Upgrade if not set in conf.
-# =============================================================================
 RPT_Upgrade() {
     local _upg_dir="${UPGRADE_WEB_DIR:-${WEBDIR}/Upgrade}"
     mkdir -p "$_upg_dir"
-
     local _updated; _updated=$(date '+%b %d, %Y')
 
-    # ── style.css ────────────────────────────────────────────────────────────
     cat > "${_upg_dir}/style.css" << 'UPGCSS'
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
@@ -1411,10 +1429,8 @@ tr:hover td { background:#f8faff; }
 @media(max-width:900px) { .header-kpis { grid-template-columns:repeat(2,1fr); } }
 @media(max-width:600px) { .header-top { flex-direction:column; } }
 UPGCSS
-
     log INFO "Upgrade/style.css written"
 
-    # ── index.html ───────────────────────────────────────────────────────────
     cat > "${_upg_dir}/index.html" << UPGHT
 <!DOCTYPE html>
 <html lang="en">
@@ -1426,7 +1442,6 @@ UPGCSS
 </head>
 <body>
 <div class="page">
-
   <header class="page-header">
     <div class="header-top">
       <div class="header-title">
@@ -1535,143 +1550,89 @@ UPGCSS
     <span>Updated ${_updated} &nbsp;|&nbsp; <a href="RHEL8-9_Upgrade_Eligibility_Report.csv">Download CSV</a></span>
   </footer>
 </div>
-
 <script src="upgrade_data.js"></script>
 <script>
-const PAGE_SIZE = 50;
-let filteredData = [...serverData].sort((a,b) => a.Host.localeCompare(b.Host));
-let currentPage  = 1;
-let sortCol      = 'Host';
-let sortDir      = 'asc';
-
-function updateKPIs() {
-  const rhel8  = serverData.filter(r => r.OS === 'RHEL 8');
-  const total  = rhel8.length;
-  const elig   = rhel8.filter(r => r.Eligibility === 'ELIGIBLE' || r.Eligibility === 'CONDITIONAL').length;
-  const inelig = rhel8.filter(r => r.Eligibility === 'INELIGIBLE').length;
-  const rate   = total > 0 ? Math.round(elig / total * 100) : 0;
-  document.getElementById('kpiTotal').textContent  = total.toLocaleString();
-  document.getElementById('kpiElig').textContent   = elig.toLocaleString();
-  document.getElementById('kpiInelig').textContent = inelig.toLocaleString();
-  document.getElementById('kpiRate').textContent   = rate + '%';
+const PAGE_SIZE=50;
+let filteredData=[...serverData].sort((a,b)=>a.Host.localeCompare(b.Host));
+let currentPage=1,sortCol='Host',sortDir='asc';
+function updateKPIs(){
+  const r8=serverData.filter(r=>r.OS==='RHEL 8');
+  const t=r8.length,e=r8.filter(r=>r.Eligibility==='ELIGIBLE'||r.Eligibility==='CONDITIONAL').length;
+  const i=r8.filter(r=>r.Eligibility==='INELIGIBLE').length;
+  const rt=t>0?Math.round(e/t*100):0;
+  document.getElementById('kpiTotal').textContent=t.toLocaleString();
+  document.getElementById('kpiElig').textContent=e.toLocaleString();
+  document.getElementById('kpiInelig').textContent=i.toLocaleString();
+  document.getElementById('kpiRate').textContent=rt+'%';
 }
-
-function toggleCriteria() {
-  const body = document.getElementById('criteriaBody');
-  const chev = document.getElementById('criteriaChevron');
-  const open = body.classList.toggle('open');
-  chev.innerHTML = open ? 'Hide &#9652;' : 'Show &#9662;';
+function toggleCriteria(){
+  const b=document.getElementById('criteriaBody'),c=document.getElementById('criteriaChevron');
+  const o=b.classList.toggle('open');c.innerHTML=o?'Hide &#9652;':'Show &#9662;';
 }
-
-function sortTable(col) {
-  document.querySelectorAll('th').forEach(th => th.classList.remove('sort-active'));
-  if (sortCol === col) { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; }
-  else { sortCol = col; sortDir = 'asc'; }
-  const th = document.getElementById('th-' + col);
-  if (th) {
-    th.classList.add('sort-active');
-    th.querySelector('.sort-arrow').innerHTML = sortDir === 'asc' ? '&#9650;' : '&#9660;';
-  }
-  filteredData.sort((a, b) => {
-    const va = (a[col] || '').toLowerCase();
-    const vb = (b[col] || '').toLowerCase();
-    return sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+function sortTable(col){
+  document.querySelectorAll('th').forEach(t=>t.classList.remove('sort-active'));
+  if(sortCol===col){sortDir=sortDir==='asc'?'desc':'asc';}else{sortCol=col;sortDir='asc';}
+  const th=document.getElementById('th-'+col);
+  if(th){th.classList.add('sort-active');th.querySelector('.sort-arrow').innerHTML=sortDir==='asc'?'&#9650;':'&#9660;';}
+  filteredData.sort((a,b)=>{const va=(a[col]||'').toLowerCase(),vb=(b[col]||'').toLowerCase();return sortDir==='asc'?va.localeCompare(vb):vb.localeCompare(va);});
+  currentPage=1;render();
+}
+function applyFilters(){
+  const q=document.getElementById('searchInput').value.toLowerCase();
+  const eli=document.getElementById('eligFilter').value;
+  filteredData=serverData.filter(r=>{
+    const mq=!q||Object.values(r).some(v=>v.toLowerCase().includes(q));
+    const me=!eli||r.Eligibility===eli;
+    return mq&&me;
   });
-  currentPage = 1;
-  render();
+  filteredData.sort((a,b)=>{const va=(a[sortCol]||'').toLowerCase(),vb=(b[sortCol]||'').toLowerCase();return sortDir==='asc'?va.localeCompare(vb):vb.localeCompare(va);});
+  currentPage=1;render();
 }
-
-function applyFilters() {
-  const q   = document.getElementById('searchInput').value.toLowerCase();
-  const eli = document.getElementById('eligFilter').value;
-  filteredData = serverData.filter(r => {
-    const matchQ   = !q   || Object.values(r).some(v => v.toLowerCase().includes(q));
-    const matchEli = !eli || r.Eligibility === eli;
-    return matchQ && matchEli;
-  });
-  filteredData.sort((a, b) => {
-    const va = (a[sortCol] || '').toLowerCase();
-    const vb = (b[sortCol] || '').toLowerCase();
-    return sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
-  });
-  currentPage = 1;
-  render();
+function badgeHTML(e){
+  if(e==='ELIGIBLE')return'<span class="badge badge-eligible">&#10003; ELIGIBLE</span>';
+  if(e==='CONDITIONAL')return'<span class="badge badge-conditional">&#9889; CONDITIONAL</span>';
+  if(e==='INELIGIBLE')return'<span class="badge badge-ineligible">&#10007; INELIGIBLE</span>';
+  return'<span class="badge badge-unknown">? UNKNOWN</span>';
 }
-
-function badgeHTML(e) {
-  if (e === 'ELIGIBLE')    return '<span class="badge badge-eligible">&#10003; ELIGIBLE</span>';
-  if (e === 'CONDITIONAL') return '<span class="badge badge-conditional">&#9889; CONDITIONAL</span>';
-  if (e === 'INELIGIBLE')  return '<span class="badge badge-ineligible">&#10007; INELIGIBLE</span>';
-  return '<span class="badge badge-unknown">? UNKNOWN</span>';
+function osBadge(os){
+  if(os==='RHEL 8')return'<span class="os-badge os-rhel8">RHEL 8</span>';
+  if(os==='RHEL 9')return'<span class="os-badge os-rhel9">RHEL 9</span>';
+  return'<span class="os-badge os-other">'+os+'</span>';
 }
-function osBadge(os) {
-  if (os === 'RHEL 8') return '<span class="os-badge os-rhel8">RHEL 8</span>';
-  if (os === 'RHEL 9') return '<span class="os-badge os-rhel9">RHEL 9</span>';
-  return '<span class="os-badge os-other">' + os + '</span>';
+function commentClass(e){
+  if(e==='CONDITIONAL')return'comment-cell conditional';
+  if(e==='INELIGIBLE')return'comment-cell issue';
+  if(e==='UNKNOWN')return'comment-cell unknown';
+  return'comment-cell';
 }
-function commentClass(e) {
-  if (e === 'CONDITIONAL') return 'comment-cell conditional';
-  if (e === 'INELIGIBLE')  return 'comment-cell issue';
-  if (e === 'UNKNOWN')     return 'comment-cell unknown';
-  return 'comment-cell';
+function render(){
+  const total=filteredData.length,tp=Math.max(1,Math.ceil(total/PAGE_SIZE));
+  currentPage=Math.min(currentPage,tp);
+  const s=(currentPage-1)*PAGE_SIZE,en=Math.min(s+PAGE_SIZE,total);
+  document.getElementById('resultsCount').textContent=total===0?'No results':'Showing '+(s+1).toLocaleString()+'–'+en.toLocaleString()+' of '+total.toLocaleString()+' servers';
+  document.getElementById('tableBody').innerHTML=filteredData.slice(s,en).map(r=>'<tr><td class="host-cell">'+r.Host+'</td><td>'+r.Datacenter+'</td><td>'+r.Mnemonic+'</td><td>'+r.Environment+'</td><td>'+osBadge(r.OS)+'</td><td>'+badgeHTML(r.Eligibility)+'</td><td class="'+commentClass(r.Eligibility)+'">'+r.Comments+'</td></tr>').join('')||'<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--muted)">No servers match your filters.</td></tr>';
+  document.getElementById('pageInfo').textContent=total===0?'':'Page '+currentPage+' of '+tp;
+  const c=document.getElementById('pageBtns');
+  if(tp<=1){c.innerHTML='';return;}
+  const btns=[];
+  btns.push('<button class="page-btn" '+(currentPage===1?'disabled':'')+' onclick="goPage('+(currentPage-1)+')">&lsaquo;</button>');
+  let s2=Math.max(1,currentPage-3),e2=Math.min(tp,s2+6);
+  if(e2-s2<6)s2=Math.max(1,e2-6);
+  if(s2>1){btns.push('<button class="page-btn" onclick="goPage(1)">1</button>');if(s2>2)btns.push('<span style="padding:.38rem .4rem;color:var(--muted)">&hellip;</span>');}
+  for(let i=s2;i<=e2;i++)btns.push('<button class="page-btn'+(i===currentPage?' active':'')+'" onclick="goPage('+i+')">'+i+'</button>');
+  if(e2<tp){if(e2<tp-1)btns.push('<span style="padding:.38rem .4rem;color:var(--muted)">&hellip;</span>');btns.push('<button class="page-btn" onclick="goPage('+tp+')">'+tp+'</button>');}
+  btns.push('<button class="page-btn" '+(currentPage===tp?'disabled':'')+' onclick="goPage('+(currentPage+1)+')">&rsaquo;</button>');
+  c.innerHTML=btns.join('');
 }
-
-function render() {
-  const total      = filteredData.length;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  currentPage      = Math.min(currentPage, totalPages);
-  const start      = (currentPage - 1) * PAGE_SIZE;
-  const end        = Math.min(start + PAGE_SIZE, total);
-  const pageData   = filteredData.slice(start, end);
-
-  document.getElementById('resultsCount').textContent =
-    total === 0 ? 'No results' : 'Showing ' + (start+1).toLocaleString() + '\u2013' + end.toLocaleString() + ' of ' + total.toLocaleString() + ' servers';
-
-  document.getElementById('tableBody').innerHTML = pageData.length === 0
-    ? '<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--muted)">No servers match your filters.</td></tr>'
-    : pageData.map(r => '<tr>' +
-        '<td class="host-cell">' + r.Host + '</td>' +
-        '<td>' + r.Datacenter + '</td>' +
-        '<td>' + r.Mnemonic + '</td>' +
-        '<td>' + r.Environment + '</td>' +
-        '<td>' + osBadge(r.OS) + '</td>' +
-        '<td>' + badgeHTML(r.Eligibility) + '</td>' +
-        '<td class="' + commentClass(r.Eligibility) + '">' + r.Comments + '</td>' +
-        '</tr>').join('');
-
-  document.getElementById('pageInfo').textContent =
-    total === 0 ? '' : 'Page ' + currentPage + ' of ' + totalPages;
-
-  const container = document.getElementById('pageBtns');
-  if (totalPages <= 1) { container.innerHTML = ''; return; }
-  const btns = [];
-  btns.push('<button class="page-btn" ' + (currentPage===1?'disabled':'') + ' onclick="goPage(' + (currentPage-1) + ')">&lsaquo;</button>');
-  const maxV = 7;
-  let s = Math.max(1, currentPage - Math.floor(maxV/2));
-  let e2 = Math.min(totalPages, s + maxV - 1);
-  if (e2 - s + 1 < maxV) s = Math.max(1, e2 - maxV + 1);
-  if (s > 1) { btns.push('<button class="page-btn" onclick="goPage(1)">1</button>'); if (s>2) btns.push('<span style="padding:.38rem .4rem;color:var(--muted)">&hellip;</span>'); }
-  for (let i=s; i<=e2; i++) btns.push('<button class="page-btn' + (i===currentPage?' active':'') + '" onclick="goPage(' + i + ')">' + i + '</button>');
-  if (e2 < totalPages) { if (e2<totalPages-1) btns.push('<span style="padding:.38rem .4rem;color:var(--muted)">&hellip;</span>'); btns.push('<button class="page-btn" onclick="goPage(' + totalPages + ')">' + totalPages + '</button>'); }
-  btns.push('<button class="page-btn" ' + (currentPage===totalPages?'disabled':'') + ' onclick="goPage(' + (currentPage+1) + ')">&rsaquo;</button>');
-  container.innerHTML = btns.join('');
-}
-
-function goPage(p) { currentPage = p; render(); window.scrollTo({top:0,behavior:'smooth'}); }
-
-document.getElementById('searchInput').addEventListener('input', applyFilters);
-document.getElementById('eligFilter').addEventListener('change', applyFilters);
-
-// Default sort indicator on Host column
+function goPage(p){currentPage=p;render();window.scrollTo({top:0,behavior:'smooth'});}
+document.getElementById('searchInput').addEventListener('input',applyFilters);
+document.getElementById('eligFilter').addEventListener('change',applyFilters);
 document.getElementById('th-Host').classList.add('sort-active');
-
-updateKPIs();
-render();
+updateKPIs();render();
 </script>
 </body>
 </html>
 UPGHT
-
     log INFO "Upgrade/index.html written"
     log INFO "Upgrade web dir: $_upg_dir"
 }

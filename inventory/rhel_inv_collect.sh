@@ -142,6 +142,10 @@ rm -f "$INVENTORYTEMP" "$DBINVENTORYTEMP" "$IDINVENTORYTEMP" "$PACKAGETEMP"
 rm -f "$MRGCSVTEMP" "$MRGJSONTMP" "$UPGRADETEMP"
 log INFO "Cleared stale temp files"
 
+# Upgrade web directory — falls back to WEBDIR/Upgrade if not set in conf
+UPGRADE_WEB_DIR="${UPGRADE_WEB_DIR:-${WEBDIR}/Upgrade}"
+mkdir -p "$UPGRADE_WEB_DIR" "${UPGRADE_WEB_DIR}/archive"
+
 # =============================================================================
 log SECTION "Phase 3 -- Parallel SSH scan"
 # =============================================================================
@@ -170,10 +174,6 @@ log INFO "ID temp  : $IDINVENTORYTEMP"
 log INFO "DB temp  : $DBINVENTORYTEMP"
 log INFO "PKG temp : $PACKAGETEMP"
 log INFO "UPG temp : $UPGRADETEMP"
-
-# Upgrade web directory — falls back to WEBDIR/Upgrade if not set in conf
-UPGRADE_WEB_DIR="${UPGRADE_WEB_DIR:-${WEBDIR}/Upgrade}"
-mkdir -p "$UPGRADE_WEB_DIR" "${UPGRADE_WEB_DIR}/archive"
 
 # Write PKG CSV header before pssh populates the file
 echo "Host,Package,Version,Release,Install date" > "$PACKAGETEMP"
@@ -216,113 +216,6 @@ else
 fi
 
 # =============================================================================
-log SECTION "Phase 3a.5 -- Upgrade eligibility processing"
-# =============================================================================
-# Process the UPG temp file collected in Phase 3a:
-#   1. Archive today's raw results (dated copy in UPGRADE_WEB_DIR/archive/)
-#   2. Apply carry-forward: hosts with UNKNOWN status (unreachable this run)
-#      walk back through archive CSVs to find their last known good result.
-#      Last known status is preserved with a note appended to comments.
-#   3. Generate RHEL8-9_Upgrade_Eligibility_Report.csv
-#   4. Generate upgrade_data.js for the web page
-#   5. Generate/update Upgrade/index.html and Upgrade/style.css
-# =============================================================================
-
-_UPG_DATE="$(date +%Y-%m-%d)"
-_UPG_ARCHIVE="${UPGRADE_WEB_DIR}/archive/upgrade_eligibility_${_UPG_DATE}.csv"
-_UPG_CSV="${UPGRADE_WEB_DIR}/RHEL8-9_Upgrade_Eligibility_Report.csv"
-_UPG_JS="${UPGRADE_WEB_DIR}/upgrade_data.js"
-
-if [[ -s "$UPGRADETEMP" ]]; then
-    log INFO "UPG temp: $(wc -l < "$UPGRADETEMP") lines collected"
-
-    # Step 1: Archive today's raw results
-    cp "$UPGRADETEMP" "$_UPG_ARCHIVE"
-    log INFO "Upgrade eligibility archived: $_UPG_ARCHIVE"
-
-    # Prune archives older than DAYS_TO_KEEP_MRG (default 31 days)
-    _upg_pruned=$(find "${UPGRADE_WEB_DIR}/archive" -name "upgrade_eligibility_*.csv" \
-        -type f -mtime +"${DAYS_TO_KEEP_MRG:-31}" -delete -print | wc -l)
-    [[ $_upg_pruned -gt 0 ]] && \
-        log INFO "Upgrade archive pruned: $_upg_pruned file(s) older than ${DAYS_TO_KEEP_MRG:-31} days removed"
-
-    # Step 2: Carry-forward for UNKNOWN hosts — walk back through archives
-    # Build a lookup of host→row from today's raw data first.
-    # For any UNKNOWN row, search archives newest-to-oldest for real data.
-    _upg_cf_tmp=$(mktemp /tmp/rhel_upg_cf.XXXXXX)
-    echo "Host,Datacenter,Mnemonic,Environment,OS,Eligibility,Comments" > "$_upg_cf_tmp"
-
-    awk -F, '
-    BEGIN { OFS="," }
-    # Index today raw data by hostname
-    FILENAME == raw_file {
-        host=$1; gsub(/^ +| +$/,"",host)
-        today[host] = $0
-        next
-    }
-    # For each archive file (newest first via shell sort), build prior[host]
-    # Only store if we do not already have real data for this host
-    {
-        host=$1; gsub(/^ +| +$/,"",host)
-        elig=$6; gsub(/^ +| +$/,"",elig)
-        if (elig != "UNKNOWN" && !(host in prior)) {
-            prior[host] = $0
-            prior_date[host] = FILENAME
-        }
-    }
-    END {
-        for (host in today) {
-            row  = today[host]
-            split(row, f, ",")
-            elig = f[6]; gsub(/^ +| +$/,"",elig)
-            if (elig == "UNKNOWN" && (host in prior)) {
-                # Carry forward prior real data, note it in comments
-                split(prior[host], pf, ",")
-                carried_date = prior_date[host]
-                # Strip path/prefix from archive filename to get just the date
-                sub(/.*upgrade_eligibility_/, "", carried_date)
-                sub(/\.csv$/, "", carried_date)
-                note = "Last known: " pf[6] " as of " carried_date " — host unreachable tonight"
-                print pf[1] "," pf[2] "," pf[3] "," pf[4] "," pf[5] "," pf[6] "," note
-            } else {
-                print row
-            }
-        }
-    }
-    ' raw_file="$UPGRADETEMP" \
-      $(ls -t "${UPGRADE_WEB_DIR}/archive"/upgrade_eligibility_*.csv 2>/dev/null | grep -v "$_UPG_DATE") \
-      >> "$_upg_cf_tmp"
-
-    # Step 3: Write final CSV (sorted by hostname)
-    {
-        head -1 "$_upg_cf_tmp"
-        tail -n +2 "$_upg_cf_tmp" | sort -t, -k1,1
-    } > "$_UPG_CSV"
-    log INFO "Upgrade CSV written: $_UPG_CSV ($(( $(wc -l < "$_UPG_CSV") - 1 )) hosts)"
-    rm -f "$_upg_cf_tmp"
-
-    # Step 4: Generate upgrade_data.js
-    {
-        echo "// RHEL 8→9 Upgrade Eligibility — generated $(date '+%Y-%m-%d %H:%M:%S')"
-        echo "// Fields: Host,Datacenter,Mnemonic,Environment,OS,Eligibility,Comments"
-        printf 'const serverData = [\n'
-        awk -F, 'NR>1 {
-            # Escape backslashes and double-quotes for JSON safety
-            for (i=1;i<=NF;i++) {
-                gsub(/\\/, "\\\\", $i)
-                gsub(/"/, "\\\"", $i)
-            }
-            printf "  {\"Host\":\"%s\",\"Datacenter\":\"%s\",\"Mnemonic\":\"%s\",\"Environment\":\"%s\",\"OS\":\"%s\",\"Eligibility\":\"%s\",\"Comments\":\"%s\"},\n",
-                $1,$2,$3,$4,$5,$6,$7
-        }' "$_UPG_CSV"
-        echo "];"
-    } > "$_UPG_JS"
-    log INFO "Upgrade data JS written: $_UPG_JS"
-
-else
-    log WARN "UPGRADETEMP empty — upgrade eligibility files not updated this run"
-fi
-
 # =============================================================================
 log SECTION "Phase 3b -- Midrange Mod / Compare JSON scan"
 # =============================================================================
@@ -348,7 +241,8 @@ if [[ -f "$_gather_script" ]]; then
             "/dev/null" \
             "/dev/null" \
             "$MRGCSVTEMP" \
-            "$MRGJSONTMP"
+            "$MRGJSONTMP" \
+            "/dev/null"
 
     MRG_RC=$?
     log INFO "Phase 3b completed (exit status: $MRG_RC)"
@@ -541,7 +435,111 @@ _fed_merge \
     "$MRGCSVTEMP" \
     "csv"
 
-# Fed Compare JSON — merge fed combined array into main combined array.
+# Fed Upgrade eligibility — append fed UPG rows into UPGRADETEMP so
+# Phase 3a.5 processes main + fed hosts together in one unified report.
+_FED_UPG_FRESH="${_FED_SRC_DIR:+${_FED_SRC_DIR}/fed_enclave_upgrade.dat}"
+_FED_UPG_FALLBACK="${DATA_DIR}/fed_enclave_upgrade.dat"
+
+_fed_upg_src=""
+if [[ -n "$_FED_UPG_FRESH" && -f "$_FED_UPG_FRESH" && -s "$_FED_UPG_FRESH" ]]; then
+    _fed_upg_src="$_FED_UPG_FRESH"
+    cp -p "$_FED_UPG_FRESH" "$_FED_UPG_FALLBACK"
+    log INFO "Fed Upgrade data: fresh from lmrg34ba — appending to UPGRADETEMP"
+elif [[ -f "$_FED_UPG_FALLBACK" && -s "$_FED_UPG_FALLBACK" ]]; then
+    _fed_upg_src="$_FED_UPG_FALLBACK"
+    log INFO "Fed Upgrade data: using previous run file — $_FED_UPG_FALLBACK"
+fi
+
+if [[ -n "$_fed_upg_src" ]]; then
+    cat "$_fed_upg_src" >> "$UPGRADETEMP"
+    log INFO "Fed Upgrade data: $(wc -l < "$_fed_upg_src") records merged into UPGRADETEMP"
+else
+    log INFO "Fed Upgrade data: no file found — fed enclave excluded from upgrade report this run"
+fi
+
+# =============================================================================
+log SECTION "Phase 4.55 -- Upgrade eligibility processing (main + fed combined)"
+# =============================================================================
+# Runs after Phase 4.5 so fed enclave data is already appended to UPGRADETEMP.
+_UPG_DATE="$(date +%Y-%m-%d)"
+_UPG_ARCHIVE="${UPGRADE_WEB_DIR}/archive/upgrade_eligibility_${_UPG_DATE}.csv"
+_UPG_CSV="${UPGRADE_WEB_DIR}/RHEL8-9_Upgrade_Eligibility_Report.csv"
+_UPG_JS="${UPGRADE_WEB_DIR}/upgrade_data.js"
+
+if [[ -s "$UPGRADETEMP" ]]; then
+    log INFO "UPG temp: $(wc -l < "$UPGRADETEMP") lines collected (main + fed)"
+
+    # Archive today's combined results
+    cp "$UPGRADETEMP" "$_UPG_ARCHIVE"
+    log INFO "Upgrade eligibility archived: $_UPG_ARCHIVE"
+
+    # Prune old archives
+    _upg_pruned=$(find "${UPGRADE_WEB_DIR}/archive" -name "upgrade_eligibility_*.csv" \
+        -type f -mtime +"${DAYS_TO_KEEP_MRG:-31}" -delete -print | wc -l)
+    [[ $_upg_pruned -gt 0 ]] && \
+        log INFO "Upgrade archive pruned: $_upg_pruned file(s) removed"
+
+    # Carry-forward for UNKNOWN hosts
+    _upg_cf_tmp=$(mktemp /tmp/rhel_upg_cf.XXXXXX)
+    echo "Host,Datacenter,Mnemonic,Environment,OS,Eligibility,Comments" > "$_upg_cf_tmp"
+
+    awk -F, '
+    BEGIN { OFS="," }
+    FILENAME == raw_file {
+        host=$1; gsub(/^ +| +$/,"",host)
+        today[host] = $0
+        next
+    }
+    {
+        host=$1; gsub(/^ +| +$/,"",host)
+        elig=$6; gsub(/^ +| +$/,"",elig)
+        if (elig != "UNKNOWN" && !(host in prior)) {
+            prior[host] = $0
+            prior_date[host] = FILENAME
+        }
+    }
+    END {
+        for (host in today) {
+            row = today[host]
+            split(row, f, ",")
+            elig = f[6]; gsub(/^ +| +$/,"",elig)
+            if (elig == "UNKNOWN" && (host in prior)) {
+                split(prior[host], pf, ",")
+                carried_date = prior_date[host]
+                sub(/.*upgrade_eligibility_/, "", carried_date)
+                sub(/\.csv$/, "", carried_date)
+                note = "Last known: " pf[6] " as of " carried_date " — host unreachable tonight"
+                print pf[1] "," pf[2] "," pf[3] "," pf[4] "," pf[5] "," pf[6] "," note
+            } else {
+                print row
+            }
+        }
+    }
+    ' raw_file="$UPGRADETEMP" \
+      $(ls -t "${UPGRADE_WEB_DIR}/archive"/upgrade_eligibility_*.csv 2>/dev/null | grep -v "$_UPG_DATE") \
+      >> "$_upg_cf_tmp"
+
+    # Write final CSV sorted by hostname
+    { head -1 "$_upg_cf_tmp"; tail -n +2 "$_upg_cf_tmp" | sort -t, -k1,1; } > "$_UPG_CSV"
+    log INFO "Upgrade CSV written: $_UPG_CSV ($(( $(wc -l < "$_UPG_CSV") - 1 )) hosts)"
+    rm -f "$_upg_cf_tmp"
+
+    # Generate upgrade_data.js
+    {
+        echo "// RHEL 8→9 Upgrade Eligibility — generated $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "// Fields: Host,Datacenter,Mnemonic,Environment,OS,Eligibility,Comments"
+        printf 'const serverData = [\n'
+        awk -F, 'NR>1 {
+            for (i=1;i<=NF;i++) { gsub(/\\/, "\\\\", $i); gsub(/"/, "\\\"", $i) }
+            printf "  {\"Host\":\"%s\",\"Datacenter\":\"%s\",\"Mnemonic\":\"%s\",\"Environment\":\"%s\",\"OS\":\"%s\",\"Eligibility\":\"%s\",\"Comments\":\"%s\"},\n",
+                $1,$2,$3,$4,$5,$6,$7
+        }' "$_UPG_CSV"
+        echo "];"
+    } > "$_UPG_JS"
+    log INFO "Upgrade data JS written: $_UPG_JS"
+else
+    log WARN "UPGRADETEMP empty — upgrade eligibility files not updated this run"
+fi
 # Both files are JSON arrays. We strip the outer [ ] from the fed file
 # and append its entries into the main array so the split step in Phase 4.6
 # processes all hosts (main + fed) together.
@@ -777,7 +775,7 @@ function na(v) { return (v == "" || v == "n/a") ? "n/a" : v }
 # Pass 1 — DEPLOYMENTDATA: build deploy_date[host] lookup
 # Format: YYYY-MM-DD hostname Virt|Phys OSver
 # ============================================================
-BEGINFILE { current_file = FILENAME }
+{ if (FILENAME != current_file) current_file = FILENAME }
 
 # ============================================================
 # Pass 0 — PREV_DAT: build prev[host] lookup from yesterday

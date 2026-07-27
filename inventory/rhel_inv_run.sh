@@ -125,7 +125,8 @@ RUN_LOG="${LOGS_DIR}/rhel_inventory_v2_run.$(date +%Y%m%d_%H%M%S).log"
 _MRG_DATE="$(date +%m-%d-%Y)"
 MRGCSVTEMP="${DATA_DIR}/Midrange_Mod_Report_${_MRG_DATE}.csv.tmp"
 MRGJSONTMP="${DATA_DIR}/compare_data_${_MRG_DATE}.json.tmp"
-UPGRADETEMP="${DATA_DIR}/upgrade_eligibility_${_MRG_DATE}.csv.tmp"
+UPGRADETEMP="${DATA_DIR}/upgrade_eligibility_$(date +%Y-%m-%d).csv.tmp"
+UPGRADE_WEB_DIR="${UPGRADE_WEB_DIR:-${WEBDIR}/Upgrade}"
 
 # =============================================================================
 # Test mode path overrides
@@ -168,10 +169,10 @@ if [[ $TEST_MODE -eq 1 ]]; then
     PACKAGETEMP="${TEST_DATA}/TEST_RHEL_PACKAGES.tmp"
     MRGCSVTEMP="${TEST_DATA}/Midrange_Mod_Report_${_MRG_DATE}.csv.tmp"
     MRGJSONTMP="${TEST_DATA}/compare_data_${_MRG_DATE}.json.tmp"
-    UPGRADETEMP="${TEST_DATA}/upgrade_eligibility_${_MRG_DATE}.csv.tmp"
+    UPGRADETEMP="${TEST_DATA}/upgrade_eligibility_$(date +%Y-%m-%d).csv.tmp"
+    UPGRADE_WEB_DIR="${TEST_WEBDIR}/Upgrade"
     MRG_ARCHIVE_DIR="${TEST_WEBDIR}/Midrange_Mod/archive"
     COMPARE_DATA_DIR="${TEST_WEBDIR}/compare/data"
-    UPGRADE_WEB_DIR="${TEST_WEBDIR}/Upgrade"
     PACKAGEDATA="${TEST_DATA}/TEST_RHEL_PACKAGES.csv"
     DEPLOYDATACSV="${TEST_WEBDIR}/TEST_RHEL_DEPLOYMENTS.csv"
     APPDATAPLAT="${TEST_DATA}/TEST_check_RHEL_versions_MNEMONIC_PLATFORM.dat"
@@ -388,7 +389,7 @@ a { color: inherit; }
    ============================================================================= */
 .kpis {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(5, 1fr);
   gap: 1rem;
   margin-bottom: 1.4rem;
 }
@@ -414,6 +415,9 @@ a { color: inherit; }
 .ic-violet { background: #f1ecfe; color: var(--violet); }
 .ic-teal   { background: #e3f7f4; color: var(--teal); }
 .ic-red    { background: #fdebee; color: var(--red); }
+.ic-green  { background: #e4f7ee; color: var(--green); }
+.kpi.total { background: linear-gradient(135deg, #f0f4ff 0%, #e8f2ff 100%); border-color: #d0ddfb; }
+.kpi.total .num { font-size: 2.1rem; }
 
 /* =============================================================================
    Grid helpers
@@ -752,6 +756,7 @@ cat > "${WEBDIR}/app.js" << 'APPJS_EOF'
     const el = document.querySelector(selector);
     if (el) el.textContent = value;
   };
+  set('[data-kpi="total"]',    fmt(cfg.totals.totalHosts));
   set('[data-kpi="virtual"]', fmt(cfg.totals.virtual));
   set('[data-kpi="physical"]', fmt(cfg.totals.physical));
   set('[data-kpi="cloud"]', fmt(cfg.totals.cloud));
