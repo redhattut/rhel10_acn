@@ -393,6 +393,8 @@ a { color: inherit; }
   gap: 1rem;
   margin-bottom: 1.4rem;
 }
+@media (max-width: 1100px) { .kpis { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 720px)  { .kpis { grid-template-columns: repeat(2, 1fr); } }
 .kpi {
   background: var(--card);
   border: 1px solid var(--line);

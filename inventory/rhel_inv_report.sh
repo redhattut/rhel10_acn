@@ -52,7 +52,7 @@ log INFO "Publishing to: $WEBDIR"
 YEAR=$(date +%Y)
 UPDATED_HUMAN=$(date '+%b %-d, %Y')
 DEPLOY_CSV_BASE="${DEPLOYDATACSV##*/}"
-PKG_CSV_BASE=$(basename "${PACKAGEDATA:-RHEL_PACKAGES.csv}")
+PKG_CSV_BASE=$(basename "${PACKAGEDATA:-RHEL_PACKAGES_v2.csv}")
 
 # Footer text — sourced from conf; fall back gracefully if not set
 FOOTER_COMPANY="${SITE_FOOTER_COMPANY:-PNC}"
@@ -70,8 +70,7 @@ awk -v lp="$LOCDATAPLAT" -v lr="$LOCDATAREL" \
     -v ap="$APPDATAPLAT" -v ar="$APPDATAREL" \
     '!/^#/ {
         if ($3 == "?") next
-        loc = $21
-        sub(/^[Gg]reenfield-/, "", loc)
+        loc = $21; sub(/^[Gg]reenfield-/, "", loc)
         print loc " " $2  >> lp
         print loc " " $3  >> lr
         if ($26 != "n/a" && $26 != "") {
@@ -118,8 +117,7 @@ eval "$(awk \
     !/^#/{
         if ($3 == "?") next
         total++
-        loc=$21
-        sub(/^Greenfield-/,"",loc)
+        loc=$21; sub(/^Greenfield-/,"",loc)
         if ($2 ~ /^SSHFAIL/ || $2 ~ /^TIMEOUT/) { fail++ }
         else if (loc=="AZCE"||loc=="AZE2") cloud++
         else if ($2=="Virt") virt++
@@ -437,7 +435,7 @@ RPT_Main() {
       <span class="ic ic-red">!</span>
       <span class="meta">
         <span class="num" data-kpi="ssh">${SSHFAIL}</span>
-        <span class="lab">Hosts unreachable (SSH)</span>
+        <span class="lab">Hosts unreachable by SSH</span>
       </span>
     </div>
   </section>
@@ -1330,104 +1328,92 @@ RPT_Upgrade() {
     local _upg_dir="${UPGRADE_WEB_DIR:-${WEBDIR}/Upgrade}"
     mkdir -p "$_upg_dir"
     local _updated; _updated=$(date '+%b %d, %Y')
-
     cat > "${_upg_dir}/style.css" << 'UPGCSS'
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --bg: #f3f6fc; --card: #ffffff; --line: #e7edf6; --line-soft: #eef2f9;
-  --ink: #1d2840; --text: #46546e; --muted: #8693ab; --faint: #aab5c8;
-  --blue: #3b6ef0; --indigo: #5b6ef5; --violet: #8b5cf6;
-  --teal: #14b3a6; --green: #21b573; --amber: #f5a623; --red: #ec4055;
-  --radius: 16px; --radius-md: 12px; --radius-sm: 9px;
-  --shadow: 0 1px 2px rgba(17,28,53,.04), 0 6px 20px rgba(17,28,53,.06);
-  --shadow-sm: 0 1px 2px rgba(17,28,53,.05), 0 2px 8px rgba(17,28,53,.05);
-  --sans: system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --bg:#f3f6fc;--card:#fff;--line:#e7edf6;--line-soft:#eef2f9;
+  --ink:#1d2840;--text:#46546e;--muted:#8693ab;--faint:#aab5c8;
+  --blue:#3b6ef0;--indigo:#5b6ef5;--violet:#8b5cf6;--teal:#14b3a6;--green:#21b573;--red:#ec4055;
+  --radius:16px;--radius-md:12px;--radius-sm:9px;
+  --shadow:0 1px 2px rgba(17,28,53,.04),0 6px 20px rgba(17,28,53,.06);
+  --shadow-sm:0 1px 2px rgba(17,28,53,.05),0 2px 8px rgba(17,28,53,.05);
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
 }
-body { font-family:var(--sans); font-size:14px; line-height:1.55; color:var(--text); background:var(--bg); -webkit-font-smoothing:antialiased; min-height:100vh; }
-a { color:inherit; text-decoration:none; }
-.page { max-width:1400px; margin:0 auto; padding:2rem 1.75rem 3rem; }
-.page-header { background:linear-gradient(135deg,#1e3a6e,#2d5edc,#4a3fa0); border-radius:var(--radius); padding:2rem 2.2rem 1.8rem; margin-bottom:1.6rem; color:#fff; }
-.header-top { display:flex; align-items:flex-start; justify-content:space-between; gap:1.5rem; flex-wrap:wrap; margin-bottom:1.4rem; }
-.header-title h1 { font-size:1.75rem; font-weight:750; letter-spacing:-.02em; line-height:1.2; }
-.header-title p { font-size:.88rem; opacity:.8; margin-top:.35rem; }
-.header-actions { display:flex; gap:.6rem; flex-wrap:wrap; align-items:center; }
-.btn { display:inline-flex; align-items:center; gap:.45rem; padding:.6rem 1.15rem; border-radius:var(--radius-sm); font-size:.83rem; font-weight:650; cursor:pointer; transition:.14s ease; border:1px solid transparent; white-space:nowrap; font-family:inherit; }
-.btn svg { width:14px; height:14px; flex:0 0 auto; }
-.btn-request { background:var(--green); color:#fff; border-color:rgba(255,255,255,.2); }
-.btn-request:hover { background:#1a9e62; }
-.btn-docs { background:rgba(255,255,255,.15); color:#fff; border-color:rgba(255,255,255,.3); }
-.btn-docs:hover { background:rgba(255,255,255,.25); }
-.btn-faq { background:rgba(255,255,255,.15); color:#fff; border-color:rgba(255,255,255,.3); }
-.btn-faq:hover { background:rgba(255,255,255,.25); }
-.header-kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:.85rem; }
-.hkpi { background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.2); border-radius:var(--radius-md); padding:1rem 1.2rem; }
-.hkpi .num { display:block; font-size:1.9rem; font-weight:780; color:#fff; letter-spacing:-.03em; line-height:1; }
-.hkpi.eligible  .num { color:#6ee7b7; }
-.hkpi.ineligible .num { color:#f87171; }
-.hkpi.rate       .num { color:#c4b5fd; }
-.hkpi .lab { display:block; font-size:.76rem; color:rgba(255,255,255,.7); margin-top:.3rem; }
-.criteria-panel { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow-sm); margin-bottom:1.4rem; overflow:hidden; }
-.criteria-toggle { display:flex; align-items:center; gap:.75rem; width:100%; padding:1rem 1.4rem; background:none; border:none; cursor:pointer; text-align:left; font-family:inherit; transition:.14s ease; }
-.criteria-toggle:hover { background:#f8faff; }
-.criteria-toggle strong { font-size:.9rem; font-weight:700; color:var(--ink); }
-.criteria-toggle .ct-sub { font-size:.79rem; color:var(--muted); font-weight:400; }
-.criteria-toggle .ct-chevron { margin-left:auto; color:var(--muted); font-size:.75rem; font-weight:600; }
-.criteria-body { display:none; padding:1.1rem 1.4rem 1.3rem; border-top:1px solid var(--line); }
-.criteria-body.open { display:block; }
-.criteria-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:.7rem; }
-.criteria-item { padding:.8rem 1rem; background:var(--bg); border-radius:var(--radius-sm); border:1px solid var(--line); }
-.criteria-item.conditional-note { border-color:#f5dba0; background:#fdf7ec; }
-.criteria-item.conditional-note .ci-label { color:#92400e; }
-.ci-label { font-size:.83rem; font-weight:700; color:var(--ink); margin-bottom:.2rem; }
-.ci-detail { font-size:.76rem; color:var(--muted); line-height:1.45; }
-.ci-detail a { color:var(--blue); text-decoration:underline; }
-.controls { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow-sm); padding:1rem 1.2rem; margin-bottom:1rem; display:flex; gap:.75rem; flex-wrap:wrap; align-items:center; }
-.search-wrap { flex:1 1 260px; position:relative; }
-.search-wrap svg { position:absolute; left:.8rem; top:50%; transform:translateY(-50%); width:15px; height:15px; color:var(--muted); pointer-events:none; }
-.search-wrap input { width:100%; padding:.6rem .8rem .6rem 2.3rem; border:1px solid var(--line); border-radius:var(--radius-sm); font-size:.86rem; color:var(--ink); background:var(--bg); font-family:inherit; transition:.14s ease; }
-.search-wrap input:focus { outline:none; border-color:var(--blue); background:#fff; box-shadow:0 0 0 3px rgba(59,110,240,.1); }
-.filter-select { padding:.6rem .9rem; border:1px solid var(--line); border-radius:var(--radius-sm); font-size:.84rem; color:var(--ink); background:var(--card); cursor:pointer; font-family:inherit; }
-.filter-select:focus { outline:none; border-color:var(--blue); }
-.dl-btn { display:inline-flex; align-items:center; gap:.4rem; padding:.6rem 1rem; border-radius:var(--radius-sm); font-size:.82rem; font-weight:650; background:var(--blue); color:#fff; border:none; cursor:pointer; transition:.14s ease; font-family:inherit; }
-.dl-btn:hover { background:#2d5edc; }
-.dl-btn svg { width:14px; height:14px; }
-.results-count { font-size:.8rem; color:var(--muted); margin-left:auto; white-space:nowrap; }
-.table-card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden; }
-.table-scroll { overflow-x:auto; }
-table { width:100%; border-collapse:collapse; }
-thead { position:sticky; top:0; z-index:2; }
-th { background:linear-gradient(135deg,var(--indigo),var(--violet)); color:#fff; padding:11px 13px; text-align:left; font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; cursor:pointer; user-select:none; white-space:nowrap; }
-th:hover { filter:brightness(1.08); }
-.sort-arrow { opacity:.35; margin-left:.3rem; font-size:.65rem; }
-th.sort-active .sort-arrow { opacity:1; }
-td { padding:10px 13px; border-bottom:1px solid var(--line-soft); font-size:.84rem; color:var(--text); vertical-align:middle; }
-tr:last-child td { border-bottom:none; }
-tr:hover td { background:#f8faff; }
-.host-cell { font-weight:650; color:var(--ink); font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace; font-size:.8rem; min-width:140px; white-space:nowrap; }
-.badge { display:inline-flex; align-items:center; gap:.3rem; padding:.28rem .7rem; border-radius:999px; font-size:.75rem; font-weight:700; white-space:nowrap; }
-.badge-eligible    { background:#dcf5e7; color:#14532d; }
-.badge-conditional { background:#fef3c7; color:#78350f; }
-.badge-ineligible  { background:#fecdd3; color:#7f1d1d; }
-.badge-unknown     { background:#f1f5f9; color:#64748b; }
-.os-badge { padding:.22rem .55rem; border-radius:6px; font-size:.74rem; font-weight:700; white-space:nowrap; }
-.os-rhel8 { background:#dbeafe; color:#1e40af; }
-.os-rhel9 { background:#fef9c3; color:#854d0e; }
-.os-other { background:#f1f5f9; color:#64748b; }
-.comment-cell { min-width:280px; font-size:.8rem; color:var(--muted); line-height:1.4; white-space:normal; word-break:break-word; }
-.comment-cell.issue       { color:#7f1d1d; font-weight:600; }
-.comment-cell.conditional { color:#78350f; font-weight:600; }
-.comment-cell.unknown     { color:#64748b; font-style:italic; }
-.pagination { display:flex; align-items:center; justify-content:space-between; padding:.9rem 1.3rem; border-top:1px solid var(--line); background:#fbfcff; gap:1rem; flex-wrap:wrap; }
-.page-info { font-size:.8rem; color:var(--muted); }
-.page-btns { display:flex; gap:.3rem; flex-wrap:wrap; }
-.page-btn { padding:.38rem .72rem; border:1px solid var(--line); border-radius:8px; font-size:.8rem; color:var(--text); background:var(--card); cursor:pointer; transition:.12s ease; font-family:inherit; }
-.page-btn:hover:not([disabled]) { border-color:var(--blue); color:var(--blue); }
-.page-btn.active { background:var(--blue); color:#fff; border-color:var(--blue); }
-.page-btn[disabled] { opacity:.35; cursor:not-allowed; }
-.foot { display:flex; justify-content:space-between; flex-wrap:wrap; gap:.5rem; font-size:.79rem; color:var(--muted); padding:1.5rem 0 2.5rem; margin-top:.5rem; }
-.foot a { color:var(--blue); }
-@media(max-width:900px) { .header-kpis { grid-template-columns:repeat(2,1fr); } }
-@media(max-width:600px) { .header-top { flex-direction:column; } }
+body{font-family:var(--sans);font-size:14px;line-height:1.55;color:var(--text);background:var(--bg);-webkit-font-smoothing:antialiased;min-height:100vh;}
+a{color:inherit;text-decoration:none;}
+.page{max-width:1400px;margin:0 auto;padding:2rem 1.75rem 3rem;}
+.page-header{background:linear-gradient(135deg,#1e3a6e,#2d5edc,#4a3fa0);border-radius:var(--radius);padding:2rem 2.2rem 1.8rem;margin-bottom:1.6rem;color:#fff;}
+.header-top{display:flex;align-items:flex-start;justify-content:space-between;gap:1.5rem;flex-wrap:wrap;margin-bottom:1.4rem;}
+.header-title h1{font-size:1.75rem;font-weight:750;letter-spacing:-.02em;line-height:1.2;}
+.header-title p{font-size:.88rem;opacity:.8;margin-top:.35rem;}
+.header-actions{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;}
+.btn{display:inline-flex;align-items:center;gap:.45rem;padding:.6rem 1.15rem;border-radius:var(--radius-sm);font-size:.83rem;font-weight:650;cursor:pointer;transition:.14s ease;border:1px solid transparent;white-space:nowrap;font-family:inherit;}
+.btn svg{width:14px;height:14px;flex:0 0 auto;}
+.btn-request{background:var(--green);color:#fff;border-color:rgba(255,255,255,.2);}
+.btn-request:hover{background:#1a9e62;}
+.btn-docs,.btn-faq{background:rgba(255,255,255,.15);color:#fff;border-color:rgba(255,255,255,.3);}
+.btn-docs:hover,.btn-faq:hover{background:rgba(255,255,255,.25);}
+.header-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:.85rem;}
+.hkpi{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);border-radius:var(--radius-md);padding:1rem 1.2rem;}
+.hkpi .num{display:block;font-size:1.9rem;font-weight:780;color:#fff;letter-spacing:-.03em;line-height:1;}
+.hkpi.eligible .num{color:#6ee7b7;}.hkpi.ineligible .num{color:#f87171;}.hkpi.rate .num{color:#c4b5fd;}
+.hkpi .lab{display:block;font-size:.76rem;color:rgba(255,255,255,.7);margin-top:.3rem;}
+.criteria-panel{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-sm);margin-bottom:1.4rem;overflow:hidden;}
+.criteria-toggle{display:flex;align-items:center;gap:.75rem;width:100%;padding:1rem 1.4rem;background:none;border:none;cursor:pointer;text-align:left;font-family:inherit;transition:.14s ease;}
+.criteria-toggle:hover{background:#f8faff;}
+.criteria-toggle strong{font-size:.9rem;font-weight:700;color:var(--ink);}
+.criteria-toggle .ct-sub{font-size:.79rem;color:var(--muted);font-weight:400;}
+.criteria-toggle .ct-chevron{margin-left:auto;color:var(--muted);font-size:.75rem;font-weight:600;}
+.criteria-body{display:none;padding:1.1rem 1.4rem 1.3rem;border-top:1px solid var(--line);}
+.criteria-body.open{display:block;}
+.criteria-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.7rem;}
+.criteria-item{padding:.8rem 1rem;background:var(--bg);border-radius:var(--radius-sm);border:1px solid var(--line);}
+.criteria-item.conditional-note{border-color:#f5dba0;background:#fdf7ec;}
+.criteria-item.conditional-note .ci-label{color:#92400e;}
+.ci-label{font-size:.83rem;font-weight:700;color:var(--ink);margin-bottom:.2rem;}
+.ci-detail{font-size:.76rem;color:var(--muted);line-height:1.45;}
+.ci-detail a{color:var(--blue);text-decoration:underline;}
+.controls{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-sm);padding:1rem 1.2rem;margin-bottom:1rem;display:flex;gap:.75rem;flex-wrap:wrap;align-items:center;}
+.search-wrap{flex:1 1 260px;position:relative;}
+.search-wrap svg{position:absolute;left:.8rem;top:50%;transform:translateY(-50%);width:15px;height:15px;color:var(--muted);pointer-events:none;}
+.search-wrap input{width:100%;padding:.6rem .8rem .6rem 2.3rem;border:1px solid var(--line);border-radius:var(--radius-sm);font-size:.86rem;color:var(--ink);background:var(--bg);font-family:inherit;transition:.14s ease;}
+.search-wrap input:focus{outline:none;border-color:var(--blue);background:#fff;box-shadow:0 0 0 3px rgba(59,110,240,.1);}
+.filter-select{padding:.6rem .9rem;border:1px solid var(--line);border-radius:var(--radius-sm);font-size:.84rem;color:var(--ink);background:var(--card);cursor:pointer;font-family:inherit;}
+.filter-select:focus{outline:none;border-color:var(--blue);}
+.dl-btn{display:inline-flex;align-items:center;gap:.4rem;padding:.6rem 1rem;border-radius:var(--radius-sm);font-size:.82rem;font-weight:650;background:var(--blue);color:#fff;border:none;cursor:pointer;transition:.14s ease;font-family:inherit;}
+.dl-btn:hover{background:#2d5edc;}.dl-btn svg{width:14px;height:14px;}
+.results-count{font-size:.8rem;color:var(--muted);margin-left:auto;white-space:nowrap;}
+.table-card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;}
+.table-scroll{overflow-x:auto;}
+table{width:100%;border-collapse:collapse;}
+thead{position:sticky;top:0;z-index:2;}
+th{background:linear-gradient(135deg,var(--indigo),var(--violet));color:#fff;padding:11px 13px;text-align:left;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;cursor:pointer;user-select:none;white-space:nowrap;}
+th:hover{filter:brightness(1.08);}
+.sort-arrow{opacity:.35;margin-left:.3rem;font-size:.65rem;}
+th.sort-active .sort-arrow{opacity:1;}
+td{padding:10px 13px;border-bottom:1px solid var(--line-soft);font-size:.84rem;color:var(--text);vertical-align:middle;}
+tr:last-child td{border-bottom:none;}
+tr:hover td{background:#f8faff;}
+.host-cell{font-weight:650;color:var(--ink);font-family:'SFMono-Regular',Consolas,monospace;font-size:.8rem;min-width:140px;white-space:nowrap;}
+.badge{display:inline-flex;align-items:center;gap:.3rem;padding:.28rem .7rem;border-radius:999px;font-size:.75rem;font-weight:700;white-space:nowrap;}
+.badge-eligible{background:#dcf5e7;color:#14532d;}
+.badge-conditional{background:#fef3c7;color:#78350f;}
+.badge-ineligible{background:#fecdd3;color:#7f1d1d;}
+.badge-unknown{background:#f1f5f9;color:#64748b;}
+.os-badge{padding:.22rem .55rem;border-radius:6px;font-size:.74rem;font-weight:700;white-space:nowrap;}
+.os-rhel8{background:#dbeafe;color:#1e40af;}.os-rhel9{background:#fef9c3;color:#854d0e;}.os-other{background:#f1f5f9;color:#64748b;}
+.deploy-empty-note{color:var(--muted);font-size:.88rem;padding:.5rem 0 .25rem;}
+.comment-cell{min-width:280px;font-size:.8rem;color:var(--muted);line-height:1.4;white-space:normal;word-break:break-word;}
+.comment-cell.issue{color:#7f1d1d;font-weight:600;}.comment-cell.conditional{color:#78350f;font-weight:600;}.comment-cell.unknown{color:#64748b;font-style:italic;}
+.pagination{display:flex;align-items:center;justify-content:space-between;padding:.9rem 1.3rem;border-top:1px solid var(--line);background:#fbfcff;gap:1rem;flex-wrap:wrap;}
+.page-info{font-size:.8rem;color:var(--muted);}
+.page-btns{display:flex;gap:.3rem;flex-wrap:wrap;}
+.page-btn{padding:.38rem .72rem;border:1px solid var(--line);border-radius:8px;font-size:.8rem;color:var(--text);background:var(--card);cursor:pointer;transition:.12s ease;font-family:inherit;}
+.page-btn:hover:not([disabled]){border-color:var(--blue);color:var(--blue);}.page-btn.active{background:var(--blue);color:#fff;border-color:var(--blue);}.page-btn[disabled]{opacity:.35;cursor:not-allowed;}
+.foot{display:flex;justify-content:space-between;flex-wrap:wrap;gap:.5rem;font-size:.79rem;color:var(--muted);padding:1.5rem 0 2.5rem;margin-top:.5rem;}
+.foot a{color:var(--blue);}
+@media(max-width:900px){.header-kpis{grid-template-columns:repeat(2,1fr);}}
+@media(max-width:600px){.header-top{flex-direction:column;}}
 UPGCSS
     log INFO "Upgrade/style.css written"
 
@@ -1470,7 +1456,6 @@ UPGCSS
       <div class="hkpi rate"><span class="num" id="kpiRate">&mdash;</span><span class="lab">Eligibility rate</span></div>
     </div>
   </header>
-
   <div class="criteria-panel">
     <button class="criteria-toggle" onclick="toggleCriteria()">
       <strong>Eligibility Criteria</strong>
@@ -1479,30 +1464,14 @@ UPGCSS
     </button>
     <div class="criteria-body" id="criteriaBody">
       <div class="criteria-grid">
-        <div class="criteria-item">
-          <div class="ci-label">1. OS Version &mdash; Must be RHEL 8.x</div>
-          <div class="ci-detail">RHEL 7, RHEL 9, and unknown versions are excluded. RHEL 7 hosts exit silently without producing output.</div>
-        </div>
-        <div class="criteria-item">
-          <div class="ci-label">2. No Previous Upgrade &mdash; /etc/os_upgrade must be absent</div>
-          <div class="ci-detail">Hosts previously upgraded from RHEL 7 to 8 via leapp are not eligible for a second in-place upgrade.</div>
-        </div>
-        <div class="criteria-item">
-          <div class="ci-label">3. /boot Partition &mdash; Minimum 1,024 MB (2 GB required)</div>
-          <div class="ci-detail">Insufficient /boot space is the most common hard blocker. The upgrade process requires at least 2 GB free.</div>
-        </div>
-        <div class="criteria-item">
-          <div class="ci-label">4. Not a DB Server &mdash; DBTYPE must be unset</div>
-          <div class="ci-detail">Servers with DBTYPE set in /boot/PNC_PROVISION_CONFIG are not yet certified for RHEL 9 in-place upgrade.</div>
-        </div>
-        <div class="criteria-item conditional-note">
-          <div class="ci-label">&#9889; Conditional &mdash; rootvg free space &lt; 22 GB</div>
-          <div class="ci-detail">These servers are upgrade-eligible once the volume group is expanded. <a href="${UPGRADE_DISK_REQUEST_URL:-#}" target="_blank" rel="noopener">Submit a disk expansion request</a> first, then request the upgrade. Counted toward the eligibility rate.</div>
-        </div>
+        <div class="criteria-item"><div class="ci-label">1. OS Version &mdash; Must be RHEL 8.x</div><div class="ci-detail">RHEL 7, RHEL 9, and unknown versions are excluded. RHEL 7 hosts exit silently without producing output.</div></div>
+        <div class="criteria-item"><div class="ci-label">2. No Previous Upgrade &mdash; /etc/os_upgrade must be absent</div><div class="ci-detail">Hosts previously upgraded from RHEL 7 to 8 via leapp are not eligible for a second in-place upgrade.</div></div>
+        <div class="criteria-item"><div class="ci-label">3. /boot Partition &mdash; Minimum 1,024 MB (2 GB required)</div><div class="ci-detail">Insufficient /boot space is the most common hard blocker. The upgrade process requires at least 2 GB free.</div></div>
+        <div class="criteria-item"><div class="ci-label">4. Not a DB Server &mdash; DBTYPE must be unset</div><div class="ci-detail">Servers with DBTYPE set in /boot/PNC_PROVISION_CONFIG are not yet certified for RHEL 9 in-place upgrade.</div></div>
+        <div class="criteria-item conditional-note"><div class="ci-label">&#9889; Conditional &mdash; rootvg free space &lt; 22 GB</div><div class="ci-detail">These servers are upgrade-eligible once the volume group is expanded. <a href="${UPGRADE_DISK_REQUEST_URL:-#}" target="_blank" rel="noopener">Submit a disk expansion request</a> first, then request the upgrade. Counted toward the eligibility rate.</div></div>
       </div>
     </div>
   </div>
-
   <div class="controls">
     <div class="search-wrap">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -1521,21 +1490,18 @@ UPGCSS
     </button>
     <span class="results-count" id="resultsCount"></span>
   </div>
-
   <div class="table-card">
     <div class="table-scroll">
       <table>
-        <thead>
-          <tr>
-            <th onclick="sortTable('Host')" id="th-Host">Host<span class="sort-arrow">&#9650;</span></th>
-            <th onclick="sortTable('Datacenter')" id="th-Datacenter">Datacenter<span class="sort-arrow">&#9650;</span></th>
-            <th onclick="sortTable('Mnemonic')" id="th-Mnemonic">Mnemonic<span class="sort-arrow">&#9650;</span></th>
-            <th onclick="sortTable('Environment')" id="th-Environment">Environment<span class="sort-arrow">&#9650;</span></th>
-            <th onclick="sortTable('OS')" id="th-OS">OS<span class="sort-arrow">&#9650;</span></th>
-            <th onclick="sortTable('Eligibility')" id="th-Eligibility">Eligibility<span class="sort-arrow">&#9650;</span></th>
-            <th>Comments</th>
-          </tr>
-        </thead>
+        <thead><tr>
+          <th onclick="sortTable('Host')" id="th-Host">Host<span class="sort-arrow">&#9650;</span></th>
+          <th onclick="sortTable('Datacenter')" id="th-Datacenter">Datacenter<span class="sort-arrow">&#9650;</span></th>
+          <th onclick="sortTable('Mnemonic')" id="th-Mnemonic">Mnemonic<span class="sort-arrow">&#9650;</span></th>
+          <th onclick="sortTable('Environment')" id="th-Environment">Environment<span class="sort-arrow">&#9650;</span></th>
+          <th onclick="sortTable('OS')" id="th-OS">OS<span class="sort-arrow">&#9650;</span></th>
+          <th onclick="sortTable('Eligibility')" id="th-Eligibility">Eligibility<span class="sort-arrow">&#9650;</span></th>
+          <th>Comments</th>
+        </tr></thead>
         <tbody id="tableBody"></tbody>
       </table>
     </div>
@@ -1544,7 +1510,6 @@ UPGCSS
       <div class="page-btns" id="pageBtns"></div>
     </div>
   </div>
-
   <footer class="foot">
     <span>RHEL 8 &rarr; 9 Upgrade Eligibility Report &mdash; IaaS &middot; Linux Engineering</span>
     <span>Updated ${_updated} &nbsp;|&nbsp; <a href="RHEL8-9_Upgrade_Eligibility_Report.csv">Download CSV</a></span>
@@ -1555,75 +1520,14 @@ UPGCSS
 const PAGE_SIZE=50;
 let filteredData=[...serverData].sort((a,b)=>a.Host.localeCompare(b.Host));
 let currentPage=1,sortCol='Host',sortDir='asc';
-function updateKPIs(){
-  const r8=serverData.filter(r=>r.OS==='RHEL 8');
-  const t=r8.length,e=r8.filter(r=>r.Eligibility==='ELIGIBLE'||r.Eligibility==='CONDITIONAL').length;
-  const i=r8.filter(r=>r.Eligibility==='INELIGIBLE').length;
-  const rt=t>0?Math.round(e/t*100):0;
-  document.getElementById('kpiTotal').textContent=t.toLocaleString();
-  document.getElementById('kpiElig').textContent=e.toLocaleString();
-  document.getElementById('kpiInelig').textContent=i.toLocaleString();
-  document.getElementById('kpiRate').textContent=rt+'%';
-}
-function toggleCriteria(){
-  const b=document.getElementById('criteriaBody'),c=document.getElementById('criteriaChevron');
-  const o=b.classList.toggle('open');c.innerHTML=o?'Hide &#9652;':'Show &#9662;';
-}
-function sortTable(col){
-  document.querySelectorAll('th').forEach(t=>t.classList.remove('sort-active'));
-  if(sortCol===col){sortDir=sortDir==='asc'?'desc':'asc';}else{sortCol=col;sortDir='asc';}
-  const th=document.getElementById('th-'+col);
-  if(th){th.classList.add('sort-active');th.querySelector('.sort-arrow').innerHTML=sortDir==='asc'?'&#9650;':'&#9660;';}
-  filteredData.sort((a,b)=>{const va=(a[col]||'').toLowerCase(),vb=(b[col]||'').toLowerCase();return sortDir==='asc'?va.localeCompare(vb):vb.localeCompare(va);});
-  currentPage=1;render();
-}
-function applyFilters(){
-  const q=document.getElementById('searchInput').value.toLowerCase();
-  const eli=document.getElementById('eligFilter').value;
-  filteredData=serverData.filter(r=>{
-    const mq=!q||Object.values(r).some(v=>v.toLowerCase().includes(q));
-    const me=!eli||r.Eligibility===eli;
-    return mq&&me;
-  });
-  filteredData.sort((a,b)=>{const va=(a[sortCol]||'').toLowerCase(),vb=(b[sortCol]||'').toLowerCase();return sortDir==='asc'?va.localeCompare(vb):vb.localeCompare(va);});
-  currentPage=1;render();
-}
-function badgeHTML(e){
-  if(e==='ELIGIBLE')return'<span class="badge badge-eligible">&#10003; ELIGIBLE</span>';
-  if(e==='CONDITIONAL')return'<span class="badge badge-conditional">&#9889; CONDITIONAL</span>';
-  if(e==='INELIGIBLE')return'<span class="badge badge-ineligible">&#10007; INELIGIBLE</span>';
-  return'<span class="badge badge-unknown">? UNKNOWN</span>';
-}
-function osBadge(os){
-  if(os==='RHEL 8')return'<span class="os-badge os-rhel8">RHEL 8</span>';
-  if(os==='RHEL 9')return'<span class="os-badge os-rhel9">RHEL 9</span>';
-  return'<span class="os-badge os-other">'+os+'</span>';
-}
-function commentClass(e){
-  if(e==='CONDITIONAL')return'comment-cell conditional';
-  if(e==='INELIGIBLE')return'comment-cell issue';
-  if(e==='UNKNOWN')return'comment-cell unknown';
-  return'comment-cell';
-}
-function render(){
-  const total=filteredData.length,tp=Math.max(1,Math.ceil(total/PAGE_SIZE));
-  currentPage=Math.min(currentPage,tp);
-  const s=(currentPage-1)*PAGE_SIZE,en=Math.min(s+PAGE_SIZE,total);
-  document.getElementById('resultsCount').textContent=total===0?'No results':'Showing '+(s+1).toLocaleString()+'–'+en.toLocaleString()+' of '+total.toLocaleString()+' servers';
-  document.getElementById('tableBody').innerHTML=filteredData.slice(s,en).map(r=>'<tr><td class="host-cell">'+r.Host+'</td><td>'+r.Datacenter+'</td><td>'+r.Mnemonic+'</td><td>'+r.Environment+'</td><td>'+osBadge(r.OS)+'</td><td>'+badgeHTML(r.Eligibility)+'</td><td class="'+commentClass(r.Eligibility)+'">'+r.Comments+'</td></tr>').join('')||'<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--muted)">No servers match your filters.</td></tr>';
-  document.getElementById('pageInfo').textContent=total===0?'':'Page '+currentPage+' of '+tp;
-  const c=document.getElementById('pageBtns');
-  if(tp<=1){c.innerHTML='';return;}
-  const btns=[];
-  btns.push('<button class="page-btn" '+(currentPage===1?'disabled':'')+' onclick="goPage('+(currentPage-1)+')">&lsaquo;</button>');
-  let s2=Math.max(1,currentPage-3),e2=Math.min(tp,s2+6);
-  if(e2-s2<6)s2=Math.max(1,e2-6);
-  if(s2>1){btns.push('<button class="page-btn" onclick="goPage(1)">1</button>');if(s2>2)btns.push('<span style="padding:.38rem .4rem;color:var(--muted)">&hellip;</span>');}
-  for(let i=s2;i<=e2;i++)btns.push('<button class="page-btn'+(i===currentPage?' active':'')+'" onclick="goPage('+i+')">'+i+'</button>');
-  if(e2<tp){if(e2<tp-1)btns.push('<span style="padding:.38rem .4rem;color:var(--muted)">&hellip;</span>');btns.push('<button class="page-btn" onclick="goPage('+tp+')">'+tp+'</button>');}
-  btns.push('<button class="page-btn" '+(currentPage===tp?'disabled':'')+' onclick="goPage('+(currentPage+1)+')">&rsaquo;</button>');
-  c.innerHTML=btns.join('');
-}
+function updateKPIs(){const r8=serverData.filter(r=>r.OS==='RHEL 8');const t=r8.length,e=r8.filter(r=>r.Eligibility==='ELIGIBLE'||r.Eligibility==='CONDITIONAL').length,i=r8.filter(r=>r.Eligibility==='INELIGIBLE').length,rt=t>0?Math.round(e/t*100):0;document.getElementById('kpiTotal').textContent=t.toLocaleString();document.getElementById('kpiElig').textContent=e.toLocaleString();document.getElementById('kpiInelig').textContent=i.toLocaleString();document.getElementById('kpiRate').textContent=rt+'%';}
+function toggleCriteria(){const b=document.getElementById('criteriaBody'),c=document.getElementById('criteriaChevron'),o=b.classList.toggle('open');c.innerHTML=o?'Hide &#9652;':'Show &#9662;';}
+function sortTable(col){document.querySelectorAll('th').forEach(t=>t.classList.remove('sort-active'));if(sortCol===col){sortDir=sortDir==='asc'?'desc':'asc';}else{sortCol=col;sortDir='asc';}const th=document.getElementById('th-'+col);if(th){th.classList.add('sort-active');th.querySelector('.sort-arrow').innerHTML=sortDir==='asc'?'&#9650;':'&#9660;';}filteredData.sort((a,b)=>{const va=(a[col]||'').toLowerCase(),vb=(b[col]||'').toLowerCase();return sortDir==='asc'?va.localeCompare(vb):vb.localeCompare(va);});currentPage=1;render();}
+function applyFilters(){const q=document.getElementById('searchInput').value.toLowerCase(),eli=document.getElementById('eligFilter').value;filteredData=serverData.filter(r=>{const mq=!q||Object.values(r).some(v=>v.toLowerCase().includes(q)),me=!eli||r.Eligibility===eli;return mq&&me;});filteredData.sort((a,b)=>{const va=(a[sortCol]||'').toLowerCase(),vb=(b[sortCol]||'').toLowerCase();return sortDir==='asc'?va.localeCompare(vb):vb.localeCompare(va);});currentPage=1;render();}
+function badgeHTML(e){if(e==='ELIGIBLE')return'<span class="badge badge-eligible">&#10003; ELIGIBLE</span>';if(e==='CONDITIONAL')return'<span class="badge badge-conditional">&#9889; CONDITIONAL</span>';if(e==='INELIGIBLE')return'<span class="badge badge-ineligible">&#10007; INELIGIBLE</span>';return'<span class="badge badge-unknown">? UNKNOWN</span>';}
+function osBadge(os){if(os==='RHEL 8')return'<span class="os-badge os-rhel8">RHEL 8</span>';if(os==='RHEL 9')return'<span class="os-badge os-rhel9">RHEL 9</span>';return'<span class="os-badge os-other">'+os+'</span>';}
+function commentClass(e){if(e==='CONDITIONAL')return'comment-cell conditional';if(e==='INELIGIBLE')return'comment-cell issue';if(e==='UNKNOWN')return'comment-cell unknown';return'comment-cell';}
+function render(){const total=filteredData.length,tp=Math.max(1,Math.ceil(total/PAGE_SIZE));currentPage=Math.min(currentPage,tp);const s=(currentPage-1)*PAGE_SIZE,en=Math.min(s+PAGE_SIZE,total);document.getElementById('resultsCount').textContent=total===0?'No results':'Showing '+(s+1).toLocaleString()+'–'+en.toLocaleString()+' of '+total.toLocaleString()+' servers';document.getElementById('tableBody').innerHTML=filteredData.slice(s,en).map(r=>'<tr><td class="host-cell">'+r.Host+'</td><td>'+r.Datacenter+'</td><td>'+r.Mnemonic+'</td><td>'+r.Environment+'</td><td>'+osBadge(r.OS)+'</td><td>'+badgeHTML(r.Eligibility)+'</td><td class="'+commentClass(r.Eligibility)+'">'+r.Comments+'</td></tr>').join('')||'<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--muted)">No servers match your filters.</td></tr>';document.getElementById('pageInfo').textContent=total===0?'':'Page '+currentPage+' of '+tp;const c=document.getElementById('pageBtns');if(tp<=1){c.innerHTML='';return;}const btns=[];btns.push('<button class="page-btn" '+(currentPage===1?'disabled':'')+' onclick="goPage('+(currentPage-1)+')">&lsaquo;</button>');let s2=Math.max(1,currentPage-3),e2=Math.min(tp,s2+6);if(e2-s2<6)s2=Math.max(1,e2-6);if(s2>1){btns.push('<button class="page-btn" onclick="goPage(1)">1</button>');if(s2>2)btns.push('<span style="padding:.38rem .4rem;color:var(--muted)">&hellip;</span>');}for(let i=s2;i<=e2;i++)btns.push('<button class="page-btn'+(i===currentPage?' active':'')+'" onclick="goPage('+i+')">'+i+'</button>');if(e2<tp){if(e2<tp-1)btns.push('<span style="padding:.38rem .4rem;color:var(--muted)">&hellip;</span>');btns.push('<button class="page-btn" onclick="goPage('+tp+')">'+tp+'</button>');}btns.push('<button class="page-btn" '+(currentPage===tp?'disabled':'')+' onclick="goPage('+(currentPage+1)+')">&rsaquo;</button>');c.innerHTML=btns.join('');}
 function goPage(p){currentPage=p;render();window.scrollTo({top:0,behavior:'smooth'});}
 document.getElementById('searchInput').addEventListener('input',applyFilters);
 document.getElementById('eligFilter').addEventListener('change',applyFilters);
