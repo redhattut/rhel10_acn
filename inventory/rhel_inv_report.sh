@@ -52,7 +52,7 @@ log INFO "Publishing to: $WEBDIR"
 YEAR=$(date +%Y)
 UPDATED_HUMAN=$(date '+%b %-d, %Y')
 DEPLOY_CSV_BASE="${DEPLOYDATACSV##*/}"
-PKG_CSV_BASE=$(basename "${PACKAGEDATA:-RHEL_PACKAGES_v2.csv}")
+PKG_CSV_BASE=$(basename "${PACKAGEDATA:-RHEL_PACKAGES.csv}")
 
 # Footer text — sourced from conf; fall back gracefully if not set
 FOOTER_COMPANY="${SITE_FOOTER_COMPANY:-PNC}"
@@ -853,7 +853,7 @@ $(printf '%b' "$GT_COLS")            </tr>
       const va = a.querySelectorAll('td')[col].textContent.trim();
       const vb = b.querySelectorAll('td')[col].textContent.trim();
       return col === 0 ? va.localeCompare(vb) * dir
-                       : (parseInt(va)||0 - (parseInt(vb)||0)) * dir;
+                       : ((parseInt(va, 10) || 0) - (parseInt(vb, 10) || 0)) * dir;
     });
     const tb = document.getElementById('appBody');
     rows.forEach(function(r){ tb.insertBefore(r, tb.lastElementChild); });
@@ -984,11 +984,6 @@ MFEOF
     done
     [[ $max_cnt -lt 1 ]] && max_cnt=1
 
-    local peak_idx=0 peak_val=0
-    for (( i=0; i<3; i++ )); do
-        [[ ${month_counts[$i]} -gt $peak_val ]] && { peak_val=${month_counts[$i]}; peak_idx=$i; }
-    done
-
     echo "  <section class=\"card\" style=\"margin-bottom:1.4rem\">"
     echo "    <div class=\"card-head\">"
     echo "      <span class=\"chip chip-blue\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><line x1=\"18\" y1=\"20\" x2=\"18\" y2=\"10\"/><line x1=\"12\" y1=\"20\" x2=\"12\" y2=\"4\"/><line x1=\"6\" y1=\"20\" x2=\"6\" y2=\"14\"/></svg></span>"
@@ -996,11 +991,11 @@ MFEOF
     echo "      <span class=\"sub\">last 3 months</span>"
     echo "    </div>"
     echo "    <div class=\"chart\">"
+    # Each bar gets a position class (col-1 = latest .. col-3 = oldest) so
+    # all three render in distinct colors regardless of which is largest.
     for (( i=0; i<3; i++ )); do
         local cpct; cpct=$(awk -v n="${month_counts[$i]}" -v d="$max_cnt" 'BEGIN{printf "%.1f", n/d*100}')
-        local peak_cls=""
-        [[ $i -eq $peak_idx ]] && peak_cls=" peak"
-        echo "      <div class=\"col${peak_cls}\"><div class=\"colbar-wrap\"><div class=\"colbar\" style=\"height:${cpct}%\"><span class=\"colval\">${month_counts[$i]}</span></div></div><span class=\"collabel\">${month_labels[$i]}</span></div>"
+        echo "      <div class=\"col col-$((i+1))\"><div class=\"colbar-wrap\"><div class=\"colbar\" style=\"height:${cpct}%\"><span class=\"colval\">${month_counts[$i]}</span></div></div><span class=\"collabel\">${month_labels[$i]}</span></div>"
     done
     echo "    </div>"
     echo "  </section>"
@@ -1048,8 +1043,9 @@ AEOF
     fi
 
     # Collect all years newest-first
+    # ([0-9][0-9][0-9][0-9] not [0-9]{4} — mawk has no ERE interval support)
     local _ytmp; _ytmp=$(mktemp /tmp/rhel_years.XXXXXX)
-    awk -F- '$1~/^[0-9]{4}$/{print $1}' "$DEPLOYMENTDATA" | sort -ru > "$_ytmp"
+    awk -F- '$1~/^[0-9][0-9][0-9][0-9]$/{print $1}' "$DEPLOYMENTDATA" | sort -ru > "$_ytmp"
 
     # Bar chart — last 3 years
     local -a bar_labels bar_counts
@@ -1065,11 +1061,6 @@ AEOF
     done < "$_ytmp"
     [[ $max_cnt -lt 1 ]] && max_cnt=1
 
-    local peak_idx=0 peak_val=0
-    for (( i=0; i<${#bar_counts[@]}; i++ )); do
-        [[ ${bar_counts[$i]} -gt $peak_val ]] && { peak_val=${bar_counts[$i]}; peak_idx=$i; }
-    done
-
     echo "  <section class=\"card\" style=\"margin-bottom:1.4rem\">"
     echo "    <div class=\"card-head\">"
     echo "      <span class=\"chip chip-blue\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><line x1=\"18\" y1=\"20\" x2=\"18\" y2=\"10\"/><line x1=\"12\" y1=\"20\" x2=\"12\" y2=\"4\"/><line x1=\"6\" y1=\"20\" x2=\"6\" y2=\"14\"/></svg></span>"
@@ -1077,11 +1068,10 @@ AEOF
     echo "      <span class=\"sub\">last 3 years</span>"
     echo "    </div>"
     echo "    <div class=\"chart\">"
+    # Position classes (col-1 = latest .. col-3 = oldest) — three distinct colors
     for (( i=0; i<${#bar_labels[@]}; i++ )); do
         local apct; apct=$(awk -v n="${bar_counts[$i]}" -v d="$max_cnt" 'BEGIN{printf "%.1f", n/d*100}')
-        local peak_cls=""
-        [[ $i -eq $peak_idx ]] && peak_cls=" peak"
-        echo "      <div class=\"col${peak_cls}\"><div class=\"colbar-wrap\"><div class=\"colbar\" style=\"height:${apct}%\"><span class=\"colval\">${bar_counts[$i]}</span></div></div><span class=\"collabel\">${bar_labels[$i]}</span></div>"
+        echo "      <div class=\"col col-$((i+1))\"><div class=\"colbar-wrap\"><div class=\"colbar\" style=\"height:${apct}%\"><span class=\"colval\">${bar_counts[$i]}</span></div></div><span class=\"collabel\">${bar_labels[$i]}</span></div>"
     done
     echo "    </div>"
     echo "  </section>"

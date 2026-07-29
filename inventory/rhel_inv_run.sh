@@ -24,9 +24,9 @@
 #
 # Crontab example:
 #   30 21 * * * cd /usr/local/pnc/bin/RHEL_Inventory_v2 ; \
-#     log=logs/rhel_inventory_v2_run.$(date +"%Y%m%d").log ; \
+#     log=logs/rhel_inventory_run.$(date +"%Y%m%d").log ; \
 #     ./rhel_inv_run.sh >> ${log} 2>&1 ; \
-#     ln -sf ${log} logs/rhel_inventory_v2_latest.log
+#     ln -sf ${log} logs/rhel_inventory_latest.log
 # =============================================================================
 
 cd "$(dirname "$0")" || exit 1
@@ -116,8 +116,8 @@ export AAP_FED_DIR
 
 # Set RUN_LOG here with a live timestamp — must NOT be in conf or the date
 # gets evaluated once at source time and never changes within a session.
-# Format: rhel_inventory_v2_run.YYYYMMDD_HHMMSS.log — unique per run.
-RUN_LOG="${LOGS_DIR}/rhel_inventory_v2_run.$(date +%Y%m%d_%H%M%S).log"
+# Format: rhel_inventory_run.YYYYMMDD_HHMMSS.log — unique per run.
+RUN_LOG="${LOGS_DIR}/rhel_inventory_run.$(date +%Y%m%d_%H%M%S).log"
 
 # Set dated MRG temp filenames here for the same reason — evaluated fresh
 # each run. MRGCSVTEMP uses the archive date format so it is self-documenting
@@ -526,7 +526,10 @@ a { color: inherit; }
   position: relative; min-height: 10px;
   box-shadow: 0 6px 14px rgba(59,110,240,.22);
 }
-.col.peak .colbar { background: linear-gradient(180deg, var(--teal), #3fc8bb); box-shadow: 0 6px 14px rgba(20,179,166,.25); }
+/* Distinct color per bar position (col-1 = latest .. col-3 = oldest) */
+.col.col-1 .colbar { background: linear-gradient(180deg, var(--blue), #6f93f6); box-shadow: 0 6px 14px rgba(59,110,240,.22); }
+.col.col-2 .colbar { background: linear-gradient(180deg, var(--teal), #3fc8bb); box-shadow: 0 6px 14px rgba(20,179,166,.25); }
+.col.col-3 .colbar { background: linear-gradient(180deg, #8b5cf6, #a78bfa); box-shadow: 0 6px 14px rgba(139,92,246,.22); }
 .col .colval { position: absolute; top: -1.7rem; left: 0; right: 0; text-align: center; font-weight: 750; color: var(--ink); font-size: 1.05rem; }
 .col .collabel { font-size: .82rem; color: var(--muted); font-weight: 500; }
 

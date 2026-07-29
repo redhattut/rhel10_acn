@@ -13,7 +13,7 @@
 #           INV|  → RHEL_INVENTORY.tmp      (system inventory)
 #           ID|   → RHEL_IDINVENTORY.tmp    (users/groups/netgroups)
 #           DB|   → RHEL_DBINVENTORY.tmp    (Oracle SIDs)
-#           PKG|  → RHEL_PACKAGES_v2.tmp    (RPM package list, collected in Phase 3a)
+#           PKG|  → RHEL_PACKAGES.tmp    (RPM package list, collected in Phase 3a)
 #   5.  Strip pssh status lines via rhel_filter_scan.sh
 #   6.  Rotate prior data files, promote temps to current
 #   7.  Collect UIDs/GIDs
@@ -95,7 +95,7 @@ log SECTION "Phase 1 — Deployment scan (new host detection)"
 # =============================================================================
 
 # Auto-seed RHEL_DEPLOYMENTS.dat from legacy location if not present
-# This happens once on fresh install — after that v2 maintains its own copy.
+# This happens once on fresh install — after that this process maintains its own copy.
 # In test mode we also auto-seed so deployment history is available for
 # BuildDate fallback lookups (we still never append to it in test mode).
 LEGACY_DEPLOY="/usr/local/pnc/bin/RHEL_Inventory/data/RHEL_DEPLOYMENTS.dat"
@@ -592,6 +592,82 @@ if [[ -z "${AAP_FED_DIR:-}" ]]; then
 fi
 
 # =============================================================================
+log SECTION "Phase 4.52 — Package data carry-forward for unreachable hosts"
+# =============================================================================
+# Hosts that were unreachable tonight (TIMEOUT/SSHFAIL stubs in the dat) have
+# no PKG rows in tonight's PACKAGEDATA. Pull their rows from the newest
+# archive generation that has them, walking .1.gz → .N.gz. Carried rows
+# persist into subsequent archives, so coverage chains while the host stays
+# in the host list.
+#
+# Decomm-safe: the missing-host set is derived from TONIGHT's dat stubs, and
+# stubs only exist for hosts in the CMDB-filtered host list (Decomm /
+# Pending-Decomm excluded upstream). A decommissioned host never gets a stub,
+# so its packages can never be carried forward.
+#
+# Runs after Phase 4.5 so fed enclave PKG data (fresh or fallback) is already
+# merged — fed hosts with data are not treated as missing.
+# =============================================================================
+if [[ "${TEST_MODE:-0}" -eq 0 && -s "$PACKAGEDATA" && -s "$INVENTORYDATA" ]]; then
+    _pkg_miss=$(mktemp /tmp/rhel_pkg_miss.XXXXXX)
+
+    # Stub hosts tonight, minus any that already have PKG rows (fed fallback etc.)
+    awk 'FNR==NR {
+             if ($2 == "TIMEOUT" || $2 == "SSHFAIL") miss[$1] = 1
+             next
+         }
+         {
+             ci = index($0, ",")
+             if (ci > 1) have[substr($0, 1, ci-1)] = 1
+         }
+         END { for (h in miss) if (!(h in have)) print h }' \
+        "$INVENTORYDATA" "$PACKAGEDATA" | sort > "$_pkg_miss"
+
+    _PKG_MISS_COUNT=$(wc -l < "$_pkg_miss")
+    if [[ $_PKG_MISS_COUNT -gt 0 ]]; then
+        log INFO "PKG carry-forward: $_PKG_MISS_COUNT unreachable host(s) missing package rows"
+        _PKG_CF_TOTAL=0
+        for (( _g=1; _g<=${ROTATE_PACKAGES:-10}; _g++ )); do
+            [[ -s "$_pkg_miss" ]] || break
+            _arc="${PACKAGEDATA}.${_g}.gz"
+            [[ -f "$_arc" ]] || continue
+            _found=$(mktemp /tmp/rhel_pkg_found.XXXXXX)
+            _rows=$(zcat "$_arc" 2>/dev/null \
+                | awk -v miss_file="$_pkg_miss" -v found_file="$_found" '
+                    BEGIN { while ((getline h < miss_file) > 0) miss[h] = 1 }
+                    {
+                        ci = index($0, ",")
+                        if (ci > 1) {
+                            h = substr($0, 1, ci-1)
+                            if (h in miss) { print; found[h] = 1 }
+                        }
+                    }
+                    END { for (h in found) print h > found_file }' \
+                | tee -a "$PACKAGEDATA" | wc -l)
+            if [[ -s "$_found" ]]; then
+                _fh=$(wc -l < "$_found")
+                log INFO "PKG carry-forward: gen ${_g} supplied $_rows row(s) for $_fh host(s)"
+                _PKG_CF_TOTAL=$(( _PKG_CF_TOTAL + _rows ))
+                sort "$_found" | comm -23 "$_pkg_miss" - > "${_pkg_miss}.new"
+                mv "${_pkg_miss}.new" "$_pkg_miss"
+            fi
+            rm -f "$_found"
+        done
+        _PKG_STILL=$(wc -l < "$_pkg_miss")
+        log INFO "PKG carry-forward: $_PKG_CF_TOTAL total row(s) carried; $_PKG_STILL host(s) not found in any archive"
+        if [[ $_PKG_CF_TOTAL -gt 0 ]]; then
+            cp -p "$PACKAGEDATA" "$WEBDIR/"
+            log INFO "PKG carry-forward: refreshed web copy of $(basename "$PACKAGEDATA")"
+        fi
+    else
+        log INFO "PKG carry-forward: no unreachable hosts missing package rows"
+    fi
+    rm -f "$_pkg_miss"
+else
+    [[ "${TEST_MODE:-0}" -eq 1 ]] && log INFO "PKG carry-forward: skipped in test mode"
+fi
+
+# =============================================================================
 log SECTION "Phase 4.6 — Midrange Mod CSV and Compare JSON promotion"
 # =============================================================================
 # Promote MRGCSVTEMP → MRGCSVDATA, write MRG CSV header, archive CSV.
@@ -611,15 +687,66 @@ if [[ -s "$MRGCSVTEMP" ]]; then
     # Strip .tmp to get the archive filename directly
     MRG_ARCHIVE_FILE="${MRG_ARCHIVE_DIR}/$(basename "${MRGCSVTEMP%.tmp}")"
 
+    # Archive the RAW scan (with unreachable-host stubs) FIRST, so archives
+    # always reflect what was actually collected each night. The published
+    # CSV below then applies carry-forward — this mirrors the Upgrade
+    # eligibility pattern and bounds carry-forward to the archive window.
     {
         echo "Host,Location,Mnemonic,Environment,OS Version,Authentication Method,OUD Query,AD Query,pnc_join_ad,Nsswitch,KRB5 Keytab,xqvsmlinauthscan Sudo,xqmrglineng Sudo,xqmrglinaap Sudo"
         grep -v "^[[:space:]]*$" "$MRGCSVTEMP"
-    } > "$MRGCSVDATA"
-    MRG_ROW_COUNT=$(grep -vc "^Host," "$MRGCSVDATA" 2>/dev/null || echo 0)
-    log INFO "MRG CSV promoted: $MRGCSVDATA ($MRG_ROW_COUNT rows)"
+    } > "$MRG_ARCHIVE_FILE"
+    log INFO "MRG CSV archived (raw scan): $MRG_ARCHIVE_FILE"
 
-    cp "$MRGCSVDATA" "$MRG_ARCHIVE_FILE"
-    log INFO "MRG CSV archived: $MRG_ARCHIVE_FILE"
+    # Build the published CSV with carry-forward: unreachable hosts produce
+    # stub rows (all n/a). Replace each stub with the host's newest non-stub
+    # row from prior archives, walking newest → oldest.
+    # Decomm-safe: only hosts present in TONIGHT's scan output (host list is
+    # CMDB-filtered) are considered — prior-archive rows for hosts no longer
+    # in the list are never emitted.
+    _mrg_awk=$(mktemp /tmp/rhel_mrg_cf.XXXXXX)
+    cat > "$_mrg_awk" << 'MRGAWK'
+BEGIN { FS = ","; OFS = "," }
+FILENAME == raw_file {
+    h = $1; gsub(/^ +| +$/, "", h)
+    if (h == "" || h == "Host") next
+    if (!(h in today)) order[++n] = h
+    today[h] = $0
+    next
+}
+{
+    h = $1; gsub(/^ +| +$/, "", h)
+    if (h == "" || h == "Host") next
+    # Non-stub row = real scan data (stub rows are all n/a after the host)
+    if (!($2 == "n/a" && $3 == "n/a" && $4 == "n/a" && $5 == "n/a") && !(h in prior))
+        prior[h] = $0
+}
+END {
+    carried = 0
+    for (i = 1; i <= n; i++) {
+        h = order[i]
+        split(today[h], f, ",")
+        if (f[2] == "n/a" && f[3] == "n/a" && f[4] == "n/a" && f[5] == "n/a" && (h in prior)) {
+            print prior[h]
+            carried++
+        } else {
+            print today[h]
+        }
+    }
+    print carried > "/dev/stderr"
+}
+MRGAWK
+
+    # Prior archives newest → oldest, excluding tonight's file
+    _mrg_prior=$(ls -t "${MRG_ARCHIVE_DIR}"/Midrange_Mod_Report_*.csv 2>/dev/null \
+        | grep -v "$(basename "$MRG_ARCHIVE_FILE")" | tr '\n' ' ')
+
+    echo "Host,Location,Mnemonic,Environment,OS Version,Authentication Method,OUD Query,AD Query,pnc_join_ad,Nsswitch,KRB5 Keytab,xqvsmlinauthscan Sudo,xqmrglineng Sudo,xqmrglinaap Sudo" > "$MRGCSVDATA"
+    _mrg_carried=$(awk -f "$_mrg_awk" raw_file="$MRG_ARCHIVE_FILE" \
+        "$MRG_ARCHIVE_FILE" $_mrg_prior 2>&1 >> "$MRGCSVDATA")
+    rm -f "$_mrg_awk"
+
+    MRG_ROW_COUNT=$(grep -vc "^Host," "$MRGCSVDATA" 2>/dev/null || echo 0)
+    log INFO "MRG CSV promoted: $MRGCSVDATA ($MRG_ROW_COUNT rows, ${_mrg_carried:-0} carried forward from prior archives)"
 
     DELETED_MRG=$(find "$MRG_ARCHIVE_DIR" -name "Midrange_Mod_Report_*.csv" \
         -type f -mtime +"${DAYS_TO_KEEP_MRG:-31}" -delete -print | wc -l)
@@ -648,14 +775,29 @@ except Exception as e:
     print("0 0")
     sys.exit(0)
 
-written = 0
-failed  = 0
+written   = 0
+failed    = 0
+preserved = 0
 for entry in entries:
     host = entry.get("host", "")
     if not host:
         failed += 1
         continue
     dest = os.path.join(out_dir, f"{host}.json")
+
+    # Carry-forward: if tonight's entry is an unreachable stub and a previous
+    # good JSON exists for this host, keep the existing file. The Compare
+    # Tool then keeps serving the host's last real data instead of losing it.
+    if entry.get("reachable") is False and os.path.exists(dest):
+        try:
+            with open(dest) as f:
+                old = json.load(f)
+            if old.get("reachable") is not False:
+                preserved += 1
+                continue
+        except Exception:
+            pass  # existing file unreadable — fall through and overwrite
+
     try:
         with open(dest, "w") as f:
             json.dump(entry, f, indent=2)
@@ -665,16 +807,60 @@ for entry in entries:
         print(f"ERROR writing {dest}: {e}", file=sys.stderr)
         failed += 1
 
-print(f"{written} {failed}")
+print(f"{written} {failed} {preserved}")
 PYEOF
 )
     MRG_JSON_COUNT=$(echo "$_py_out" | tail -1 | awk '{print $1}')
     MRG_JSON_FAIL=$(echo "$_py_out" | tail -1 | awk '{print $2}')
-    log INFO "Compare JSON split: $MRG_JSON_COUNT host files written to $COMPARE_DATA_DIR ($MRG_JSON_FAIL failed)"
+    MRG_JSON_KEPT=$(echo "$_py_out" | tail -1 | awk '{print $3}')
+    log INFO "Compare JSON split: $MRG_JSON_COUNT host files written to $COMPARE_DATA_DIR ($MRG_JSON_FAIL failed, ${MRG_JSON_KEPT:-0} unreachable hosts kept prior data)"
 else
     log WARN "MRGJSONTMP empty — Compare JSON files not generated"
 fi
 rm -f "$MRGJSONTMP"
+
+# --- Compare JSON nightly backup ---------------------------------------------
+# The per-host JSON files are the Compare Tool's only data store — back the
+# whole directory up nightly so a bad run or corruption is recoverable.
+# Retention matches the MRG archive window.
+if [[ "${TEST_MODE:-0}" -eq 0 && -d "$COMPARE_DATA_DIR" ]]; then
+    _CMP_BACKUP_DIR="${COMPARE_BACKUP_DIR:-${DATA_DIR}/compare_json_backup}"
+    mkdir -p "$_CMP_BACKUP_DIR"
+    _CMP_TAR="${_CMP_BACKUP_DIR}/compare_data_$(date +%Y-%m-%d).tar.gz"
+    if tar -czf "$_CMP_TAR" -C "$(dirname "$COMPARE_DATA_DIR")" \
+            "$(basename "$COMPARE_DATA_DIR")" 2>/dev/null; then
+        log INFO "Compare JSON backup: $_CMP_TAR ($(du -h "$_CMP_TAR" | awk '{print $1}'))"
+        _CMP_PRUNED=$(find "$_CMP_BACKUP_DIR" -name "compare_data_*.tar.gz" \
+            -type f -mtime +"${DAYS_TO_KEEP_MRG:-31}" -delete -print | wc -l)
+        [[ $_CMP_PRUNED -gt 0 ]] && \
+            log INFO "Compare JSON backup pruned: $_CMP_PRUNED file(s) older than ${DAYS_TO_KEEP_MRG:-31} days removed"
+    else
+        log WARN "Compare JSON backup failed — check space/permissions in $_CMP_BACKUP_DIR"
+    fi
+fi
+
+# --- Compare JSON stale-host pruning -----------------------------------------
+# Remove {host}.json files for hosts no longer in tonight's inventory (host
+# list is CMDB-filtered, so Decomm / Pending-Decomm hosts drop out here the
+# night after they leave the list). INVENTORYDATA at this point includes fed
+# enclave hosts (Phase 4.5 merge, with fallback when lmrg34ba is unreachable),
+# so fed hosts are never falsely pruned. Runs after the backup so any pruned
+# file is still recoverable from tonight's tarball.
+if [[ "${TEST_MODE:-0}" -eq 0 && -d "$COMPARE_DATA_DIR" && -s "$INVENTORYDATA" ]]; then
+    _cmp_active=$(mktemp /tmp/rhel_cmp_active.XXXXXX)
+    _cmp_have=$(mktemp /tmp/rhel_cmp_have.XXXXXX)
+    awk '!/^#/ && NF >= 1 {print $1}' "$INVENTORYDATA" | sort -u > "$_cmp_active"
+    ( cd "$COMPARE_DATA_DIR" && ls *.json 2>/dev/null | sed 's/\.json$//' | sort ) > "$_cmp_have"
+    _CMP_STALE=0
+    while read -r _stale_host; do
+        [[ -z "$_stale_host" ]] && continue
+        rm -f "${COMPARE_DATA_DIR}/${_stale_host}.json"
+        _CMP_STALE=$(( _CMP_STALE + 1 ))
+    done < <(comm -23 "$_cmp_have" "$_cmp_active")
+    [[ $_CMP_STALE -gt 0 ]] && \
+        log INFO "Compare JSON pruning: removed $_CMP_STALE stale host file(s) no longer in inventory (decomm cleanup)"
+    rm -f "$_cmp_active" "$_cmp_have"
+fi
 
 # =============================================================================
 log SECTION "Phase 5 — Collect UIDs and GIDs"
@@ -720,24 +906,51 @@ _DEPLOY_FILE=""
 _CMDB_FILE=""
 [[ $CMDB_AVAILABLE -eq 1 ]] && _CMDB_FILE="$CMDBDATAFILE"
 
-# Previous dat file — used to carry forward yesterday data for TIMEOUT hosts
-# (hosts pssh could not reach get their prior scan data preserved, matching
-# legacy RHEL_inventory_refresh.sh behavior which used RHEL_INVENTORY.dat.1.gz)
-# Phase 4 has already rotated the dat so .1.gz is yesterday run.
+# Previous dat archives — used to carry forward last known data for hosts
+# that were unreachable tonight (TIMEOUT/SSHFAIL stubs).
+# Walks ALL available archive generations (.1.gz newest → .N.gz oldest), not
+# just yesterday: a host unreachable for several consecutive days still
+# carries its last real scan data. Generations are concatenated newest-first
+# into one temp file; the awk pass keeps the FIRST record seen per host, so
+# the newest generation always wins.
+# Phase 4 has already rotated the dat so .1.gz is yesterday's run.
 _PREV_DAT_FILE=""
 _PREV_DAT_TMP=""
-if [[ -f "${INVENTORYDATA}.1.gz" ]]; then
-    _PREV_DAT_TMP=$(mktemp /tmp/rhel_prev_dat.XXXXXX)
-    zcat "${INVENTORYDATA}.1.gz" > "$_PREV_DAT_TMP" 2>/dev/null \
-        && _PREV_DAT_FILE="$_PREV_DAT_TMP" \
-        || rm -f "$_PREV_DAT_TMP"
-    [[ -n "$_PREV_DAT_FILE" ]] && \
-        log INFO "Previous dat loaded for TIMEOUT carry-forward: ${INVENTORYDATA}.1.gz"
-elif [[ -f "${INVENTORYDATA}.1" ]]; then
-    _PREV_DAT_FILE="${INVENTORYDATA}.1"
-    log INFO "Previous dat loaded for TIMEOUT carry-forward: ${INVENTORYDATA}.1"
+_PREV_GENS=0
+_PREV_DAT_TMP=$(mktemp /tmp/rhel_prev_dat.XXXXXX)
+for (( _g=1; _g<=${ROTATE_INVENTORY:-3}; _g++ )); do
+    if [[ -f "${INVENTORYDATA}.${_g}.gz" ]]; then
+        zcat "${INVENTORYDATA}.${_g}.gz" >> "$_PREV_DAT_TMP" 2>/dev/null \
+            && _PREV_GENS=$(( _PREV_GENS + 1 ))
+    elif [[ -f "${INVENTORYDATA}.${_g}" ]]; then
+        cat "${INVENTORYDATA}.${_g}" >> "$_PREV_DAT_TMP" 2>/dev/null \
+            && _PREV_GENS=$(( _PREV_GENS + 1 ))
+    fi
+done
+if [[ -s "$_PREV_DAT_TMP" ]]; then
+    _PREV_DAT_FILE="$_PREV_DAT_TMP"
+    log INFO "Carry-forward: loaded $_PREV_GENS dat archive generation(s) for unreachable-host overlay"
 else
-    log INFO "No previous dat found — TIMEOUT hosts will show n/a for scan fields (first run?)"
+    rm -f "$_PREV_DAT_TMP"
+    _PREV_DAT_TMP=""
+    log INFO "No previous dat archives found — unreachable hosts will show n/a for scan fields (first run?)"
+fi
+
+# Previous published CSV — FINAL fallback for hosts unreachable longer than
+# all dat generations. Yesterday's CSV rows already contain carried-forward
+# data, so this chains indefinitely while the host remains in the host list.
+# Decomm-safe: the overlay is only applied to hosts stubbed in TONIGHT's dat,
+# and stubs only exist for hosts in the CMDB-filtered host list (Decomm /
+# Pending-Decomm already excluded upstream).
+_PREV_CSV_FILE=""
+_PREV_CSV_TMP=""
+if [[ -f "${DATA_DIR}/${INVENTDATACSV}.1.gz" ]]; then
+    _PREV_CSV_TMP=$(mktemp /tmp/rhel_prev_csv.XXXXXX)
+    zcat "${DATA_DIR}/${INVENTDATACSV}.1.gz" > "$_PREV_CSV_TMP" 2>/dev/null \
+        && _PREV_CSV_FILE="$_PREV_CSV_TMP" \
+        || rm -f "$_PREV_CSV_TMP"
+    [[ -n "$_PREV_CSV_FILE" ]] && \
+        log INFO "Carry-forward: previous published CSV loaded as final fallback (${INVENTDATACSV}.1.gz)"
 fi
 
 if [[ $CMDB_AVAILABLE -eq 1 ]]; then
@@ -750,19 +963,24 @@ fi
     log INFO "BuildDate fallback: loading deployment records from $_DEPLOY_FILE"
 
 # ---------------------------------------------------------------------------
-# Single awk pass — up to four input files
+# Single awk pass — up to five input files
 #
-# Pass 0 (PREV_DAT):       build prev[host] = full 28-field dat record
-#                          Used to carry forward yesterday data for TIMEOUT hosts
-# Pass 1 (DEPLOYMENTDATA): build deploy_date[host] = date
-# Pass 2 (CMDBDATAFILE):   build cmdb[host] = "sg,status,opstate,fed"
-# Pass 3 (INVENTORYDATA):  join + emit 32-column CSV rows
+# Pass 0  (PREV_DAT):       build prev[host] = full 28-field dat record from
+#                           all archive generations (newest wins). Used to
+#                           carry forward data for TIMEOUT/SSHFAIL hosts.
+# Pass 0b (PREV_CSV):       build prevcsv[host] = yesterday published CSV row.
+#                           Final fallback when host is unreachable longer
+#                           than all dat generations (chains indefinitely).
+# Pass 1  (DEPLOYMENTDATA): build deploy_date[normalised host] = date
+# Pass 2  (CMDBDATAFILE):   build cmdb[host] = "sg,status,opstate,fed"
+# Pass 3  (INVENTORYDATA):  join + emit 32-column CSV rows
 #
 # Location normalisation (mirrors expand_location() in rhel_utils.sh):
 #   Strip "Greenfield-" prefix; all known codes pass through as-is.
 #   Add new datacenters here when they come online.
 # ---------------------------------------------------------------------------
 awk -v prev_dat_file="$_PREV_DAT_FILE" \
+    -v prev_csv_file="$_PREV_CSV_FILE" \
     -v deploy_file="$_DEPLOY_FILE" \
     -v cmdb_file="$_CMDB_FILE" \
     -v inv_file="$INVENTORYDATA" \
@@ -792,19 +1010,48 @@ function na(v) { return (v == "" || v == "n/a") ? "n/a" : v }
 # hosts can carry forward their previous scan real data.
 # ============================================================
 current_file == prev_dat_file && !/^#/ && NF >= 3 {
-    # Store previous record for TIMEOUT carry-forward.
-    # Include TIMEOUT_ records (multi-day unreachable) so the carry-forward
-    # chain persists — a host unreachable for 3 consecutive days still carries
-    # its last known good data rather than collapsing to all n/a.
-    # Exclude bare TIMEOUT/SSHFAIL (no real data) and header lines.
+    # Store previous record for unreachable-host carry-forward.
+    # Generations are concatenated newest-first, so keep the FIRST record
+    # seen per host (newest generation wins).
+    # Exclude bare TIMEOUT/SSHFAIL stubs (no real data) and header lines —
+    # a stub in gen 1 falls through to real data in an older generation.
     if ($2 != "TIMEOUT" && $2 != "SSHFAIL" && $3 != "TIMEOUT" && $3 != "SSHFAIL") {
-        prev[$1] = $0
+        if (!($1 in prev)) prev[$1] = $0
+    }
+    next
+}
+
+# ============================================================
+# Pass 0b — PREV_CSV: yesterday published CSV, keyed by host.
+# Final fallback when a host has been unreachable longer than
+# all dat archive generations. Rows already carry forward, so
+# the chain persists as long as the host stays in the host list.
+# ============================================================
+current_file == prev_csv_file && !/^#/ {
+    ci = index($0, ",")
+    if (ci > 1) {
+        ch = substr($0, 1, ci - 1)
+        if (!(ch in prevcsv)) prevcsv[ch] = $0
     }
     next
 }
 
 current_file == deploy_file && !/^#/ && NF >= 2 {
-    deploy_date[$2] = $1
+    # Harden the lookup against legacy-seeded record drift:
+    #   - strip CR (records copied from files with DOS line endings)
+    #   - normalise hostname key: lowercase + strip any domain suffix
+    #     (dat hostnames are short lowercase; legacy deployment records
+    #      may be FQDN and/or mixed case)
+    #   - only accept records whose first word is a real YYYY-MM-DD date
+    #     ("unknown" placeholder records must never mask a valid lookup)
+    # Note: [0-9][0-9][0-9][0-9] instead of [0-9]{4} — mawk has no ERE
+    # interval support and would silently never match.
+    gsub(/\r/, "")
+    if ($1 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) {
+        dk = tolower($2)
+        sub(/\..*$/, "", dk)
+        if (dk != "") deploy_date[dk] = $1
+    }
     next
 }
 
@@ -842,24 +1089,44 @@ current_file == inv_file && !/^#/ && NF >= 1 {
     # Skip non-RHEL hosts entirely — OS "?" means no /etc/redhat-release
     if ($3 == "?") { next }
 
-    # For TIMEOUT hosts: overlay yesterday dat record so real scan
-    # data (kernel, CPU, memory etc.) is preserved rather than showing n/a.
-    # This matches legacy behaviour — RHEL_INVENTORY.dat.1.gz carry-forward.
-    # Type becomes TIMEOUT_Virt or TIMEOUT_Phys based on yesterday type.
-    if (typ == "TIMEOUT" && (host in prev)) {
+    # For unreachable hosts (TIMEOUT or SSHFAIL stubs): overlay the newest
+    # archived dat record so real scan data (kernel, CPU, memory etc.) is
+    # preserved rather than showing n/a. Type becomes <STUB>_Virt / _Phys /
+    # _Cloud based on the carried record.
+    is_stub = (typ == "TIMEOUT" || typ == "SSHFAIL")
+    if (is_stub && (host in prev)) {
+        stub = typ
         n = split(prev[host], pf, " ")
-        # Rebuild $2-$28 from yesterday record
+        # Rebuild $2-$28 from the carried record
         for (i = 1; i <= n; i++) $i = pf[i]
-        # Strip TIMEOUT_ prefix from prev type to avoid compounding
-        # (TIMEOUT_Virt from yesterday → Virt → TIMEOUT_Virt today, not TIMEOUT_TIMEOUT_Virt)
+        # Strip any stub prefix from prev type to avoid compounding
+        # (TIMEOUT_Virt carried → Virt → TIMEOUT_Virt today, not TIMEOUT_TIMEOUT_Virt)
         prev_typ = pf[2]
         sub(/^TIMEOUT_/, "", prev_typ)
-        if (prev_typ == "Virt" || prev_typ == "Cloud" || prev_typ == "TIMEOUT") typ = "TIMEOUT_Virt"
-        else if (prev_typ == "Phys") typ = "TIMEOUT_Phys"
-        else typ = "TIMEOUT_" prev_typ
-    } else if (typ == "TIMEOUT") {
-        # No previous data — use TIMEOUT_Virt with n/a fields
-        typ = "TIMEOUT_Virt"
+        sub(/^SSHFAIL_/, "", prev_typ)
+        if (prev_typ == "Virt" || prev_typ == "Cloud" || prev_typ == "TIMEOUT" || prev_typ == "SSHFAIL") typ = stub "_Virt"
+        else if (prev_typ == "Phys") typ = stub "_Phys"
+        else typ = stub "_" prev_typ
+        cf_dat++
+    } else if (is_stub && (host in prevcsv)) {
+        # Host unreachable longer than all dat generations — re-emit its
+        # row from yesterday published CSV, forcing the type column to
+        # reflect tonight stub state.
+        nc = split(prevcsv[host], cf, ",")
+        t2 = cf[2]
+        sub(/^TIMEOUT_/, "", t2)
+        sub(/^SSHFAIL_/, "", t2)
+        if (t2 == "Virt" || t2 == "Phys" || t2 == "Cloud") cf[2] = typ "_" t2
+        else cf[2] = typ "_Virt"
+        out = cf[1]
+        for (i = 2; i <= nc; i++) out = out "," cf[i]
+        print out >> out_file
+        cf_csv++
+        if (cmdb_available == "1" && (host in cmdb)) matched++; else missing++
+        next
+    } else if (is_stub) {
+        # No previous data anywhere — stub with n/a fields
+        typ = typ "_Virt"
     }
 
     loc = expand_loc($21)
@@ -882,9 +1149,21 @@ current_file == inv_file && !/^#/ && NF >= 1 {
         appcode = (RLENGTH > 0) ? substr(appcode, 1, RLENGTH) : "n/a"
     }
 
+    # BuildDate: prefer PROVISIONDATE from the live scan (field 28); fall
+    # back to the deployments dat. Lookup key is normalised the same way as
+    # the deploy pass (lowercase, domain stripped) so legacy-seeded records
+    # match regardless of case or FQDN form.
     bdate = na($28)
-    if (bdate == "n/a" && (host in deploy_date))
-        bdate = deploy_date[host]
+    if (bdate == "n/a") {
+        hk = tolower(host)
+        sub(/\..*$/, "", hk)
+        if (hk in deploy_date) {
+            bdate = deploy_date[hk]
+            fb_hit++
+        } else {
+            fb_miss++
+        }
+    }
 
     if (cmdb_available == "1" && (host in cmdb)) {
         split(cmdb[host], cv, ",")
@@ -907,26 +1186,31 @@ current_file == inv_file && !/^#/ && NF >= 1 {
 }
 
 END {
-    print matched+0 ":" missing+0 > stats_file
+    print matched+0 ":" missing+0 ":" fb_hit+0 ":" fb_miss+0 ":" cf_dat+0 ":" cf_csv+0 > stats_file
 }
 ' \
     ${_PREV_DAT_FILE:+"$_PREV_DAT_FILE"} \
+    ${_PREV_CSV_FILE:+"$_PREV_CSV_FILE"} \
     ${_DEPLOY_FILE:+"$_DEPLOY_FILE"} \
     ${_CMDB_FILE:+"$_CMDB_FILE"} \
     "$INVENTORYDATA"
 
-# Clean up decompressed prev dat temp file
+# Clean up decompressed carry-forward temp files
 [[ -n "$_PREV_DAT_TMP" && -f "$_PREV_DAT_TMP" ]] && rm -f "$_PREV_DAT_TMP"
+[[ -n "$_PREV_CSV_TMP" && -f "$_PREV_CSV_TMP" ]] && rm -f "$_PREV_CSV_TMP"
 
 # Read counts written by awk END block
+# Format: matched:missing:builddate_filled:builddate_still_na:carried_from_dat:carried_from_csv
 if [[ -f "${DATA_DIR}/${INVENTDATACSV}.stats" ]]; then
-    _stats=$(cat "${DATA_DIR}/${INVENTDATACSV}.stats")
-    _CMDB_MATCHED="${_stats%%:*}"
-    _CMDB_MISSING="${_stats##*:}"
+    IFS=':' read -r _CMDB_MATCHED _CMDB_MISSING _BD_HIT _BD_MISS _CF_DAT _CF_CSV \
+        < "${DATA_DIR}/${INVENTDATACSV}.stats"
     rm -f "${DATA_DIR}/${INVENTDATACSV}.stats"
 else
-    _CMDB_MATCHED=0; _CMDB_MISSING=0
+    _CMDB_MATCHED=0; _CMDB_MISSING=0; _BD_HIT=0; _BD_MISS=0; _CF_DAT=0; _CF_CSV=0
 fi
+
+log INFO "BuildDate fallback: ${_BD_HIT:-0} hosts filled from deployments dat, ${_BD_MISS:-0} still n/a (no record found)"
+log INFO "Carry-forward: ${_CF_DAT:-0} unreachable hosts filled from dat archives, ${_CF_CSV:-0} from previous CSV"
 
 if [[ $CMDB_AVAILABLE -eq 1 ]]; then
     log INFO "CMDB enrichment complete — matched: $_CMDB_MATCHED, not in CMDB: $_CMDB_MISSING"
@@ -975,7 +1259,7 @@ else
     #   3. The live WEBDIR file stays as-is for the web server
     #
     # rotate_plain expects the BASE name without extension.
-    # INVENTDATACSV = "RHEL_INVENTORY_v2.csv" → base = "RHEL_INVENTORY_v2"
+    # INVENTDATACSV = "RHEL_INVENTORY.csv" → base = "RHEL_INVENTORY"
     _CSV_BASE="${WEBDIR}/historical_data/${INVENTDATACSV%.csv}"
 
     # Copy current CSV into historical_data under its full name first

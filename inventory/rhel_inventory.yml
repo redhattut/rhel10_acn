@@ -1,0 +1,358 @@
+---
+# =============================================================================
+# rhel_inventory.yml — RHEL Inventory AAP Pipeline
+# =============================================================================
+# Single-play structure matching PNC AAP standards.
+# All tasks run from localhost and delegate to specific jumpboxes.
+# No inventory groups required — hosts are passed as survey variables.
+#
+# Survey Variables (all have defaults, override as needed):
+#   main_jumpbox      : lmrg34ja
+#   fed_jumpbox       : lmrg34ba
+#   rhel_base_dir  : /usr/local/pnc/bin/RHEL_Inventory_v2
+#   rhel_fed_base_dir : /usr/local/pnc/bin
+#
+# File transfer path (no direct SCP between jumpboxes):
+#   lmrg34ba → fetch → AAP controller /tmp/ → copy → lmrg34ja
+# =============================================================================
+
+- name: RHEL Inventory — Full Pipeline
+  hosts: localhost
+  gather_facts: no
+  become: yes
+  become_user: root
+
+  vars:
+    main_jumpbox:     "lmrg34ja"
+    fed_jumpbox:      "lmrg34ba"
+    rhel_base_dir: "/usr/local/pnc/bin/RHEL_Inventory_v2"
+    rhel_fed_base_dir: "/usr/local/pnc/bin"
+
+  tasks:
+
+    - name: "Cleanup | Remove stale fed enclave temp files from previous runs (older than 1 hour)"
+      ansible.builtin.find:
+        paths: /tmp
+        patterns: "fed_enclave_*.dat,fed_enclave_midrange_mod.*,fed_enclave_compare_data.*"
+        age: "1h"
+      register: stale_fed_files
+
+    - name: "Cleanup | Delete stale fed enclave temp files"
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ stale_fed_files.files }}"
+      when: stale_fed_files.files | length > 0
+
+    - name: "Set controller temp dir for fed files — evaluated once, reused throughout"
+      ansible.builtin.set_fact:
+        fed_dat_controller_tmp: "/tmp/fed_enclave_raw_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.dat"
+        fed_id_controller_tmp:  "/tmp/fed_enclave_id_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.dat"
+        fed_db_controller_tmp:  "/tmp/fed_enclave_db_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.dat"
+        fed_pkg_controller_tmp: "/tmp/fed_enclave_pkg_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.csv"
+        fed_mid_mod_controller_tmp: "/tmp/fed_enclave_midrange_mod_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.dat"
+        fed_cmp_data_controller_tmp: "/tmp/fed_enclave_compare_data_{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}.dat"
+
+    # =========================================================================
+    # TASK 1 — lmrg34ja: Split CMDB into fed / non-fed host lists
+    # =========================================================================
+
+    - name: "Task 1 | Run rhel_split_hosts.sh on {{ main_jumpbox }}"
+      ansible.builtin.command: "{{ rhel_base_dir }}/rhel_split_hosts.sh"
+      delegate_to: "{{ main_jumpbox }}"
+      register: split_result
+      failed_when: split_result.rc not in [0, 2]
+
+    - name: "Task 1 | Log split output"
+      ansible.builtin.debug:
+        msg: "{{ split_result.stderr_lines }}"
+
+    - name: "Task 1 | Store fed host list as fact"
+      ansible.builtin.set_fact:
+        fed_host_list: "{{ split_result.stdout_lines | select('ne', '') | list }}"
+        fed_scan_needed: "{{ split_result.stdout_lines | select('ne', '') | list | length > 0 }}"
+
+    - name: "Task 1 | Show counts"
+      ansible.builtin.debug:
+        msg: "Fed Enclave hosts to scan: {{ fed_host_list | length }}"
+
+    # =========================================================================
+    # TASK 2 — lmrg34ba: Stage scripts, write host list, run fed scan
+    # =========================================================================
+
+    - name: "Task 2 | Ensure fed scan data dir exists on {{ fed_jumpbox }}"
+      ansible.builtin.file:
+        path: "{{ rhel_fed_base_dir }}/data"
+        state: directory
+        mode: "0755"
+      delegate_to: "{{ fed_jumpbox }}"
+      when: fed_scan_needed
+
+    - name: "Task 2 | Copy rhel_remote_scan.sh to {{ fed_jumpbox }}"
+      ansible.posix.synchronize:
+        src: "{{ rhel_base_dir }}/rhel_remote_scan.sh"
+        dest: "{{ rhel_fed_base_dir }}/rhel_remote_scan.sh"
+        mode: push
+      delegate_to: "{{ main_jumpbox }}"
+      when: fed_scan_needed
+      # synchronize with delegate_to pushes from main_jumpbox to fed_jumpbox
+      # via the AAP controller as relay — no direct SSH between jumpboxes needed
+
+    - name: "Task 2 | Copy rhel_filter_scan.sh to {{ fed_jumpbox }}"
+      ansible.posix.synchronize:
+        src: "{{ rhel_base_dir }}/rhel_filter_scan.sh"
+        dest: "{{ rhel_fed_base_dir }}/rhel_filter_scan.sh"
+        mode: push
+      delegate_to: "{{ main_jumpbox }}"
+      when: fed_scan_needed
+
+    - name: "Task 2 | Copy rhel_fed_scan.sh to {{ fed_jumpbox }}"
+      ansible.posix.synchronize:
+        src: "{{ rhel_base_dir }}/rhel_fed_scan.sh"
+        dest: "{{ rhel_fed_base_dir }}/rhel_fed_scan.sh"
+        mode: push
+      delegate_to: "{{ main_jumpbox }}"
+      when: fed_scan_needed
+
+    - name: "Task 2 | Copy RHEL_data_gather.sh to {{ fed_jumpbox }}"
+      ansible.posix.synchronize:
+        src: "{{ rhel_base_dir }}/RHEL_data_gather.sh"
+        dest: "{{ rhel_fed_base_dir }}/RHEL_data_gather.sh"
+        mode: push
+      delegate_to: "{{ main_jumpbox }}"
+      when: fed_scan_needed
+
+    - name: "Task 2 | Set execute permissions on scripts at {{ fed_jumpbox }}"
+      ansible.builtin.file:
+        path: "{{ rhel_fed_base_dir }}/{{ item }}"
+        mode: "0755"
+      loop:
+        - rhel_remote_scan.sh
+        - rhel_filter_scan.sh
+        - rhel_fed_scan.sh
+        - RHEL_data_gather.sh
+      delegate_to: "{{ fed_jumpbox }}"
+      when: fed_scan_needed
+
+    - name: "Task 2 | Write fed host list to {{ fed_jumpbox }}"
+      ansible.builtin.copy:
+        content: "{{ fed_host_list | join('\n') }}\n"
+        dest: "{{ rhel_fed_base_dir }}/data/fed_hosts_run.txt"
+        mode: "0644"
+      delegate_to: "{{ fed_jumpbox }}"
+      when: fed_scan_needed
+
+    - name: "Task 2 | Run rhel_fed_scan.sh on {{ fed_jumpbox }}"
+      ansible.builtin.command: >
+        {{ rhel_fed_base_dir }}/rhel_fed_scan.sh
+        {{ rhel_fed_base_dir }}/data/fed_hosts_run.txt
+      delegate_to: "{{ fed_jumpbox }}"
+      register: fed_scan_result
+      ignore_errors: yes
+      when: fed_scan_needed
+
+    - name: "Task 2 | Log fed scan output"
+      ansible.builtin.debug:
+        msg: "{{ fed_scan_result.stdout_lines | default(['(fed scan skipped or failed)']) }}"
+
+    - name: "Task 2 | Set fed scan status fact"
+      ansible.builtin.set_fact:
+        fed_scan_ok: >-
+          {{ fed_scan_needed and
+             fed_scan_result is defined and
+             fed_scan_result.rc is defined and
+             fed_scan_result.rc == 0 }}
+
+    # =========================================================================
+    # TASK 3 — Transfer fed_enclave_raw.dat: lmrg34ba → controller → lmrg34ja
+    # =========================================================================
+
+    - name: "Task 3 | Fetch fed_enclave_raw.dat from {{ fed_jumpbox }} to controller"
+      ansible.builtin.fetch:
+        src: "{{ rhel_fed_base_dir }}/data/fed_enclave_raw.dat"
+        dest: "{{ fed_dat_controller_tmp }}"
+        flat: yes
+      delegate_to: "{{ fed_jumpbox }}"
+      register: fed_dat_fetch
+      ignore_errors: yes
+      when: fed_scan_ok
+
+    - name: "Task 3 | Fetch fed_enclave_id.dat from {{ fed_jumpbox }} to controller"
+      ansible.builtin.fetch:
+        src: "{{ rhel_fed_base_dir }}/data/fed_enclave_id.dat"
+        dest: "{{ fed_id_controller_tmp }}"
+        flat: yes
+      delegate_to: "{{ fed_jumpbox }}"
+      register: fed_id_fetch
+      ignore_errors: yes
+      when: fed_scan_ok
+
+    - name: "Task 3 | Fetch fed_enclave_db.dat from {{ fed_jumpbox }} to controller"
+      ansible.builtin.fetch:
+        src: "{{ rhel_fed_base_dir }}/data/fed_enclave_db.dat"
+        dest: "{{ fed_db_controller_tmp }}"
+        flat: yes
+      delegate_to: "{{ fed_jumpbox }}"
+      register: fed_db_fetch
+      ignore_errors: yes
+      when: fed_scan_ok
+
+    - name: "Task 3 | Fetch fed_enclave_pkg.csv from {{ fed_jumpbox }} to controller"
+      ansible.builtin.fetch:
+        src: "{{ rhel_fed_base_dir }}/data/fed_enclave_pkg.csv"
+        dest: "{{ fed_pkg_controller_tmp }}"
+        flat: yes
+      delegate_to: "{{ fed_jumpbox }}"
+      register: fed_pkg_fetch
+      ignore_errors: yes
+      when: fed_scan_ok
+
+    - name: "Task 3 | Fetch fed_enclave_midrange_mod.dat from {{ fed_jumpbox }} to controller"
+      ansible.builtin.fetch:
+        src: "{{ rhel_fed_base_dir }}/data/fed_enclave_midrange_mod.dat"
+        dest: "{{ fed_mid_mod_controller_tmp }}"
+        flat: yes
+      delegate_to: "{{ fed_jumpbox }}"
+      register: fed_mid_mod_fetch
+      ignore_errors: yes
+      when: fed_scan_ok
+
+    - name: "Task 3 | Fetch fed_enclave_compare_data.dat from {{ fed_jumpbox }} to controller"
+      ansible.builtin.fetch:
+        src: "{{ rhel_fed_base_dir }}/data/fed_enclave_compare_data.dat"
+        dest: "{{ fed_cmp_data_controller_tmp }}"
+        flat: yes
+      delegate_to: "{{ fed_jumpbox }}"
+      register: fed_cmp_data_fetch
+      ignore_errors: yes
+      when: fed_scan_ok
+
+    - name: "Task 3 | Check fetched files are usable"
+      ansible.builtin.set_fact:
+        fed_dat_ready: >-
+          {{ fed_scan_ok and
+             fed_dat_fetch is not skipped and
+             fed_dat_fetch is not failed }}
+
+    - name: "Task 3 | Create fed enclave staging dir on {{ main_jumpbox }}"
+      ansible.builtin.file:
+        path: "{{ rhel_base_dir }}/data/fed_stage"
+        state: directory
+        mode: "0755"
+      delegate_to: "{{ main_jumpbox }}"
+      when: fed_dat_ready
+
+    - name: "Task 3 | Copy fed_enclave_raw.dat from controller to {{ main_jumpbox }}"
+      ansible.builtin.copy:
+        src: "{{ fed_dat_controller_tmp }}"
+        dest: "{{ rhel_base_dir }}/data/fed_stage/fed_enclave_raw.dat"
+        mode: "0644"
+      delegate_to: "{{ main_jumpbox }}"
+      when: fed_dat_ready
+
+    - name: "Task 3 | Copy fed_enclave_id.dat from controller to {{ main_jumpbox }}"
+      ansible.builtin.copy:
+        src: "{{ fed_id_controller_tmp }}"
+        dest: "{{ rhel_base_dir }}/data/fed_stage/fed_enclave_id.dat"
+        mode: "0644"
+      delegate_to: "{{ main_jumpbox }}"
+      ignore_errors: yes
+      when: fed_dat_ready
+
+    - name: "Task 3 | Copy fed_enclave_db.dat from controller to {{ main_jumpbox }}"
+      ansible.builtin.copy:
+        src: "{{ fed_db_controller_tmp }}"
+        dest: "{{ rhel_base_dir }}/data/fed_stage/fed_enclave_db.dat"
+        mode: "0644"
+      delegate_to: "{{ main_jumpbox }}"
+      ignore_errors: yes
+      when: fed_dat_ready
+
+    - name: "Task 3 | Copy fed_enclave_pkg.csv from controller to {{ main_jumpbox }}"
+      ansible.builtin.copy:
+        src: "{{ fed_pkg_controller_tmp }}"
+        dest: "{{ rhel_base_dir }}/data/fed_stage/fed_enclave_pkg.csv"
+        mode: "0644"
+      delegate_to: "{{ main_jumpbox }}"
+      ignore_errors: yes
+      when: fed_dat_ready
+
+    - name: "Task 3 | Copy fed_enclave_midrange_mod.dat from controller to {{ main_jumpbox }}"
+      ansible.builtin.copy:
+        src: "{{ fed_mid_mod_controller_tmp }}"
+        dest: "{{ rhel_base_dir }}/data/fed_stage/fed_enclave_midrange_mod.dat"
+        mode: "0644"
+      delegate_to: "{{ main_jumpbox }}"
+      ignore_errors: yes
+      when: fed_dat_ready
+
+    - name: "Task 3 | Copy fed_enclave_compare_data.dat from controller to {{ main_jumpbox }}"
+      ansible.builtin.copy:
+        src: "{{ fed_cmp_data_controller_tmp }}"
+        dest: "{{ rhel_base_dir }}/data/fed_stage/fed_enclave_compare_data.dat"
+        mode: "0644"
+      delegate_to: "{{ main_jumpbox }}"
+      ignore_errors: yes
+      when: fed_dat_ready
+
+    - name: "Task 3 | Log transfer status"
+      ansible.builtin.debug:
+        msg: >-
+          {% if fed_dat_ready %}
+          All available fed enclave files transferred to
+          {{ main_jumpbox }}:{{ rhel_base_dir }}/data/fed_stage/
+          {% elif fed_scan_needed %}
+          Fed scan failed or transfer failed —
+          rhel_inv_run.sh will use previous fed files from DATA_DIR as fallback.
+          {% else %}
+          No Fed Enclave hosts in CMDB — fed scan skipped entirely.
+          {% endif %}
+
+    - name: "Task 3 | Clean up all controller temp fed files"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ fed_dat_controller_tmp }}"
+        - "{{ fed_id_controller_tmp }}"
+        - "{{ fed_db_controller_tmp }}"
+        - "{{ fed_pkg_controller_tmp }}"
+        - "{{ fed_mid_mod_controller_tmp }}"
+        - "{{ fed_cmp_data_controller_tmp }}"
+      ignore_errors: yes
+      when: fed_scan_ok
+
+    # =========================================================================
+    # TASK 4 — lmrg34ja: Run main inventory with non-fed hosts + fed dir merge
+    # =========================================================================
+
+    - name: "Task 4 | Run rhel_inv_run.sh on {{ main_jumpbox }}"
+      ansible.builtin.command: >
+        {{ rhel_base_dir }}/rhel_inv_run.sh
+        --hostlist {{ rhel_base_dir }}/data/non_fed_hosts.txt
+        {% if fed_dat_ready %}
+        --fed-dir {{ rhel_base_dir }}/data/fed_stage
+        {% endif %}
+      delegate_to: "{{ main_jumpbox }}"
+      register: main_run_result
+      failed_when: main_run_result.rc != 0
+
+    - name: "Task 4 | Log main run output (last 60 lines)"
+      ansible.builtin.debug:
+        msg: "{{ (main_run_result.stdout_lines | default([]))[-60:] }}"
+
+    # =========================================================================
+    # FINAL — Summary
+    # =========================================================================
+
+    - name: "Pipeline summary"
+      ansible.builtin.debug:
+        msg:
+          - "======================================================"
+          - "RHEL Inventory pipeline complete"
+          - "======================================================"
+          - "Fed Enclave hosts:    {{ fed_host_list | length }}"
+          - "Fed scan ran:         {{ fed_scan_ok }}"
+          - "Fed files transferred: {{ fed_dat_ready }}"
+          - "Main run exit code:   {{ main_run_result.rc }}"
+          - "======================================================"

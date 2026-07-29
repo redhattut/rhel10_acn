@@ -50,8 +50,12 @@ if [[ "${TEST_MODE:-0}" -eq 0 ]]; then
     touch "$DEPLOYMENTDATA"
 fi
 
-# Build a quick lookup of already-known hosts to avoid grep-per-host
-KNOWN_HOSTS=$(awk '{print $2}' "$DEPLOYMENTDATA" 2>/dev/null)
+# Build a quick lookup of already-known hosts to avoid grep-per-host.
+# Normalise to lowercase short names: legacy-seeded records may be FQDN
+# and/or mixed case. NOTE: the previous `grep -qw` check treated "." as a
+# word boundary, so short "hosta" falsely matched FQDN "hosta.domain" and
+# those hosts were never re-added in matching form — exact match only now.
+KNOWN_HOSTS=$(awk '{h = tolower($2); sub(/\..*$/, "", h); print h}' "$DEPLOYMENTDATA" 2>/dev/null | sort -u)
 
 HOSTLIST=$(grep -v "^#" "$MASTERHOSTLIST")
 TOTAL=$(echo "$HOSTLIST" | wc -l)
@@ -97,7 +101,9 @@ while IFS= read -r h; do
     [[ -z "$h" || "$h" == \#* ]] && continue
 
     # Skip hosts already in the deployment file
-    if echo "$KNOWN_HOSTS" | grep -qw "$h"; then
+    _hnorm=$(echo "$h" | tr '[:upper:]' '[:lower:]')
+    _hnorm="${_hnorm%%.*}"
+    if echo "$KNOWN_HOSTS" | grep -qx "$_hnorm"; then
         (( SKIP_COUNT++ ))
         continue
     fi
