@@ -1,0 +1,1270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Bare Metal Server Build Template</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{
+  --page:#eef3f8; --card:#ffffff;
+  --text:#173042; --muted:#6f8191; --faint:#91a0ad;
+  --line:#d9e3ec; --line-soft:#eaf0f5; --header:#edf4fa; --hover:#f6fbff;
+  --accent:#2f7898; --accent-dim:#245f79; --accent-soft:#e7f1f7;
+  --danger:#c94b4b; --danger-soft:#fff5f5; --amber:#a56a1a; --amber-soft:#fbf1e0;
+  --mono: "SFMono-Regular",Consolas,"Liberation Mono",monospace;
+  --sans: Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --shadow: 0 12px 30px rgba(35,62,83,.10);
+  --shadow-sm: 0 1px 2px rgba(30,58,76,.05);
+}
+*{box-sizing:border-box;}
+body{
+  margin:0; min-height:100vh; padding:24px 28px 60px;
+  background:linear-gradient(145deg,#f3f7fb,#e3ebf3);
+  font-family:var(--sans); color:var(--text); font-size:13.5px;
+}
+input[type=checkbox]{width:15px; height:15px; accent-color:var(--accent);}
+
+/* ---------- top bar ---------- */
+.topbar{
+  display:flex; align-items:center; justify-content:space-between; gap:20px; flex-wrap:wrap;
+  background:var(--card); border:1px solid rgba(255,255,255,.7); border-radius:18px;
+  box-shadow:var(--shadow); padding:14px 22px; margin-bottom:14px;
+}
+.brand{display:flex; align-items:center; gap:12px;}
+.brand-badge{
+  width:36px; height:36px; border-radius:11px; flex-shrink:0;
+  background:linear-gradient(135deg, var(--accent), var(--accent-dim));
+  display:flex; align-items:center; justify-content:center; box-shadow:0 4px 10px rgba(47,120,152,.3);
+}
+.brand-badge svg{width:19px; height:19px;}
+.brand-text h1{font-size:16.5px; font-weight:700; letter-spacing:-.2px; margin:0; color:var(--text);}
+.brand-text .sub{font-size:11px; color:var(--faint); margin-top:1px;}
+.jobname-wrap{display:flex; align-items:center; gap:8px;}
+.jobname-wrap label{font-size:11px; color:var(--faint); text-transform:uppercase; letter-spacing:.4px; margin-right:2px;}
+.jobname-wrap input{
+  background:#fbfdff; border:1px solid var(--line); color:var(--accent-dim);
+  padding:8px 12px; border-radius:999px; font-family:var(--mono); font-size:12.5px; width:230px; outline:none;
+}
+.jobname-wrap input:focus{border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft);}
+
+/* ---------- generic pill buttons ---------- */
+.add-btn{
+  border:1px solid #b9cbd8; border-radius:999px; background:#f9fcfe; color:#24495f;
+  padding:9px 15px; font:inherit; font-size:12.5px; font-weight:500; cursor:pointer; white-space:nowrap;
+}
+.add-btn:hover{background:#eef6fb;}
+.btn-primary{
+  border:1px solid var(--accent); border-radius:999px; background:var(--accent); color:#fff;
+  padding:10px 18px; font:inherit; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap;
+}
+.btn-primary:hover{background:var(--accent-dim); border-color:var(--accent-dim);}
+.btn-danger{
+  border:1px solid #efcaca; border-radius:999px; background:#fff9f9; color:var(--danger);
+  padding:9px 15px; font:inherit; font-size:12.5px; font-weight:500; cursor:pointer; white-space:nowrap;
+}
+.btn-danger:hover{background:var(--danger-soft);}
+.btn-success{
+  border:1px solid #2e9e5b; border-radius:999px; background:#2e9e5b; color:#fff;
+  padding:10px 18px; font:inherit; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap;
+}
+.btn-success:hover{background:#25824a; border-color:#25824a;}
+.icon-btn{
+  width:30px; height:30px; border:1px solid #d8e2ea; border-radius:50%; background:#f8fbfd;
+  color:#4f7186; cursor:pointer; font-size:14px; display:inline-flex; align-items:center; justify-content:center;
+}
+.icon-btn:hover{background:#eaf3f8;}
+.icon-btn.delete:hover{color:var(--danger); border-color:#efcaca; background:var(--danger-soft);}
+
+/* ---------- step nav (segmented pill) ---------- */
+nav.steps{
+  display:flex; gap:4px; background:var(--card); border:1px solid rgba(255,255,255,.7); border-radius:14px;
+  box-shadow:var(--shadow-sm); padding:5px; margin-bottom:16px; width:fit-content;
+}
+nav.steps button{
+  background:none; border:none; color:var(--muted); font-family:var(--sans); font-size:12.5px; font-weight:500;
+  padding:9px 16px; cursor:pointer; border-radius:10px; display:flex; gap:7px; align-items:center;
+}
+nav.steps button .num{
+  width:16px; height:16px; border-radius:50%; border:1px solid var(--line); font-size:10px;
+  display:flex; align-items:center; justify-content:center; color:var(--faint); font-family:var(--mono); background:#fff;
+}
+nav.steps button.active{background:var(--accent-soft); color:var(--accent-dim);}
+nav.steps button.active .num{background:var(--accent); border-color:var(--accent); color:#fff;}
+nav.steps button:hover:not(.active){background:var(--hover);}
+nav.steps .count{margin-left:1px; font-family:var(--mono); font-size:10.5px; color:var(--faint);}
+
+.view{display:none;} .view.active{display:block;}
+
+/* ---------- card ---------- */
+.card{
+  background:rgba(255,255,255,.94); border:1px solid rgba(255,255,255,.8); border-radius:20px;
+  box-shadow:var(--shadow); overflow:hidden; margin-bottom:18px;
+}
+.card-header{
+  display:flex; justify-content:space-between; align-items:flex-start; gap:16px;
+  padding:18px 22px; border-bottom:1px solid var(--line);
+}
+.card-header h2{margin:0; font-size:17px; font-weight:600; letter-spacing:-.02em; display:flex; align-items:center;}
+.card-header p{margin:4px 0 0; color:var(--muted); font-size:12.5px;}
+.count{
+  display:inline-flex; align-items:center; padding:4px 11px; margin-left:9px; border-radius:999px;
+  background:var(--accent-soft); color:var(--accent-dim); font-size:11.5px; font-weight:600;
+}
+.sub-toolbar{
+  display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:12px 22px;
+  background:#fbfdff; border-bottom:1px solid var(--line-soft);
+}
+.sub-toolbar .spacer{flex:1;}
+.hint-inline{font-size:11.5px; color:var(--faint); display:flex; align-items:center; gap:6px;}
+.hint-inline kbd{
+  background:var(--header); border:1px solid var(--line); border-radius:4px; padding:1px 6px;
+  font-family:var(--mono); font-size:10.5px; color:var(--muted);
+}
+.banner{
+  margin:14px 22px 0; background:var(--amber-soft); border:1px solid #e0c088; color:#6b4e15;
+  padding:11px 15px; border-radius:12px; font-size:12.5px;
+}
+.banner code{background:#fff; padding:1px 5px; border-radius:4px; font-family:var(--mono); font-size:11.5px; border:1px solid #ecdcb8;}
+.card .footer{
+  display:flex; justify-content:flex-end; gap:16px; padding:12px 22px; border-top:1px solid var(--line);
+  color:var(--muted); font-size:11.5px; background:#fbfdff;
+}
+
+/* ---------- table ---------- */
+.table-wrap{overflow:auto; max-height:calc(100vh - 340px);}
+table.grid{width:100%; min-width:1400px; border-collapse:separate; border-spacing:0; font-size:12.5px;}
+table.grid thead th{
+  position:sticky; top:0; z-index:5; padding:12px 11px; background:var(--header);
+  border-bottom:1px solid #cfdce7; color:#315167; font-size:10.5px; font-weight:700;
+  letter-spacing:.04em; text-transform:uppercase; text-align:left; white-space:nowrap;
+}
+table.grid tbody tr{background:#fff; transition:background .12s ease;}
+table.grid tbody tr:nth-child(even){background:#fbfdff;}
+table.grid tbody tr:hover{background:var(--hover);}
+table.grid tbody tr.selected-row{background:#f1f8fb!important; box-shadow:inset 3px 0 0 var(--accent);}
+table.grid tbody td{
+  padding:8px 10px; border-bottom:1px solid var(--line-soft); vertical-align:middle; font-weight:400;
+}
+table.grid td.check, table.grid td.num{text-align:center; width:38px;}
+table.grid td.num{color:var(--faint); font-size:11.5px; font-family:var(--mono);}
+table.grid td.actioncell{width:74px;}
+
+/* text inputs — transparent until interacted with */
+.text-input{
+  width:100%; height:36px; border:1px solid transparent; border-radius:9px; background:transparent;
+  padding:0 9px; color:var(--text); font:inherit; font-size:12.5px; outline:none; min-width:70px;
+}
+.text-input:hover{border-color:#d4e0e9; background:#fff;}
+.text-input:focus{border-color:#79a9c0; box-shadow:0 0 0 3px rgba(47,120,152,.14); background:#fff;}
+.text-input.invalid{border-color:var(--danger)!important; box-shadow:0 0 0 3px rgba(201,75,75,.12); background:#fff;}
+.text-input:disabled{color:var(--faint); background:var(--line-soft);}
+.text-input.mono{font-family:var(--mono); font-size:12.5px;}
+.text-input.wide{min-width:190px;} .text-input.host{min-width:150px;} .text-input.narrow{min-width:58px;}
+
+textarea.text-input{
+  height:auto; min-height:38px; line-height:1.55; resize:vertical; padding:8px 9px;
+}
+
+/* pill selects */
+select.select-modern{
+  appearance:none; -webkit-appearance:none; -moz-appearance:none;
+  min-width:88px; height:33px; padding:0 30px 0 13px;
+  border:1px solid #cbd9e4; border-radius:999px; background-color:#fbfdff;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%235b7385' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 11px center;
+  color:#244458; font:inherit; font-size:12.5px; font-weight:500; cursor:pointer; outline:none;
+  box-shadow:var(--shadow-sm); transition:border-color .14s,background .14s,box-shadow .14s;
+}
+select.select-modern:hover{border-color:#9fb7c8; background-color:#fff;}
+select.select-modern:focus{border-color:#5d98b6; box-shadow:0 0 0 3px rgba(47,120,152,.14);}
+select.select-modern option{background:#fff; color:var(--text);}
+.select-wide{min-width:138px;} .select-narrow{min-width:78px;}
+th.hidden-col, td.hidden-col{display:none;}
+
+/* preset pills */
+.preset-row{display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
+.preset-btn{
+  background:#f9fcfe; border:1px solid #b9cbd8; color:#24495f; padding:8px 14px; border-radius:999px;
+  font-size:12px; cursor:pointer; font-family:var(--sans); box-shadow:var(--shadow-sm);
+}
+.preset-btn:hover{border-color:var(--accent); color:var(--accent-dim); background:#fff;}
+.preset-btn.primary{background:var(--accent-soft); border-color:var(--accent); color:var(--accent-dim); font-weight:600;}
+select.preset-select{
+  appearance:none; -webkit-appearance:none; -moz-appearance:none;
+  background-color:#fff; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23245f79' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 13px center;
+  border:1px dashed var(--accent); color:var(--accent-dim); padding:8px 30px 8px 15px;
+  border-radius:999px; font-size:12px; cursor:pointer; font-family:var(--sans); font-weight:600; box-shadow:var(--shadow-sm);
+}
+select.preset-select:hover{background-color:var(--accent-soft);}
+
+/* ---------- hostname multi-select chips + popover ---------- */
+.host-trigger{
+  width:100%; min-height:36px; display:flex; align-items:center; padding:6px 8px; border-radius:9px;
+  font-family:var(--mono); font-size:12.5px; cursor:pointer; color:var(--text); gap:4px; flex-wrap:wrap; border:1px solid transparent;
+}
+.host-trigger:hover{border-color:#d4e0e9; background:#fff;}
+.host-trigger .placeholder{color:var(--faint); font-style:italic; font-family:var(--sans);}
+.host-trigger .chip{
+  background:var(--accent-soft); color:var(--accent-dim); border:1px solid #bcdae6;
+  border-radius:999px; padding:2px 9px; font-size:11px;
+}
+.hd-popover{
+  position:fixed; z-index:200; background:var(--card); border:1px solid var(--line); border-radius:14px;
+  box-shadow:var(--shadow); width:270px; overflow:hidden;
+}
+.hd-search{padding:9px; border-bottom:1px solid var(--line-soft);}
+.hd-search input{
+  width:100%; padding:8px 11px; border:1px solid var(--line); border-radius:999px; font-family:var(--sans);
+  font-size:12.5px; outline:none; background:#fbfdff; color:var(--text);
+}
+.hd-search input:focus{border-color:var(--accent);}
+.hd-actions{display:flex; gap:6px; padding:7px 9px; border-bottom:1px solid var(--line-soft);}
+.hd-actions button{
+  background:#fff; border:1px solid var(--line); color:var(--muted); font-size:11px; padding:4px 10px;
+  border-radius:999px; cursor:pointer;
+}
+.hd-actions button:hover{border-color:var(--accent); color:var(--accent-dim);}
+.hd-list{max-height:220px; overflow-y:auto; padding:5px;}
+.hd-row{display:flex; align-items:center; gap:8px; padding:8px 9px; border-radius:9px; cursor:pointer; font-family:var(--mono); font-size:12px;}
+.hd-row:hover{background:var(--hover);}
+.hd-empty{padding:16px; text-align:center; color:var(--faint); font-size:12px; font-family:var(--sans);}
+
+/* ---------- preview & export card bits ---------- */
+.stat-row{display:flex; gap:16px; margin-bottom:16px;}
+.stat{
+  background:var(--card); border:1px solid rgba(255,255,255,.8); border-radius:16px; padding:14px 20px;
+  min-width:130px; box-shadow:var(--shadow);
+}
+.stat .num{font-family:var(--mono); font-size:21px; color:var(--accent-dim); font-weight:700;}
+.stat .lbl{font-size:11px; color:var(--faint); text-transform:uppercase; letter-spacing:.4px; margin-top:2px;}
+.lsblk-cta{
+  display:flex; align-items:center; justify-content:space-between; gap:16px; padding:18px 22px;
+}
+.lsblk-cta .txt{font-size:13px; color:var(--muted);}
+.lsblk-cta .txt b{color:var(--text); display:block; font-size:14px; margin-bottom:2px;}
+pre.csv-preview{
+  margin:16px 22px 0; background:#0f1720; border:1px solid #1f2b38; border-radius:14px;
+  padding:16px; font-family:var(--mono); font-size:11.5px; color:#c3ccd6;
+  overflow:auto; white-space:pre; max-height:420px; line-height:1.7;
+}
+.export-actions{display:flex; gap:10px; padding:18px 22px;}
+
+/* ---------- lsblk modal — intentionally dark, terminal contrast ---------- */
+.modal-overlay{
+  position:fixed; inset:0; background:rgba(10,16,22,.55); display:flex;
+  align-items:center; justify-content:center; z-index:100;
+}
+.modal-card{
+  --mbg:#151b23; --mpanel:#1a212a; --mline:#2a3441; --mtext:#dde3ea; --mtext-dim:#8f9dab;
+  background:var(--mpanel); border:1px solid var(--mline); border-radius:16px;
+  width:min(820px,94vw); max-height:86vh; display:flex; flex-direction:column; overflow:hidden;
+  box-shadow:0 24px 64px rgba(0,0,0,.4);
+}
+.modal-head{display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--mline);}
+.modal-head select{
+  background:var(--mbg); border:1px solid var(--mline); color:var(--mtext); padding:8px 12px;
+  border-radius:999px; font-family:var(--mono); font-size:12.5px; flex:1;
+}
+.modal-head .icon-btn{background:var(--mbg); border-color:var(--mline); color:var(--mtext-dim);}
+.modal-head .icon-btn:hover{color:var(--mtext); border-color:var(--mtext-dim);}
+.modal-body{padding:16px 18px; overflow:auto; background:var(--mbg);}
+.modal-body pre{margin:0; font-family:var(--mono); font-size:11.5px; color:var(--mtext); line-height:1.6; white-space:pre;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <div class="brand-badge">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="4" rx="1"></rect>
+        <rect x="3" y="10" width="18" height="4" rx="1"></rect>
+        <rect x="3" y="16" width="18" height="4" rx="1"></rect>
+        <circle cx="6.3" cy="6" r="0.7" fill="#fff" stroke="none"></circle>
+        <circle cx="6.3" cy="12" r="0.7" fill="#fff" stroke="none"></circle>
+        <circle cx="6.3" cy="18" r="0.7" fill="#fff" stroke="none"></circle>
+      </svg>
+    </div>
+    <div class="brand-text">
+      <h1>Bare Metal Server Build Template</h1>
+      <div class="sub">CompleteBuild · server provisioning intake</div>
+    </div>
+  </div>
+  <div class="jobname-wrap">
+    <button class="add-btn" onclick="document.getElementById('importFileInput').click()">📥 Import</button>
+    <input type="file" id="importFileInput" accept=".csv,text/csv" style="display:none" onchange="handleImportFile(event)">
+    <label>Build / Job Name</label>
+    <input type="text" id="jobName" value="BDP-cedar-20260729-482" oninput="onJobNameChange()">
+    <button class="add-btn" onclick="randomizeJobName()">🎲 Random</button>
+  </div>
+</div>
+
+<nav class="steps">
+  <button class="active" data-view="servers"><span class="num">1</span> Servers <span class="count" id="countServers"></span></button>
+  <button data-view="sizing"><span class="num">2</span> OS Disk</button>
+  <button data-view="disks"><span class="num">3</span> Additional Disks (Optional)</button>
+  <button data-view="export"><span class="num">4</span> Preview &amp; Export</button>
+</nav>
+
+<!-- ============ STEP 1: SERVERS ============ -->
+<section class="view active" id="view-servers">
+  <div class="card">
+    <div class="card-header">
+      <div><h2>Servers<span class="count" id="serverCountPill">0 nodes</span></h2>
+        <p>Hostname, hardware, datacenter, and management network details</p></div>
+    </div>
+    <div class="sub-toolbar">
+      <button class="add-btn" onclick="addServerRows(1)">+ Add row</button>
+      <button class="add-btn" onclick="promptAddRows()">+ Add multiple…</button>
+      <button class="add-btn" onclick="duplicateSelectedServers()">⧉ Duplicate selected</button>
+      <button class="btn-danger" onclick="deleteSelectedServers()">✕ Delete selected</button>
+      <div class="spacer"></div>
+      <div class="hint-inline">Paste from Excel — click a cell, paste, fills across &amp; down. <kbd>Enter</kbd> moves to next row.</div>
+    </div>
+    <div class="table-wrap">
+      <table class="grid">
+        <thead>
+          <tr>
+            <th class="check"><input type="checkbox" onclick="toggleSelectAllServers(this)"></th>
+            <th>#</th>
+            <th style="min-width:160px">Hostname</th>
+            <th>Hardware</th>
+            <th style="min-width:140px">Datacenter</th>
+            <th>Environment</th>
+            <th>OS Version</th>
+            <th>Boot Mode</th>
+            <th>LACP</th>
+            <th style="min-width:220px">Management Address (iDRAC/UCSM)</th>
+            <th class="org-col" style="min-width:110px">UCSM Org</th>
+            <th style="text-align:right">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="servers-tbody-1"></tbody>
+      </table>
+    </div>
+    <div class="footer"><span id="serverFooterCount">0 servers</span><span>Enter moves to next row</span><span>Excel paste supported</span></div>
+  </div>
+</section>
+
+<!-- ============ STEP 2: OS DISK SIZING ============ -->
+<section class="view" id="view-sizing">
+  <div class="card">
+    <div class="card-header">
+      <div><h2>OS Disk Sizing</h2>
+        <p>Standard filesystem layout, per server. Presets apply to checked rows only.</p></div>
+    </div>
+    <div class="sub-toolbar">
+      <div class="preset-row">
+        <button class="preset-btn" onclick="applySizePreset('standard')">Standard — PNC_BDP_WORKER</button>
+        <button class="preset-btn" onclick="applySizePreset('minimal')">Minimal</button>
+        <button class="preset-btn" onclick="applySizePreset('data')">Large — data node</button>
+        <button class="preset-btn" onclick="applySizePreset('medium')">Medium — app server</button>
+        <select class="preset-select" onchange="if(this.value){applySizePreset(this.value); this.value='';}">
+          <option value="">More presets…</option>
+          <option value="db">Database — large DB node</option>
+          <option value="cache">Cache / in-memory node</option>
+          <option value="web">Web/App tier — lightweight</option>
+          <option value="analytics">Analytics / Big Data node</option>
+        </select>
+      </div>
+      <div class="spacer"></div>
+      <div class="hint-inline">Extra Filesystems: paste directly into that cell.</div>
+    </div>
+    <div class="table-wrap">
+      <table class="grid">
+        <thead>
+          <tr>
+            <th class="check"><input type="checkbox" onclick="toggleSelectAllServers(this)"></th>
+            <th>#</th>
+            <th style="min-width:170px">Hostname</th>
+            <th>OS Disk GB</th>
+            <th>/ MB</th>
+            <th>swap MB</th>
+            <th>/var MB</th>
+            <th>/opt MB</th>
+            <th>/app MB</th>
+            <th>/home MB</th>
+            <th>/tmp MB</th>
+            <th>/opt/app MB</th>
+            <th style="min-width:220px">Extra filesystems (one per line: <code>/mount sizeMB</code>)</th>
+          </tr>
+        </thead>
+        <tbody id="servers-tbody-2"></tbody>
+      </table>
+    </div>
+    <div class="footer"><span>Sizes in MB</span><span>Check rows, then click a preset</span></div>
+  </div>
+</section>
+
+<!-- ============ STEP 3: ADDITIONAL DISKS ============ -->
+<section class="view" id="view-disks">
+  <div class="card">
+    <div class="card-header">
+      <div><h2>Additional Disks<span class="count" id="diskCountPill">0 volumes</span></h2>
+        <p>Optional. One row can apply to multiple servers via the hostname picker.</p></div>
+    </div>
+    <div class="banner">
+      Click <b>Hostname(s)</b> to search &amp; check off servers — one row can cover many at once. Leave empty if a server needs nothing beyond the OS disk.
+    </div>
+    <div class="sub-toolbar">
+      <button class="add-btn" onclick="addDiskRows(1)">+ Add row</button>
+      <button class="add-btn" onclick="promptAddDiskRows()">+ Add multiple…</button>
+      <button class="add-btn" onclick="duplicateSelectedDisks()">⧉ Duplicate selected</button>
+      <button class="btn-danger" onclick="deleteSelectedDisks()">✕ Delete selected</button>
+      <div class="preset-row">
+        <button class="preset-btn" onclick="applyDiskPreset('log')">Standard — RAID1 SSD, LVM</button>
+        <button class="preset-btn" onclick="applyDiskPreset('data')">Data vol — RAID0 HDD, no LVM</button>
+        <button class="preset-btn" onclick="applyDiskPreset('hadoop')">Hadoop/Ozone — RAID1 + folders</button>
+        <button class="preset-btn" onclick="applyDiskPreset('multi')">Multi-volume — e.g. mysql</button>
+        <select class="preset-select" onchange="if(this.value){applyDiskPreset(this.value); this.value='';}">
+          <option value="">More presets…</option>
+          <option value="nvme_scratch">NVMe scratch space — no LVM</option>
+          <option value="archive">Archive / cold storage — RAID0 HDD</option>
+          <option value="shared_app">Shared app data — RAID1 HDD, LVM</option>
+          <option value="cache_ssd">Cache volume — RAID0 SSD, no LVM</option>
+        </select>
+      </div>
+      <div class="spacer"></div>
+      <div class="hint-inline">Presets apply to checked rows only.</div>
+    </div>
+    <div class="table-wrap">
+      <table class="grid">
+        <thead>
+          <tr>
+            <th class="check"><input type="checkbox" onclick="toggleSelectAllDisks(this)"></th>
+            <th>#</th>
+            <th style="min-width:190px">Hostname(s)</th>
+            <th>RAID Level</th>
+            <th>Disk Type</th>
+            <th class="raid10-col" style="min-width:100px"># Disks (RAID 10 only)</th>
+            <th>LVM</th>
+            <th style="min-width:230px">Mount Point(s) &amp; Size(s) GB — whole disk if LVM=No</th>
+            <th>Total Size GB</th>
+            <th style="min-width:200px">Extra folders (one per line)</th>
+            <th style="text-align:right">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="disks-tbody"></tbody>
+      </table>
+    </div>
+    <div class="footer"><span id="diskFooterCount">0 extra disk rows</span><span>Presets apply to checked rows only</span></div>
+  </div>
+</section>
+
+<!-- ============ STEP 4: PREVIEW & EXPORT ============ -->
+<section class="view" id="view-export">
+  <div class="stat-row">
+    <div class="stat"><div class="num" id="statServers">0</div><div class="lbl">Servers</div></div>
+    <div class="stat"><div class="num" id="statDisks">0</div><div class="lbl">Extra disk rows</div></div>
+    <div class="stat"><div class="num" id="statCsvRows">0</div><div class="lbl">CSV output rows</div></div>
+  </div>
+  <div class="card">
+    <div class="lsblk-cta">
+      <div class="txt"><b>See the actual filesystem layout before exporting</b>Shows OS disk, extra volumes, and the fixed toolsvg/rootvg volumes the build scripts always add.</div>
+      <button class="btn-primary" onclick="openLsblkModal()">🖥 Preview disk layout (lsblk)</button>
+    </div>
+    <pre class="csv-preview" id="csv-body">(no servers added yet)</pre>
+    <div class="export-actions">
+      <button class="btn-success" onclick="downloadCombined()">⬇ Download combined CSV</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ LSBLK PREVIEW MODAL ============ -->
+<div class="modal-overlay" id="lsblkModal" style="display:none;">
+  <div class="modal-card">
+    <div class="modal-head">
+      <select id="lsblkServerSelect" onchange="renderLsblkPreview()"></select>
+      <button class="icon-btn" onclick="closeLsblkModal()">✕</button>
+    </div>
+    <div class="modal-body"><pre id="lsblkOutput"></pre></div>
+  </div>
+</div>
+
+<!-- ============ HOSTNAME MULTI-SELECT POPOVER ============ -->
+<div class="hd-popover" id="hostnameDropdown" style="display:none;">
+  <div class="hd-search"><input type="text" id="hostnameFilterInput" placeholder="Search hostnames…" oninput="renderHostnameDropdownList(this.value)"></div>
+  <div class="hd-actions">
+    <button type="button" onclick="hdSelectAllFiltered()">Select all shown</button>
+    <button type="button" onclick="hdClearAll()">Clear</button>
+  </div>
+  <div class="hd-list" id="hostnameDropdownList"></div>
+</div>
+
+<script>
+// =================================================================
+// State
+// =================================================================
+let uid = 1;
+let jobName = document.getElementById('jobName').value;
+
+const HW_OPTIONS = ['Dell','Cisco'];
+const DC_OPTIONS = ['GF0','GF1','GF2','East/DCE1','East/DCE2','East/DCE3','Central/DCC1','Central/DCC2','Central/DCC3'];
+const ENV_OPTIONS = ['RND','UAT','QA','Prod'];
+const OS_OPTIONS = ['8.8','8.10','9.8'];
+const BOOT_OPTIONS = ['UEFI','Legacy'];
+const YESNO = ['Yes','No'];
+const RAID_OPTIONS = ['0','1','10'];
+const TYPE_OPTIONS = ['SSD','HDD','NVME'];
+
+// Environment -> the only acceptable domain for that environment.
+const ENV_DOMAIN = { RND:'rnd.pncint.net', UAT:'uat.pncint.net', QA:'qa.pncint.net', Prod:'prod.pncint.net' };
+const KNOWN_DOMAINS = Object.values(ENV_DOMAIN);
+
+function ensureFqdn(s){
+  if(!s.hostname) return;
+  const dot = s.hostname.indexOf('.');
+  if(dot===-1){ s.hostname = s.hostname + '.' + (ENV_DOMAIN[s.env] || ENV_DOMAIN.QA); return; }
+  const shortname = s.hostname.slice(0, dot);
+  const domain = s.hostname.slice(dot+1);
+  if(KNOWN_DOMAINS.includes(domain.toLowerCase())){
+    s.hostname = shortname + '.' + (ENV_DOMAIN[s.env] || domain);
+  }
+}
+function isValidDomain(hostname){
+  const dot = (hostname||'').indexOf('.');
+  if(dot===-1) return false;
+  return KNOWN_DOMAINS.includes(hostname.slice(dot+1).toLowerCase());
+}
+function handleHostnameBlur(idx){
+  ensureFqdn(servers[idx]);
+  const input = document.querySelector(`[data-grid="servers1"][data-row="${idx}"][data-field="hostname"]`);
+  if(input){
+    input.value = servers[idx].hostname;
+    const bad = !!servers[idx].hostname && !isValidDomain(servers[idx].hostname);
+    input.classList.toggle('invalid', bad);
+    input.title = bad ? 'Only these domains are accepted: ' + KNOWN_DOMAINS.join(', ') : '';
+  }
+  const displayCell = document.getElementById('s2-hostname-'+idx);
+  if(displayCell) displayCell.innerHTML = servers[idx].hostname || '<em style="color:var(--faint)">(unset)</em>';
+}
+function handleEnvChange(idx, value){
+  servers[idx].env = value;
+  ensureFqdn(servers[idx]);
+  renderServers();
+}
+
+// Fixed toolsvg volumes — always added by the build scripts, not user-configurable.
+const TOOLSVG_LVS = [
+  {mount:'/opt/Tanium', lv:'lvopttanium', sizeMB:4096},
+  {mount:'/opt/app', lv:'lvoptapp', sizeMB:20480},
+  {mount:'/opt/cohesity', lv:'lvcohesity', sizeMB:3072},
+  {mount:'/opt/syslog-ng', lv:'lvoptsyslogng', sizeMB:2048},
+  {mount:'/opt/splunkforwarder', lv:'lvsplunkforwarder', sizeMB:10240},
+  {mount:'/app/dynatraceOneAgent', lv:'lvappdynatraceOneAgent', sizeMB:10240},
+];
+const TOOLSVG_PART_GB = 80; // fixed partition size regardless of OS disk size
+
+// RHEL 9 only — added automatically, not shown as configurable OS Disk fields.
+const RHEL9_ROOTVG_EXTRA = [
+  {mount:'/var/tmp', sizeMB:5120},
+  {mount:'/var/log', sizeMB:15360},
+  {mount:'/var/log/audit', sizeMB:2048},
+];
+
+function blankServer(){
+  return {
+    id: uid++, sel:false,
+    hostname:'', hw:'Dell', dc:'GF0', env:'QA', osver:'8.10', boot:'UEFI', lacp:'No', mgmt:'', org:'',
+    osdisk:'200', root:'51200', swap:'8192', var:'30720', opt:'10240', app:'10240',
+    home:'5120', tmp:'10240', optapp:'10240', extrafs:''
+  };
+}
+function blankDisk(){
+  return { id: uid++, sel:false, hostnames:[], raid:'0', type:'SSD', numdisks:'', lvm:'Yes', mountsizes:'', totalsizegb:'', extrafolders:'' };
+}
+
+let servers = [];
+let disks = [];
+
+const SERVER_FIELDS_1 = ['hostname','hw','dc','env','osver','boot','lacp','mgmt','org'];
+const SERVER_FIELDS_2 = ['osdisk','root','swap','var','opt','app','home','tmp','optapp'];
+const DISK_FIELDS = ['raid','type','numdisks','lvm','totalsizegb'];
+
+function diskMatchesHost(d, hostname){
+  return (d.hostnames||[]).some(h=>h.trim().toLowerCase()===hostname.trim().toLowerCase());
+}
+
+// =================================================================
+// Nav
+// =================================================================
+document.querySelectorAll('nav.steps button').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('nav.steps button').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('view-'+btn.dataset.view).classList.add('active');
+    if(btn.dataset.view==='export') refreshExport();
+    closeHostnameDropdown();
+  });
+});
+
+function onJobNameChange(){ jobName = document.getElementById('jobName').value.trim(); }
+function randomizeJobName(){
+  const words=['cedar','swift','quiet','amber','north','iron','delta','maple','harbor','flint','vale','ember'];
+  const w = words[Math.floor(Math.random()*words.length)];
+  const d = new Date();
+  const stamp = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
+  const num = String(Math.floor(Math.random()*900+100));
+  const name = `BDP-${w}-${stamp}-${num}`;
+  document.getElementById('jobName').value = name;
+  jobName = name;
+}
+
+// =================================================================
+// Row helpers
+// =================================================================
+function addServerRows(n){ for(let i=0;i<n;i++) servers.push(blankServer()); renderServers(); }
+function promptAddRows(){ const n = parseInt(prompt('How many server rows to add?','10'),10); if(n>0) addServerRows(n); }
+function duplicateSelectedServers(){
+  const chosen = servers.filter(s=>s.sel);
+  const source = chosen.length ? chosen : (servers.length ? [servers[servers.length-1]] : []);
+  source.forEach(s=>{ servers.push({...s, id:uid++, sel:false, hostname:''}); });
+  renderServers();
+}
+function deleteSelectedServers(){
+  const ids = new Set(servers.filter(s=>s.sel).map(s=>s.id));
+  if(!ids.size){ alert('No rows checked.'); return; }
+  servers = servers.filter(s=>!ids.has(s.id));
+  renderServers();
+}
+function toggleSelectAllServers(cb){ servers.forEach(s=>s.sel = cb.checked); renderServers(); }
+
+function addDiskRows(n){ for(let i=0;i<n;i++) disks.push(blankDisk()); renderDisks(); }
+function promptAddDiskRows(){ const n = parseInt(prompt('How many disk rows to add?','5'),10); if(n>0) addDiskRows(n); }
+function duplicateSelectedDisks(){
+  const chosen = disks.filter(d=>d.sel);
+  const source = chosen.length ? chosen : (disks.length ? [disks[disks.length-1]] : []);
+  source.forEach(d=>{ disks.push({...d, id:uid++, sel:false, hostnames:[]}); });
+  renderDisks();
+}
+function deleteSelectedDisks(){
+  const ids = new Set(disks.filter(d=>d.sel).map(d=>d.id));
+  if(!ids.size){ alert('No rows checked.'); return; }
+  disks = disks.filter(d=>!ids.has(d.id));
+  renderDisks();
+}
+function toggleSelectAllDisks(cb){ disks.forEach(d=>d.sel = cb.checked); renderDisks(); }
+
+// =================================================================
+// Presets — apply ONLY to checked rows
+// =================================================================
+const sizePresets = {
+  minimal:  {osdisk:120, root:20480, swap:4096, var:10240, opt:5120, app:5120, home:2048, tmp:5120, optapp:5120},
+  standard: {osdisk:200, root:51200, swap:8192, var:30720, opt:10240, app:10240, home:5120, tmp:10240, optapp:10240},
+  data:     {osdisk:894, root:71680, swap:16384, var:51200, opt:20480, app:20480, home:10240, tmp:30720, optapp:20480},
+  medium:   {osdisk:300, root:61440, swap:8192, var:40960, opt:15360, app:15360, home:8192, tmp:15360, optapp:15360},
+  db:       {osdisk:1200, root:81920, swap:32768, var:71680, opt:20480, app:20480, home:10240, tmp:40960, optapp:20480},
+  cache:    {osdisk:150, root:30720, swap:8192, var:15360, opt:8192, app:8192, home:4096, tmp:8192, optapp:8192},
+  web:      {osdisk:100, root:20480, swap:4096, var:10240, opt:5120, app:5120, home:2048, tmp:5120, optapp:5120},
+  analytics:{osdisk:2000, root:102400, swap:32768, var:102400, opt:30720, app:30720, home:20480, tmp:51200, optapp:30720},
+};
+function applySizePreset(name){
+  const p = sizePresets[name];
+  const chosen = servers.filter(s=>s.sel);
+  if(!chosen.length){ alert('Check one or more rows first — presets only apply to checked rows.'); return; }
+  chosen.forEach(s=>Object.assign(s, {osdisk:p.osdisk, root:p.root, swap:p.swap, var:p.var, opt:p.opt, app:p.app, home:p.home, tmp:p.tmp, optapp:p.optapp}));
+  renderServers();
+}
+
+const diskPresets = {
+  log:    {raid:'1', type:'SSD', lvm:'Yes', mountsizes:'/var/lib/hadoop-ozone/db 250', totalsizegb:'250', extrafolders:''},
+  data:   {raid:'0', type:'HDD', lvm:'No', mountsizes:'/data01', totalsizegb:'1117', extrafolders:''},
+  hadoop: {raid:'1', type:'SSD', lvm:'Yes', mountsizes:'/var/lib/hadoop-ozone/db 250', totalsizegb:'250',
+           extrafolders:'/var/lib/hadoop-ozone/db/om/data\n/var/lib/hadoop-ozone/db/scm/data\n/var/lib/hadoop-ozone/db/recon/data'},
+  multi:  {raid:'10', type:'SSD', lvm:'Yes', numdisks:'8', totalsizegb:'14000', extrafolders:'',
+           mountsizes:'/mysql 250\n/mysql/audit 50\n/mysql/backup 750\n/mysql/logs 25\n/mysql/restore 250\n/mysql/tmp 25'},
+  nvme_scratch: {raid:'0', type:'NVME', lvm:'No', mountsizes:'/scratch', totalsizegb:'2000', extrafolders:''},
+  archive:      {raid:'0', type:'HDD', lvm:'No', mountsizes:'/archive', totalsizegb:'7300', extrafolders:''},
+  shared_app:   {raid:'1', type:'HDD', lvm:'Yes', mountsizes:'/app/shared 500', totalsizegb:'500', extrafolders:''},
+  cache_ssd:    {raid:'0', type:'SSD', lvm:'No', mountsizes:'/cache', totalsizegb:'400', extrafolders:''},
+};
+function applyDiskPreset(name){
+  const p = diskPresets[name];
+  const chosen = disks.filter(d=>d.sel);
+  if(!chosen.length){ alert('Check one or more rows first — presets only apply to checked rows.'); return; }
+  chosen.forEach(d=>{
+    Object.assign(d, {raid:p.raid, type:p.type, lvm:p.lvm, mountsizes:p.mountsizes, totalsizegb:p.totalsizegb, extrafolders:p.extrafolders});
+    if(p.numdisks!==undefined) d.numdisks = p.numdisks;
+    if(d.raid!=='10') d.numdisks='';
+  });
+  renderDisks();
+}
+
+// =================================================================
+// Rendering helpers
+// =================================================================
+function renderServers(){
+  renderServersStep1();
+  renderServersStep2();
+  document.getElementById('countServers').textContent = servers.length ? `(${servers.length})` : '';
+  document.getElementById('serverCountPill').textContent = servers.length + ' node' + (servers.length===1?'':'s');
+  document.getElementById('serverFooterCount').textContent = servers.length + ' server' + (servers.length===1?'':'s');
+}
+
+function selectEl(field, row, idx, options, gridName, onchangeFn, extraClass){
+  const opts = options.map(o=>`<option value="${o}" ${row[field]===o?'selected':''}>${o}</option>`).join('');
+  const handler = onchangeFn || `updateCell('${gridName}',${idx},'${field}',this.value)`;
+  return `<select class="select-modern ${extraClass||''}" data-grid="${gridName}" data-row="${idx}" data-field="${field}"
+    onchange="${handler}"
+    onpaste="handlePaste(event)" onkeydown="handleGridKeydown(event)">${opts}</select>`;
+}
+function textEl(field, row, idx, gridName, cls, disabled, placeholder){
+  return `<input type="text" class="text-input ${cls||''}" data-grid="${gridName}" data-row="${idx}" data-field="${field}"
+    value="${(row[field]||'').toString().replace(/"/g,'&quot;')}" ${disabled?'disabled':''} placeholder="${placeholder||''}"
+    oninput="updateCell('${gridName}',${idx},'${field}',this.value)"
+    onpaste="handlePaste(event)" onkeydown="handleGridKeydown(event)">`;
+}
+function textareaEl(field, row, idx, gridName, cls, placeholder, rows){
+  return `<textarea class="text-input ${cls||''}" rows="${rows||2}" data-grid="${gridName}" data-row="${idx}" data-field="${field}"
+    placeholder="${placeholder||''}"
+    oninput="updateCell('${gridName}',${idx},'${field}',this.value)"
+    onpaste="handleTextareaPaste(event, '${gridName}', ${idx}, '${field}')">${(row[field]||'').toString().replace(/</g,'&lt;')}</textarea>`;
+}
+function hostnameEl(s, idx){
+  const invalid = !!s.hostname && !isValidDomain(s.hostname);
+  const title = invalid ? 'Only these domains are accepted: ' + KNOWN_DOMAINS.join(', ') : '';
+  return `<input type="text" class="text-input mono host${invalid?' invalid':''}" data-grid="servers1" data-row="${idx}" data-field="hostname"
+    value="${(s.hostname||'').replace(/"/g,'&quot;')}" title="${title}"
+    oninput="updateCell('servers1',${idx},'hostname',this.value)"
+    onblur="handleHostnameBlur(${idx})"
+    onpaste="handlePaste(event)" onkeydown="handleGridKeydown(event)">`;
+}
+
+function renderServersStep1(){
+  const tbody = document.getElementById('servers-tbody-1');
+  tbody.innerHTML = servers.map((s,idx)=>`
+    <tr class="${s.sel?'selected-row':''}">
+      <td class="check"><input type="checkbox" ${s.sel?'checked':''} onclick="servers[${idx}].sel=this.checked; renderServersStep1();"></td>
+      <td class="num">${idx+1}</td>
+      <td>${hostnameEl(s, idx)}</td>
+      <td>${selectEl('hw', s, idx, HW_OPTIONS, 'servers1', `handleHwChange(${idx},this.value)`)}</td>
+      <td>${selectEl('dc', s, idx, DC_OPTIONS, 'servers1', null, 'select-wide')}</td>
+      <td>${selectEl('env', s, idx, ENV_OPTIONS, 'servers1', `handleEnvChange(${idx},this.value)`)}</td>
+      <td>${selectEl('osver', s, idx, OS_OPTIONS, 'servers1', null, 'select-narrow')}</td>
+      <td>${selectEl('boot', s, idx, BOOT_OPTIONS, 'servers1', null, 'select-narrow')}</td>
+      <td>${selectEl('lacp', s, idx, YESNO, 'servers1', null, 'select-narrow')}</td>
+      <td>${textEl('mgmt', s, idx, 'servers1', 'mono wide')}</td>
+      <td class="org-col">${textEl('org', s, idx, 'servers1', 'narrow')}</td>
+      <td class="actioncell"><div style="display:flex; justify-content:flex-end; gap:6px;">
+        <button class="icon-btn duplicate" title="Duplicate" onclick="duplicateOneServer(${idx})">⧉</button>
+        <button class="icon-btn delete" title="Delete" onclick="deleteOneServer(${idx})">×</button>
+      </div></td>
+    </tr>`).join('');
+  updateOrgColumnVisibility();
+}
+function updateOrgColumnVisibility(){
+  const anyCisco = servers.some(s=>s.hw==='Cisco');
+  document.querySelectorAll('.org-col').forEach(el=> el.classList.toggle('hidden-col', !anyCisco));
+}
+function handleHwChange(idx, value){ servers[idx].hw = value; renderServers(); }
+
+function renderServersStep2(){
+  const tbody = document.getElementById('servers-tbody-2');
+  tbody.innerHTML = servers.map((s,idx)=>`
+    <tr class="${s.sel?'selected-row':''}">
+      <td class="check"><input type="checkbox" ${s.sel?'checked':''} onclick="servers[${idx}].sel=this.checked; renderServersStep2();"></td>
+      <td class="num">${idx+1}</td>
+      <td id="s2-hostname-${idx}" style="color:var(--muted); font-family:var(--mono); padding:8px 10px;">${s.hostname||'<em style=\"color:var(--faint)\">(unset)</em>'}</td>
+      <td>${textEl('osdisk', s, idx, 'servers2', 'mono narrow')}</td>
+      <td>${textEl('root', s, idx, 'servers2', 'mono narrow')}</td>
+      <td>${textEl('swap', s, idx, 'servers2', 'mono narrow')}</td>
+      <td>${textEl('var', s, idx, 'servers2', 'mono narrow')}</td>
+      <td>${textEl('opt', s, idx, 'servers2', 'mono narrow')}</td>
+      <td>${textEl('app', s, idx, 'servers2', 'mono narrow')}</td>
+      <td>${textEl('home', s, idx, 'servers2', 'mono narrow')}</td>
+      <td>${textEl('tmp', s, idx, 'servers2', 'mono narrow')}</td>
+      <td>${textEl('optapp', s, idx, 'servers2', 'mono narrow')}</td>
+      <td>${textareaEl('extrafs', s, idx, 'servers2', 'mono', '', 2)}</td>
+    </tr>`).join('');
+}
+function duplicateOneServer(idx){ servers.splice(idx+1,0,{...servers[idx], id:uid++, sel:false, hostname:''}); renderServers(); }
+function deleteOneServer(idx){ servers.splice(idx,1); renderServers(); }
+
+function renderDisks(){
+  const tbody = document.getElementById('disks-tbody');
+  tbody.innerHTML = disks.map((d,idx)=>{
+    const isRaid10 = d.raid==='10';
+    const isLvm = d.lvm==='Yes';
+    const hosts = d.hostnames||[];
+    const hostCell = hosts.length
+      ? hosts.map(h=>`<span class="chip">${h}</span>`).join('')
+      : '<span class="placeholder">Select hostname(s)…</span>';
+    return `
+    <tr class="${d.sel?'selected-row':''}">
+      <td class="check"><input type="checkbox" ${d.sel?'checked':''} onclick="disks[${idx}].sel=this.checked; renderDisks();"></td>
+      <td class="num">${idx+1}</td>
+      <td><div class="host-trigger" data-row="${idx}" onclick="openHostnameDropdown(${idx}, event)">${hostCell}</div></td>
+      <td>${selectEl('raid', d, idx, RAID_OPTIONS, 'disks', `handleDiskRaidChange(${idx},this.value)`, 'select-narrow')}</td>
+      <td>${selectEl('type', d, idx, TYPE_OPTIONS, 'disks', null, 'select-narrow')}</td>
+      <td class="raid10-col">${textEl('numdisks', d, idx, 'disks', 'mono narrow', !isRaid10, isRaid10?'e.g. 8':'n/a')}</td>
+      <td>${selectEl('lvm', d, idx, YESNO, 'disks', `handleDiskLvmChange(${idx},this.value)`, 'select-narrow')}</td>
+      <td>${textareaEl('mountsizes', d, idx, 'disks', 'mono', '', isLvm?3:1)}</td>
+      <td>${textEl('totalsizegb', d, idx, 'disks', 'mono narrow')}</td>
+      <td>${textareaEl('extrafolders', d, idx, 'disks', 'mono', '', 2)}</td>
+      <td class="actioncell"><div style="display:flex; justify-content:flex-end; gap:6px;">
+        <button class="icon-btn duplicate" title="Duplicate" onclick="duplicateOneDisk(${idx})">⧉</button>
+        <button class="icon-btn delete" title="Delete" onclick="deleteOneDisk(${idx})">×</button>
+      </div></td>
+    </tr>`;}).join('');
+  updateRaid10ColumnVisibility();
+  document.getElementById('diskCountPill').textContent = disks.length + ' volume' + (disks.length===1?'':'s');
+  document.getElementById('diskFooterCount').textContent = disks.length + ' extra disk row' + (disks.length===1?'':'s');
+}
+function updateRaid10ColumnVisibility(){
+  const anyRaid10 = disks.some(d=>d.raid==='10');
+  document.querySelectorAll('.raid10-col').forEach(el=> el.classList.toggle('hidden-col', !anyRaid10));
+}
+function handleDiskRaidChange(idx, value){ disks[idx].raid = value; if(value!=='10') disks[idx].numdisks=''; renderDisks(); }
+function handleDiskLvmChange(idx, value){ disks[idx].lvm = value; renderDisks(); }
+function duplicateOneDisk(idx){ disks.splice(idx+1,0,{...disks[idx], id:uid++, sel:false, hostnames:[]}); renderDisks(); }
+function deleteOneDisk(idx){ disks.splice(idx,1); renderDisks(); }
+
+// =================================================================
+// Custom hostname multi-select autocomplete
+// =================================================================
+let openHostnameRow = null;
+function openHostnameDropdown(idx, evt){
+  evt.stopPropagation();
+  openHostnameRow = idx;
+  const trigger = evt.currentTarget;
+  const rect = trigger.getBoundingClientRect();
+  const dd = document.getElementById('hostnameDropdown');
+  const top = rect.bottom + 4;
+  dd.style.left = Math.min(rect.left, window.innerWidth-280) + 'px';
+  dd.style.top = (top + 260 > window.innerHeight ? rect.top - 264 : top) + 'px';
+  dd.style.display = 'block';
+  const input = document.getElementById('hostnameFilterInput');
+  input.value = '';
+  renderHostnameDropdownList('');
+  setTimeout(()=>input.focus(), 0);
+}
+function closeHostnameDropdown(){
+  const dd = document.getElementById('hostnameDropdown');
+  if(dd.style.display==='none') return;
+  dd.style.display = 'none';
+  openHostnameRow = null;
+}
+document.addEventListener('click', (e)=>{
+  const dd = document.getElementById('hostnameDropdown');
+  if(dd.style.display==='block' && !dd.contains(e.target) && !e.target.closest('.host-trigger')){
+    closeHostnameDropdown(); renderDisks();
+  }
+});
+document.addEventListener('keydown', (e)=>{
+  if(e.key==='Escape' && openHostnameRow!==null){ closeHostnameDropdown(); renderDisks(); }
+});
+function renderHostnameDropdownList(filter){
+  const known = [...new Set(servers.filter(s=>s.hostname).map(s=>s.hostname))];
+  const f = (filter||'').toLowerCase();
+  const filtered = known.filter(h=>h.toLowerCase().includes(f));
+  const idx = openHostnameRow;
+  const selected = idx!=null ? (disks[idx].hostnames||[]) : [];
+  const list = document.getElementById('hostnameDropdownList');
+  if(!known.length){ list.innerHTML = '<div class="hd-empty">No servers with a hostname yet — add some in Step 1.</div>'; return; }
+  if(!filtered.length){ list.innerHTML = '<div class="hd-empty">No match for "'+filter+'"</div>'; return; }
+  list.innerHTML = filtered.map(h=>{
+    const checked = selected.includes(h);
+    return `<label class="hd-row"><input type="checkbox" ${checked?'checked':''} onchange="toggleHostnameSelection('${h.replace(/'/g,"\\'")}', this.checked)"><span>${h}</span></label>`;
+  }).join('');
+}
+function toggleHostnameSelection(host, checked){
+  const idx = openHostnameRow; if(idx==null) return;
+  let arr = disks[idx].hostnames || [];
+  if(checked){ if(!arr.includes(host)) arr.push(host); } else { arr = arr.filter(h=>h!==host); }
+  disks[idx].hostnames = arr;
+}
+function hdSelectAllFiltered(){
+  const idx = openHostnameRow; if(idx==null) return;
+  const filter = document.getElementById('hostnameFilterInput').value;
+  const known = [...new Set(servers.filter(s=>s.hostname).map(s=>s.hostname))];
+  const f = (filter||'').toLowerCase();
+  const filtered = known.filter(h=>h.toLowerCase().includes(f));
+  let arr = disks[idx].hostnames || [];
+  filtered.forEach(h=>{ if(!arr.includes(h)) arr.push(h); });
+  disks[idx].hostnames = arr;
+  renderHostnameDropdownList(filter);
+}
+function hdClearAll(){
+  const idx = openHostnameRow; if(idx==null) return;
+  disks[idx].hostnames = [];
+  renderHostnameDropdownList(document.getElementById('hostnameFilterInput').value);
+}
+
+// =================================================================
+// Cell update (no full rerender on plain typing, to preserve focus)
+// =================================================================
+function updateCell(grid, idx, field, value){
+  if(grid==='servers1' || grid==='servers2') servers[idx][field] = value;
+  if(grid==='disks') disks[idx][field] = value;
+  if(grid==='servers1' && field==='hostname'){
+    const displayCell = document.getElementById('s2-hostname-'+idx);
+    if(displayCell) displayCell.innerHTML = value ? value : '<em style="color:var(--faint)">(unset)</em>';
+  }
+}
+function handleTextareaPaste(e, grid, idx, field){ setTimeout(()=>{ updateCell(grid, idx, field, e.target.value); }, 0); }
+
+// =================================================================
+// Excel-style paste (single-line cells only — textareas use single-cell paste above)
+// =================================================================
+function handlePaste(e){
+  const el = e.target;
+  const grid = el.dataset.grid;
+  const rowIdx = parseInt(el.dataset.row,10);
+  const field = el.dataset.field;
+  const text = (e.clipboardData || window.clipboardData).getData('text');
+  if(!text || (!text.includes('\t') && !text.includes('\n'))){
+    setTimeout(()=>updateCell(grid, rowIdx, field, el.value), 0);
+    return;
+  }
+  e.preventDefault();
+
+  let fieldOrder, arr, blankFn, renderFn;
+  if(grid==='servers1'){ fieldOrder=SERVER_FIELDS_1; arr=servers; blankFn=blankServer; renderFn=renderServers; }
+  else if(grid==='servers2'){ fieldOrder=SERVER_FIELDS_2; arr=servers; blankFn=blankServer; renderFn=renderServers; }
+  else { fieldOrder=DISK_FIELDS; arr=disks; blankFn=blankDisk; renderFn=renderDisks; }
+
+  const colStart = fieldOrder.indexOf(field);
+  const pastedRows = text.replace(/\r/g,'').split('\n').filter((r,i,a)=> !(i===a.length-1 && r===''));
+
+  pastedRows.forEach((rowText, r)=>{
+    const cells = rowText.split('\t');
+    const targetRow = rowIdx + r;
+    while(arr.length <= targetRow) arr.push(blankFn());
+    cells.forEach((val, c)=>{
+      const targetField = fieldOrder[colStart + c];
+      if(!targetField) return;
+      arr[targetRow][targetField] = normalizeForField(targetField, val.trim());
+    });
+    if(arr===disks && arr[targetRow].raid!=='10') arr[targetRow].numdisks='';
+    if(grid==='servers1') ensureFqdn(arr[targetRow]);
+  });
+  renderFn();
+}
+
+function normalizeForField(field, val){
+  const v = val.toLowerCase().trim();
+  if(field==='hw'){ if(v.includes('cisco')) return 'Cisco'; if(v.includes('dell')) return 'Dell'; return val; }
+  if(field==='dc'){ const m = DC_OPTIONS.find(o=>o.toLowerCase()===v); return m || val; }
+  if(field==='env'){ const m = ENV_OPTIONS.find(o=>o.toLowerCase()===v); return m || val; }
+  if(field==='osver'){ const m = v.replace('rhel','').trim(); return OS_OPTIONS.includes(m) ? m : val; }
+  if(field==='boot'){ if(v.startsWith('u')) return 'UEFI'; if(v.startsWith('l')) return 'Legacy'; return val; }
+  if(field==='lacp' || field==='lvm'){ return v.startsWith('y') ? 'Yes' : (v.startsWith('n') ? 'No' : val); }
+  if(field==='raid'){ if(v.includes('10')) return '10'; if(v==='0') return '0'; if(v==='1') return '1'; return val; }
+  if(field==='type'){ if(v.includes('nvme')) return 'NVME'; if(v.includes('hdd')) return 'HDD'; if(v.includes('ssd')) return 'SSD'; return val; }
+  return val;
+}
+
+// =================================================================
+// Enter-to-move-down navigation
+// =================================================================
+function handleGridKeydown(e){
+  if(e.key !== 'Enter') return;
+  e.preventDefault();
+  const el = e.target;
+  const grid = el.dataset.grid, field = el.dataset.field;
+  const rowIdx = parseInt(el.dataset.row,10);
+  const nextRow = rowIdx+1;
+  if(grid==='servers1' || grid==='servers2'){ if(nextRow >= servers.length) addServerRows(1); }
+  else if(grid==='disks'){ if(nextRow >= disks.length) addDiskRows(1); }
+  setTimeout(()=>{
+    const next = document.querySelector(`[data-grid="${grid}"][data-row="${nextRow}"][data-field="${field}"]`);
+    if(next) next.focus();
+  }, 0);
+}
+
+// =================================================================
+// Datacenter -> Location / CIDevice derivation for PNC_PROVISION_CONFIG
+// =================================================================
+function deriveLocationCiDevice(dc){
+  if(dc && dc.startsWith('East/')) return {location:'East', ciDevice:dc.split('/')[1]};
+  if(dc && dc.startsWith('Central/')) return {location:'Central', ciDevice:dc.split('/')[1]};
+  return {location:'', ciDevice:''};
+}
+
+// =================================================================
+// Mount-line parsing: "/path 250" (or "250GB") per line -> [{mount,size}]
+// =================================================================
+function parseMountLines(text){
+  return (text||'').split('\n').map(l=>l.trim()).filter(Boolean).map(line=>{
+    const m = line.match(/^(\S+)\s+([\d.]+)\s*(GB|MB|G|M)?$/i);
+    if(m) return {mount:m[1], size:m[2]};
+    return {mount:line, size:''};
+  });
+}
+function serializeMountLines(pairs){ return pairs.map(p=>`${p.mount}:${p.size}`).join(','); }
+
+// =================================================================
+// Export
+// =================================================================
+function refreshExport(){
+  document.getElementById('statServers').textContent = servers.length;
+  document.getElementById('statDisks').textContent = disks.length;
+  const combined = buildCombinedRows();
+  document.getElementById('statCsvRows').textContent = combined.length;
+  renderPreview();
+}
+
+const COMBINED_HEADER = ['job_name','hostname','hardware','datacenter','location','ci_device','environment','os_version','boot_mode','lacp','mgmt_address','org_name',
+  'os_disk_gb','root_mb','swap_mb','var_mb','opt_mb','app_mb','home_mb','tmp_mb','optapp_mb','extra_filesystems',
+  'raid_level','disk_type','num_disks_raid10','lvm','mount_layout','size_gb','extra_folders'];
+
+function buildCombinedRows(){
+  const rows = [];
+  servers.forEach(s=>{
+    if(!s.hostname) return;
+    const {location, ciDevice} = deriveLocationCiDevice(s.dc);
+    const extraFs = serializeMountLines(parseMountLines(s.extrafs));
+    const base = [jobName, s.hostname, s.hw, s.dc, location, ciDevice, s.env, s.osver, s.boot, s.lacp, s.mgmt, s.org||'',
+      s.osdisk, s.root, s.swap, s.var, s.opt, s.app, s.home, s.tmp, s.optapp, extraFs];
+    const matches = disks.filter(d=>diskMatchesHost(d, s.hostname));
+    if(!matches.length){ rows.push([...base, '','','','','','','']); }
+    else {
+      matches.forEach(d=>{
+        let mountLayout;
+        if(d.lvm==='Yes'){ mountLayout = serializeMountLines(parseMountLines(d.mountsizes)); }
+        else {
+          const firstMount = (d.mountsizes||'').split('\n')[0].trim().split(/\s+/)[0] || '';
+          mountLayout = firstMount ? `${firstMount}:${d.totalsizegb}` : '';
+        }
+        const folders = (d.extrafolders||'').split('\n').map(x=>x.trim()).filter(Boolean).join(':');
+        rows.push([...base, d.raid, d.type, d.raid==='10'?d.numdisks:'', d.lvm, mountLayout, d.totalsizegb, folders]);
+      });
+    }
+  });
+  return rows;
+}
+function csvEscape(v){
+  v = (v===undefined||v===null) ? '' : String(v);
+  return (v.includes(',') || v.includes('"') || v.includes('\n')) ? '"'+v.replace(/"/g,'""')+'"' : v;
+}
+function toCsv(header, rows){ return [header.join(','), ...rows.map(r=>r.map(csvEscape).join(','))].join('\n'); }
+function combinedCsv(){ return toCsv(COMBINED_HEADER, buildCombinedRows()); }
+function renderPreview(){ document.getElementById('csv-body').textContent = servers.length ? combinedCsv() : '(no servers added yet)'; }
+function downloadFile(filename, content){
+  const blob = new Blob([content], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+function downloadCombined(){ downloadFile(`${jobName||'build'}.csv`, combinedCsv()); }
+
+// =================================================================
+// Import — read a previously exported combined CSV back into the tool
+// =================================================================
+function parseCsv(text){
+  const rows = []; let row = []; let field = ''; let inQuotes = false;
+  for(let i=0;i<text.length;i++){
+    const c = text[i];
+    if(inQuotes){
+      if(c==='"'){ if(text[i+1]==='"'){ field+='"'; i++; } else { inQuotes=false; } } else field += c;
+    } else {
+      if(c==='"'){ inQuotes = true; }
+      else if(c===','){ row.push(field); field=''; }
+      else if(c==='\r'){ }
+      else if(c==='\n'){ row.push(field); rows.push(row); row=[]; field=''; }
+      else field += c;
+    }
+  }
+  if(field.length || row.length){ row.push(field); rows.push(row); }
+  return rows.filter(r => r.length>1 || (r.length===1 && r[0]!==''));
+}
+function deserializeMountLines(str){
+  if(!str) return '';
+  return str.split(',').map(pair=>{
+    const i = pair.indexOf(':');
+    if(i===-1) return pair.trim();
+    const mount = pair.slice(0,i).trim(); const size = pair.slice(i+1).trim();
+    return size ? `${mount} ${size}` : mount;
+  }).filter(Boolean).join('\n');
+}
+function coerce(list, val, fallback){ return list.includes(val) ? val : fallback; }
+
+function handleImportFile(e){
+  const file = e.target.files[0];
+  e.target.value = '';
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = evt => { try{ importCsvText(evt.target.result); } catch(err){ alert('Could not read this CSV: ' + err.message); } };
+  reader.readAsText(file);
+}
+function importCsvText(text){
+  const rows = parseCsv(text);
+  if(!rows.length){ alert('This file appears to be empty.'); return; }
+  const header = rows[0].map(h=>h.trim());
+  const required = ['hostname','hardware','datacenter','environment','os_version','boot_mode'];
+  const missing = required.filter(r=>!header.includes(r));
+  if(missing.length){ alert('This doesn\'t look like a build CSV from this tool — missing columns: ' + missing.join(', ')); return; }
+  if((servers.length || disks.length) && !confirm('This will replace everything currently in Servers, OS Disk, and Additional Disks. Continue?')) return;
+
+  const col = name => header.indexOf(name);
+  const get = (r,name) => { const i = col(name); return i===-1 ? '' : (r[i]||''); };
+
+  const newServers = []; const byHost = {}; const newDisks = []; let importedJobName = '';
+
+  rows.slice(1).forEach(r=>{
+    if(!r.some(c=>c && c.trim())) return;
+    const hostname = get(r,'hostname').trim();
+    if(!hostname) return;
+    if(!importedJobName) importedJobName = get(r,'job_name').trim();
+
+    if(!byHost[hostname]){
+      const s = blankServer();
+      Object.assign(s, {
+        hostname,
+        hw: coerce(HW_OPTIONS, get(r,'hardware'), 'Dell'),
+        dc: coerce(DC_OPTIONS, get(r,'datacenter'), 'GF0'),
+        env: coerce(ENV_OPTIONS, get(r,'environment'), 'QA'),
+        osver: coerce(OS_OPTIONS, get(r,'os_version'), '8.10'),
+        boot: coerce(BOOT_OPTIONS, get(r,'boot_mode'), 'UEFI'),
+        lacp: coerce(YESNO, get(r,'lacp'), 'No'),
+        mgmt: get(r,'mgmt_address'), org: get(r,'org_name'),
+        osdisk: get(r,'os_disk_gb') || '200', root: get(r,'root_mb') || '51200', swap: get(r,'swap_mb') || '8192',
+        var: get(r,'var_mb') || '30720', opt: get(r,'opt_mb') || '10240', app: get(r,'app_mb') || '10240',
+        home: get(r,'home_mb') || '5120', tmp: get(r,'tmp_mb') || '10240', optapp: get(r,'optapp_mb') || '10240',
+        extrafs: deserializeMountLines(get(r,'extra_filesystems')),
+      });
+      byHost[hostname] = s; newServers.push(s);
+    }
+    const raid = get(r,'raid_level'); const mountLayout = get(r,'mount_layout');
+    if(raid || mountLayout){
+      const lvm = coerce(YESNO, get(r,'lvm'), 'Yes');
+      const d = blankDisk();
+      Object.assign(d, {
+        hostnames: [hostname], raid: coerce(RAID_OPTIONS, raid, '0'), type: coerce(TYPE_OPTIONS, get(r,'disk_type'), 'SSD'),
+        numdisks: get(r,'num_disks_raid10'), lvm, totalsizegb: get(r,'size_gb'),
+        mountsizes: lvm==='Yes' ? deserializeMountLines(mountLayout) : (mountLayout.split(':')[0] || ''),
+        extrafolders: (get(r,'extra_folders')||'').split(':').filter(Boolean).join('\n'),
+      });
+      newDisks.push(d);
+    }
+  });
+
+  servers = newServers; disks = newDisks;
+  if(importedJobName){ jobName = importedJobName; document.getElementById('jobName').value = importedJobName; }
+  renderServers(); renderDisks();
+  document.querySelectorAll('nav.steps button').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.querySelector('nav.steps button[data-view="servers"]').classList.add('active');
+  document.getElementById('view-servers').classList.add('active');
+  alert(`Imported ${newServers.length} server row(s) and ${newDisks.length} additional disk row(s).`);
+}
+
+// =================================================================
+// lsblk-style disk layout preview
+// =================================================================
+const NAMEW = 34, SIZEW = 8, TYPEW = 6;
+function pad(str,len){ str=String(str); return str.length>=len ? str+' ' : str + ' '.repeat(len-str.length); }
+function mbToG(mb){ const g = Number(mb)/1024; return (Number.isInteger(g) ? g : Math.round(g*10)/10) + 'G'; }
+function shortLvName(mount){
+  if(mount==='/') return 'lvroot';
+  if((mount||'').toLowerCase()==='swap') return 'lvswap';
+  const segs = (mount||'').split('/').filter(Boolean);
+  const joined = segs.join('').replace(/[^a-zA-Z0-9]/g,'').toLowerCase();
+  return 'lv'+(joined||'data');
+}
+function buildLsblkPreview(s){
+  const lines = [];
+  lines.push(pad('NAME',NAMEW)+pad('SIZE',SIZEW)+pad('TYPE',TYPEW)+'MOUNTPOINT');
+  const osdiskG = Number(s.osdisk)||0;
+  const isUEFI = s.boot==='UEFI';
+  const bootG = 2, efiG = isUEFI?2:0;
+  const rootvgG = Math.max(osdiskG - bootG - efiG - TOOLSVG_PART_GB, 0);
+  lines.push(pad('sda',NAMEW)+pad(osdiskG+'G',SIZEW)+pad('disk',TYPEW));
+  let p=1;
+  if(isUEFI){ lines.push(pad('├─sda'+p,NAMEW)+pad(efiG+'G',SIZEW)+pad('part',TYPEW)+'/boot/efi'); p++; }
+  lines.push(pad('├─sda'+p,NAMEW)+pad(bootG+'G',SIZEW)+pad('part',TYPEW)+'/boot'); p++;
+  lines.push(pad('├─sda'+p,NAMEW)+pad(rootvgG+'G',SIZEW)+pad('part',TYPEW)); p++;
+
+  const rootvgFs = [
+    {mount:'/', size:s.root}, {mount:'swap', size:s.swap}, {mount:'/var', size:s.var}, {mount:'/opt', size:s.opt},
+    {mount:'/app', size:s.app}, {mount:'/home', size:s.home}, {mount:'/tmp', size:s.tmp}, {mount:'/opt/app', size:s.optapp},
+  ];
+  const extraFs = parseMountLines(s.extrafs).map(x=>({mount:x.mount, size:x.size, isExtra:true}));
+  let rootvgAll = rootvgFs.concat(extraFs);
+  if(s.osver==='9.8'){ rootvgAll = rootvgAll.concat(RHEL9_ROOTVG_EXTRA.map(e=>({mount:e.mount, size:e.sizeMB}))); }
+  rootvgAll.forEach((f,i)=>{
+    const branch = i===rootvgAll.length-1 ? '│  └─' : '│  ├─';
+    const lvname = 'rootvg-'+shortLvName(f.mount);
+    const mountLabel = (f.mount||'').toLowerCase()==='swap' ? '[SWAP]' : f.mount;
+    const note = f.isExtra ? '  (extra filesystem)' : '';
+    lines.push(pad(branch+lvname,NAMEW)+pad(mbToG(f.size),SIZEW)+pad('lvm',TYPEW)+mountLabel+note);
+  });
+
+  lines.push(pad('└─sda'+p,NAMEW)+pad(TOOLSVG_PART_GB+'G',SIZEW)+pad('part',TYPEW));
+  TOOLSVG_LVS.forEach((f,i)=>{
+    const branch = i===TOOLSVG_LVS.length-1 ? '   └─' : '   ├─';
+    lines.push(pad(branch+'toolsvg-'+f.lv,NAMEW)+pad(mbToG(f.sizeMB),SIZEW)+pad('lvm',TYPEW)+f.mount);
+  });
+
+  const myDisks = disks.filter(d=>diskMatchesHost(d, s.hostname));
+  if(myDisks.length){
+    lines.push('');
+    let nvmeIdx=0, appvgIdx=0;
+    myDisks.forEach((d,i)=>{
+      const isNvme = d.type==='NVME';
+      const dev = isNvme ? 'nvme'+(nvmeIdx++)+'n1' : 'sd'+String.fromCharCode(98+i);
+      const partName = isNvme ? dev+'p1' : dev+'1';
+      const totalG = (Number(d.totalsizegb)||0)+'G';
+      lines.push(pad(dev,NAMEW)+pad(totalG,SIZEW)+pad('disk',TYPEW));
+      if(d.lvm==='Yes'){
+        appvgIdx++; const vg = 'appvg'+appvgIdx;
+        lines.push(pad('└─'+partName,NAMEW)+pad(totalG,SIZEW)+pad('part',TYPEW));
+        const pairs = parseMountLines(d.mountsizes);
+        const rows = pairs.length ? pairs : [{mount:(d.mountsizes||'/data').trim(), size:d.totalsizegb}];
+        rows.forEach((row,j)=>{
+          const branch = j===rows.length-1 ? '   └─' : '   ├─';
+          const lvname = vg+'-'+shortLvName(row.mount);
+          lines.push(pad(branch+lvname,NAMEW)+pad((row.size||'?')+'G',SIZEW)+pad('lvm',TYPEW)+row.mount);
+        });
+        const folders = (d.extrafolders||'').split('\n').map(x=>x.trim()).filter(Boolean);
+        if(folders.length){
+          lines.push('        # additional folders created under '+(rows[0]?rows[0].mount:'above')+':');
+          folders.forEach(f=>lines.push('        #   '+f));
+        }
+      } else {
+        const mountOnly = (d.mountsizes||'').split('\n')[0].trim().split(/\s+/)[0] || '/data';
+        lines.push(pad('└─'+partName,NAMEW)+pad(totalG,SIZEW)+pad('part',TYPEW)+mountOnly);
+      }
+    });
+  }
+  return lines.join('\n');
+}
+function openLsblkModal(){
+  const sel = document.getElementById('lsblkServerSelect');
+  const withHost = servers.filter(s=>s.hostname);
+  sel.innerHTML = withHost.length ? withHost.map(s=>`<option value="${s.hostname}">${s.hostname}</option>`).join('') : '<option value="">— no servers with a hostname yet —</option>';
+  document.getElementById('lsblkModal').style.display='flex';
+  renderLsblkPreview();
+}
+function closeLsblkModal(){ document.getElementById('lsblkModal').style.display='none'; }
+function renderLsblkPreview(){
+  const host = document.getElementById('lsblkServerSelect').value;
+  const s = servers.find(x=>x.hostname===host);
+  document.getElementById('lsblkOutput').textContent = s ? buildLsblkPreview(s) : '(no server selected)';
+}
+
+// =================================================================
+// Sample data
+// =================================================================
+function loadSampleData(){
+  const s1 = blankServer(); Object.assign(s1, {hostname:'lbdp2bw0095.qa.pncint.net', hw:'Dell', dc:'East/DCE1', env:'QA', osver:'8.10', boot:'UEFI', lacp:'No', mgmt:'lbdp2bw0095-rm.qa.pncint.net', org:'', osdisk:'894', extrafs:'/opt/cloudera 51200\n/opt/teradata 20480'});
+  const s2 = blankServer(); Object.assign(s2, {hostname:'lbdp2bw0096.qa.pncint.net', hw:'Dell', dc:'East/DCE1', env:'QA', osver:'8.10', boot:'Legacy', lacp:'No', mgmt:'lbdp2bw0096-rm.qa.pncint.net', org:'', osdisk:'894', extrafs:'/opt/cloudera 51200\n/opt/teradata 20480'});
+  const s3 = blankServer(); Object.assign(s3, {hostname:'lbdp3qcbd.prod.pncint.net', hw:'Dell', dc:'Central/DCC2', env:'Prod', osver:'9.8', boot:'UEFI', lacp:'Yes', mgmt:'lbdp3qcbd-rm.prod.pncint.net'});
+  const s4 = blankServer(); Object.assign(s4, {hostname:'lbdpc240m5.qa.pncint.net', hw:'Cisco', dc:'GF0', env:'QA', osver:'8.8', boot:'UEFI', lacp:'No', mgmt:'10.83.180.20', org:'PNC-BDP'});
+  servers = [s1,s2,s3,s4];
+
+  const d1 = blankDisk(); Object.assign(d1, {hostnames:['lbdp3qcbd.prod.pncint.net'], raid:'1', type:'SSD', lvm:'Yes', mountsizes:'/var/lib/hadoop-ozone/db 250', totalsizegb:'250', extrafolders:'/var/lib/hadoop-ozone/db/om/data\n/var/lib/hadoop-ozone/db/scm/data\n/var/lib/hadoop-ozone/db/recon/data'});
+  const d2 = blankDisk(); Object.assign(d2, {hostnames:['lbdp3qcbd.prod.pncint.net'], raid:'0', type:'HDD', lvm:'No', mountsizes:'/data01', totalsizegb:'1117'});
+  const d3 = blankDisk(); Object.assign(d3, {hostnames:['lbdp3qcbd.prod.pncint.net'], raid:'10', type:'SSD', numdisks:'8', lvm:'Yes',
+    mountsizes:'/mysql 250\n/mysql/audit 50\n/mysql/backup 750\n/mysql/logs 25\n/mysql/restore 250\n/mysql/tmp 25', totalsizegb:'14000'});
+  disks = [d1,d2,d3];
+
+  renderServers();
+  renderDisks();
+}
+loadSampleData();
+</script>
+</body>
+</html>
