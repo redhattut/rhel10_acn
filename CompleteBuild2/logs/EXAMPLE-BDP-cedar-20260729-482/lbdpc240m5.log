@@ -1,0 +1,24 @@
+[2026-07-30 09:00:01] [STEP] [lbdpc240m5] === Starting build for lbdpc240m5.qa.pncint.net (job EXAMPLE-BDP-cedar-20260729-482, hardware Cisco) ===
+[2026-07-30 09:00:01] [INFO] [lbdpc240m5] Resolved lbdpc240m5.qa.pncint.net -> 10.83.180.44 (gateway 10.83.180.1)
+[2026-07-30 09:00:01] [INFO] [lbdpc240m5] Management address: 10.83.180.20 -> 10.83.180.20
+[2026-07-30 09:00:02] [STEP] [lbdpc240m5] Cisco bring-up: lbdpc240m5 in org PNC-BDP via UCSM 10.83.180.20
+[2026-07-30 09:00:04] [INFO] [lbdpc240m5] Kickstart written to /staging/BareMetalBuilds/CompleteBuild2/work/EXAMPLE-BDP-cedar-20260729-482/lbdpc240m5.qa.pncint.net/lbdpc240m5.ks
+[2026-07-30 09:00:04] [STEP] [lbdpc240m5] Checking installer boilerplate for RHEL8 / UEFI on lmrg34ga
+[2026-07-30 09:00:05] [INFO] [lbdpc240m5] Staging TEMPLATE8EFI -> /mnt/installs/kickstart/SERVERS/tmpiso/lbdpc240m5
+[2026-07-30 09:00:09] [INFO] [lbdpc240m5] Copying generated kickstart to lmrg34ga:/mnt/installs/kickstart/SERVERS/tmpiso/lbdpc240m5/lbdpc240m5.qa.pncint.net.ks
+[2026-07-30 09:00:10] [INFO] [lbdpc240m5] Writing EFI/BOOT/grub.cfg (UEFI boot)
+[2026-07-30 09:00:10] [INFO] [lbdpc240m5] Running mkisofs on lmrg34ga
+[2026-07-30 09:00:18] [INFO] [lbdpc240m5] ISO built: lmrg34ga:/mnt/installs/kickstart/SERVERS/tmpiso/lbdpc240m5/build_lbdpc240m5.iso
+[2026-07-30 09:00:18] [INFO] [lbdpc240m5] iDRAC will mount it from: http://10.8.171.50/kickstart/SERVERS/tmpiso/lbdpc240m5/build_lbdpc240m5.iso
+[2026-07-30 09:00:19] [INFO] [lbdpc240m5] Unbinding service profile lbdpc240m5 from its template
+[2026-07-30 09:00:20] [INFO] [lbdpc240m5] Creating vmedia policy for lbdpc240m5
+[2026-07-30 09:00:24] [INFO] [lbdpc240m5] Mounting vmedia policy onto service profile
+[2026-07-30 09:00:25] [INFO] [lbdpc240m5] Hard-reset-immediate on blade slot 1/4
+[2026-07-30 09:00:26] [INFO] [lbdpc240m5] Kickstart and hardware bring-up complete for lbdpc240m5.qa.pncint.net. Waiting for OS install.
+[2026-07-30 09:15:26] [INFO] [lbdpc240m5] Waiting for SSH on lbdpc240m5.qa.pncint.net
+[2026-07-30 09:20:57] [INFO] [lbdpc240m5] SSH is up on lbdpc240m5.qa.pncint.net
+[2026-07-30 09:20:57] [STEP] [lbdpc240m5] OS is up on lbdpc240m5.qa.pncint.net — starting post-install configuration
+[2026-07-30 09:20:58] [INFO] [lbdpc240m5] No additional disks configured for lbdpc240m5
+[2026-07-30 09:20:58] [INFO] [lbdpc240m5] Re-binding service profile lbdpc240m5 to template PNC-BDP-C240-M5-BASE
+[2026-07-30 09:20:59] [INFO] [lbdpc240m5] Submitting GOMP registration for lbdpc240m5
+[2026-07-30 09:21:00] [STEP] [lbdpc240m5] === Build complete for lbdpc240m5.qa.pncint.net ===

@@ -1,0 +1,51 @@
+[2026-07-30 09:00:01] [STEP] [lbdp3qcbd] === Starting build for lbdp3qcbd.prod.pncint.net (job EXAMPLE-BDP-cedar-20260729-482, hardware Dell) ===
+[2026-07-30 09:00:01] [INFO] [lbdp3qcbd] Resolved lbdp3qcbd.prod.pncint.net -> 10.36.180.81 (gateway 10.36.180.1)
+[2026-07-30 09:00:02] [INFO] [lbdp3qcbd] Management address: lbdp3qcbd-rm.prod.pncint.net -> 10.36.181.15
+[2026-07-30 09:00:02] [STEP] [lbdp3qcbd] Dell bring-up: lbdp3qcbd.prod.pncint.net via iDRAC 10.36.181.15
+[2026-07-30 09:00:02] [INFO] [lbdp3qcbd] Resetting iDRAC controller
+[2026-07-30 09:10:02] [INFO] [lbdp3qcbd] Waiting for 10.36.181.15 to respond to ping
+[2026-07-30 09:10:32] [INFO] [lbdp3qcbd] 10.36.181.15 is reachable
+[2026-07-30 09:11:32] [INFO] [lbdp3qcbd] Current power status: ON
+[2026-07-30 09:11:33] [INFO] [lbdp3qcbd] Waiting for racadm job JID_881027341102 to complete
+[2026-07-30 09:11:48] [INFO] [lbdp3qcbd] Job JID_881027341102 completed
+[2026-07-30 09:11:48] [INFO] [lbdp3qcbd] Setting CPU frequency policy to PerfOptimized
+[2026-07-30 09:11:49] [INFO] [lbdp3qcbd] No existing virtual disks to remove
+[2026-07-30 09:11:50] [INFO] [lbdp3qcbd] Enumerating physical disks for OS vdisk (target 200GB)
+[2026-07-30 09:11:52] [INFO] [lbdp3qcbd] Creating RAID1 OS_Disk on Disk.Bay.0:Enclosure.Internal.0-1:RAID.Slot.3-1 + Disk.Bay.1:Enclosure.Internal.0-1:RAID.Slot.3-1
+[2026-07-30 09:11:53] [INFO] [lbdp3qcbd] Waiting for racadm job JID_881027341219 to complete
+[2026-07-30 09:12:23] [INFO] [lbdp3qcbd] Job JID_881027341219 completed
+[2026-07-30 09:12:24] [INFO] [lbdp3qcbd] Disabling iDRAC OS to iDRAC Pass-through
+[2026-07-30 09:12:25] [INFO] [lbdp3qcbd] Setting boot mode to UEFI
+[2026-07-30 09:12:26] [INFO] [lbdp3qcbd] Waiting for racadm job JID_881027341340 to complete
+[2026-07-30 09:12:41] [INFO] [lbdp3qcbd] Job JID_881027341340 completed
+[2026-07-30 09:12:42] [INFO] [lbdp3qcbd] Kickstart written to /staging/BareMetalBuilds/CompleteBuild2/work/EXAMPLE-BDP-cedar-20260729-482/lbdp3qcbd.prod.pncint.net/lbdp3qcbd.ks
+[2026-07-30 09:12:42] [STEP] [lbdp3qcbd] Checking installer boilerplate for RHEL9 / UEFI on lmrg34ga
+[2026-07-30 09:12:43] [INFO] [lbdp3qcbd] Staging TEMPLATE9EFI -> /mnt/installs/kickstart/SERVERS/tmpiso/lbdp3qcbd
+[2026-07-30 09:12:47] [INFO] [lbdp3qcbd] Copying generated kickstart to lmrg34ga:/mnt/installs/kickstart/SERVERS/tmpiso/lbdp3qcbd/lbdp3qcbd.prod.pncint.net.ks
+[2026-07-30 09:12:48] [INFO] [lbdp3qcbd] Writing EFI/BOOT/grub.cfg (UEFI boot)
+[2026-07-30 09:12:48] [INFO] [lbdp3qcbd] Running mkisofs on lmrg34ga
+[2026-07-30 09:12:56] [INFO] [lbdp3qcbd] ISO built: lmrg34ga:/mnt/installs/kickstart/SERVERS/tmpiso/lbdp3qcbd/build_lbdp3qcbd.iso
+[2026-07-30 09:12:56] [INFO] [lbdp3qcbd] iDRAC will mount it from: http://10.8.171.50/kickstart/SERVERS/tmpiso/lbdp3qcbd/build_lbdp3qcbd.iso
+[2026-07-30 09:12:57] [INFO] [lbdp3qcbd] Mounting install ISO for lbdp3qcbd
+[2026-07-30 09:12:59] [INFO] [lbdp3qcbd] Power-cycling server to begin OS install
+[2026-07-30 09:13:00] [INFO] [lbdp3qcbd] Kickstart and hardware bring-up complete for lbdp3qcbd.prod.pncint.net. Waiting for OS install.
+[2026-07-30 09:28:00] [INFO] [lbdp3qcbd] Waiting for SSH on lbdp3qcbd.prod.pncint.net
+[2026-07-30 09:33:31] [INFO] [lbdp3qcbd] SSH is up on lbdp3qcbd.prod.pncint.net
+[2026-07-30 09:33:31] [STEP] [lbdp3qcbd] OS is up on lbdp3qcbd.prod.pncint.net — starting post-install configuration
+[2026-07-30 09:33:32] [STEP] [lbdp3qcbd] Configuring extra disk row 1: RAID1 SSD 250GB LVM=Yes
+[2026-07-30 09:33:33] [INFO] [lbdp3qcbd] Creating RAID1 on Disk.Bay.2:Enclosure.Internal.0-1:RAID.Slot.3-1
+[2026-07-30 09:33:34] [INFO] [lbdp3qcbd] Waiting for racadm job JID_881027342011 to complete
+[2026-07-30 09:34:04] [INFO] [lbdp3qcbd] Job JID_881027342011 completed
+[2026-07-30 09:34:05] [INFO] [lbdp3qcbd] Configured LVM volume group appvg1 on lbdp3qcbd.prod.pncint.net
+[2026-07-30 09:34:06] [STEP] [lbdp3qcbd] Configuring extra disk row 2: RAID0 HDD 1117GB LVM=No
+[2026-07-30 09:34:06] [INFO] [lbdp3qcbd] Creating RAID0 on Disk.Bay.6:Enclosure.Internal.0-1:RAID.Slot.3-1
+[2026-07-30 09:34:07] [INFO] [lbdp3qcbd] Waiting for racadm job JID_881027342098 to complete
+[2026-07-30 09:34:37] [INFO] [lbdp3qcbd] Job JID_881027342098 completed
+[2026-07-30 09:34:38] [INFO] [lbdp3qcbd] Configured /data01 (no LVM, whole disk) on lbdp3qcbd.prod.pncint.net
+[2026-07-30 09:34:39] [STEP] [lbdp3qcbd] Configuring extra disk row 3: RAID10 SSD 14000GB LVM=Yes
+[2026-07-30 09:34:40] [INFO] [lbdp3qcbd] Creating RAID10 on Disk.Bay.3:...,Disk.Bay.4:...,Disk.Bay.5:...,Disk.Bay.7:...,Disk.Bay.8:...,Disk.Bay.9:...,Disk.Bay.10:...,Disk.Bay.11:Enclosure.Internal.0-1:RAID.Slot.3-1
+[2026-07-30 09:34:41] [INFO] [lbdp3qcbd] Waiting for racadm job JID_881027342205 to complete
+[2026-07-30 09:36:11] [INFO] [lbdp3qcbd] Job JID_881027342205 completed
+[2026-07-30 09:36:12] [INFO] [lbdp3qcbd] Configured LVM volume group appvg2 on lbdp3qcbd.prod.pncint.net
+[2026-07-30 09:36:13] [INFO] [lbdp3qcbd] Submitting GOMP registration for lbdp3qcbd
+[2026-07-30 09:36:14] [STEP] [lbdp3qcbd] === Build complete for lbdp3qcbd.prod.pncint.net ===
