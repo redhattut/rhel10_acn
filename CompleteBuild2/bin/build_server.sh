@@ -30,12 +30,10 @@ source "${PROJECT_ROOT}/lib/kickstart_gen.sh"
 source "${PROJECT_ROOT}/lib/iso_gen.sh"
 source "${PROJECT_ROOT}/lib/post_install.sh"
 
+check_secrets
+
 [[ -f "${WORK_DIR}/server.env" ]] || die "No server.env found for $HOSTNAME_ARG — did csv_split.py run?"
 source "${WORK_DIR}/server.env"
-
-# Secrets — never in the repo, populated on lmrg34ja by the ops team.
-[[ -f /etc/xsmrgautomat.rootpw.hash ]] && export ROOTPW_HASH="$(cat /etc/xsmrgautomat.rootpw.hash)"
-[[ -f /etc/xsmrgautomat.authorized_keys ]] && export SSH_AUTHORIZED_KEYS="$(cat /etc/xsmrgautomat.authorized_keys)"
 
 log STEP "=== Starting build for $HOSTNAME (job $JOB_NAME, hardware $HARDWARE) ==="
 

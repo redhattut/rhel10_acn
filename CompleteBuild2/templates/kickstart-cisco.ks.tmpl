@@ -47,7 +47,8 @@ exec < /dev/tty3 > /dev/tty3
 
 mkdir -p ~root/.ssh
 cat << 'EOF' >> ~root/.ssh/authorized_keys
-__SSH_AUTHORIZED_KEYS__
+## EDIT ME: add real authorized_keys entries below, one per line, e.g.:
+## from="lean301a.prod.pncint.net,..." ssh-rsa AAAAB3NzaC1yc2E...
 EOF
 chmod 0700 ~root/.ssh
 chmod 0600 ~root/.ssh/authorized_keys

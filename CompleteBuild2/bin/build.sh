@@ -32,6 +32,7 @@ JOB_RESULTS_FILE="${JOB_LOG_DIR}/results.csv"
 HOSTNAME_SHORT="dispatcher"
 
 source "${PROJECT_ROOT}/lib/common.sh"
+check_secrets
 
 [[ -f "$CSV_PATH" ]] || die "CSV not found: $CSV_PATH (expected under csv/incoming/)"
 

@@ -16,6 +16,11 @@
 
 TEMPLATE_DIR="${PROJECT_ROOT}/templates"
 
+# Root password hash for every kickstart this generates. Replace this value
+# directly (e.g. `openssl passwd -6`) — it's a hash, not the plaintext
+# password, so it lives here rather than in a separate secrets file.
+ROOTPW_HASH='$6$REPLACE_ME_WITH_REAL_HASH$xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+
 # Fixed toolsvg volumes — keep in sync with the web tool's TOOLSVG_LVS list.
 TOOLSVG_MOUNTS=(
   "/opt/Tanium:lvopttanium:4096"
@@ -168,7 +173,7 @@ generate_kickstart(){
   # Satellite during the install itself.
   local major; major=$(rhel_major "$OS_VERSION")
   local repo_url="http://10.8.171.50/PNC/distros/RHEL${major}-x86_64/"
-  local rootpw_hash="${ROOTPW_HASH:?ROOTPW_HASH must be set in the environment before generating kickstarts}"
+  local rootpw_hash="$ROOTPW_HASH"
 
   local network_line
   if [[ "$LACP" == "Yes" ]]; then
@@ -192,7 +197,6 @@ generate_kickstart(){
     -e "s#__DOMAIN__#${domain}#g" \
     -e "s#__MAC__#${MAC}#g" \
     -e "s#__MTU__#9000#g" \
-    -e "s#__SSH_AUTHORIZED_KEYS__#${SSH_AUTHORIZED_KEYS:-# add authorized_keys here}#g" \
     "$tmpl_path" > "$out_path"
 
   # Multi-line blocks are inserted with a python-free awk pass since sed

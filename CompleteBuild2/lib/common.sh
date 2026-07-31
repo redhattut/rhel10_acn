@@ -10,9 +10,30 @@
 # Per-server scripts additionally expect HOSTNAME_SHORT to be set.
 # =============================================================================
 
+# =============================================================================
+# Credentials
+#
+# One secret to manage: a plaintext password file for the xsmrgautomat AD
+# account, named .xsmrgautomat, in the project root (same idea as the old
+# scripts' "sshpass -fxsmrgautomat"). Used for iDRAC and UCSM logins, with
+# different domain syntax for each — don't drop the domain suffix on either:
+#   iDRAC: xsmrgautomat@pncbank.com@<idrac-ip>   (AD user@domain form)
+#   UCSM:  ucs-PNCNT\xsmrgautomat@<ucsm-ip>       (Windows DOMAIN\user form)
+#
+# rootpw hash and GOMP's auth header are left where they already are — a
+# hardcoded value in kickstart_gen.sh, and a .headers file the same as
+# before — see those files directly rather than a secrets directory here.
+# =============================================================================
+XSMRGAUTOMAT_PW_FILE="${PROJECT_ROOT}/.xsmrgautomat"
+
 IDRAC_USER="xsmrgautomat"
-IDRAC_JUMP_SUFFIX="pncbank.com"   # racadm calls go through xsmrgautomat@pncbank.com@<idracip>
+IDRAC_AD_DOMAIN="pncbank.com"     # do not drop this
+UCSM_AD_DOMAIN="ucs-PNCNT"        # Windows-style DOMAIN\user, different syntax than iDRAC's
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
+
+check_secrets(){
+  [[ -f "$XSMRGAUTOMAT_PW_FILE" ]] || die "Missing $XSMRGAUTOMAT_PW_FILE — plaintext xsmrgautomat password, mode 400"
+}
 
 # -----------------------------------------------------------------------------
 # Logging
@@ -71,7 +92,7 @@ record_result(){
 # -----------------------------------------------------------------------------
 run_racadm(){
   local idrac_ip="$1"; shift
-  sshpass -f /etc/xsmrgautomat.pw ssh $SSH_OPTS "${IDRAC_USER}@${IDRAC_JUMP_SUFFIX}@${idrac_ip}" "racadm $*" 2>/dev/null
+  sshpass -f "$XSMRGAUTOMAT_PW_FILE" ssh $SSH_OPTS "${IDRAC_USER}@${IDRAC_AD_DOMAIN}@${idrac_ip}" "racadm $*" 2>/dev/null
 }
 
 # -----------------------------------------------------------------------------
@@ -80,7 +101,7 @@ run_racadm(){
 # -----------------------------------------------------------------------------
 run_ucsm(){
   local ucsm_ip="$1"; shift
-  sshpass -f /etc/xsmrgautomat.pw ssh $SSH_OPTS "ucs-PNCNT\\\\${IDRAC_USER}@${ucsm_ip}" "$*" 2>/dev/null
+  sshpass -f "$XSMRGAUTOMAT_PW_FILE" ssh $SSH_OPTS "${UCSM_AD_DOMAIN}\\\\${IDRAC_USER}@${ucsm_ip}" "$*" 2>/dev/null
 }
 
 # -----------------------------------------------------------------------------

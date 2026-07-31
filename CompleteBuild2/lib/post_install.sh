@@ -220,7 +220,7 @@ gomp_submit(){
 EOF
 )
   log INFO "Submitting GOMP registration for $hostname"
-  curl -sk -H "Accept: application/json" -H "Content-Type:application/json" \
+  curl -sk -H "Accept: application/json" -H "Content-Type:application/json" -H "@${PROJECT_ROOT}/.headers" \
     -X POST --data "$json_data" \
     "https://gf-orchestration.pncint.net/PNC.GOMP.Services/api/v1/SOEProvisioning/SubmitUCSD" \
     | python3 -m json.tool >> "${JOB_LOG_DIR}/${hostname}.log" 2>&1
