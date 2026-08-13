@@ -71,13 +71,30 @@ remove_existing_vdisks(){
     log INFO "No existing virtual disks to remove"
     return 0
   fi
-  local raid_id
-  raid_id=$(echo "$vdisk_out" | grep -v Name | head -1 | awk -F: '{print $2}')
-  [[ -z "$raid_id" ]] && return 0
-  log INFO "Removing existing virtual disk $raid_id"
-  run_racadm "$idrac_ip" storage deletevd:"$raid_id" >/dev/null
+
+  # Each vdisk is a block: an ID line (e.g. Disk.Virtual.0:RAID.SL.3-1),
+  # then a "Name = ..." line. deletevd needs the FULL ID line — the
+  # controller suffix alone (RAID.SL.3-1) is not a valid delete target and
+  # silently fails. jobqueue create, separately, DOES want just the
+  # controller suffix. These are two different values; don't conflate them.
+  local vdisk_ids; vdisk_ids=$(echo "$vdisk_out" | grep -v "Name" | grep -v "^$")
+  [[ -z "$vdisk_ids" ]] && { log INFO "No existing virtual disks to remove"; return 0; }
+
+  local raid_id=""
+  while read -r vdisk_id; do
+    [[ -z "$vdisk_id" ]] && continue
+    log INFO "Removing existing virtual disk $vdisk_id"
+    run_racadm "$idrac_ip" storage deletevd:"$vdisk_id" >/dev/null
+    raid_id=$(echo "$vdisk_id" | awk -F: '{print $2}')
+  done <<< "$vdisk_ids"
+
+  [[ -z "$raid_id" ]] && die "Found existing vdisk(s) but could not determine controller ID to commit the delete — check manually before proceeding"
+
   local jid; jid=$(create_racadm_job "$idrac_ip" "$raid_id")
-  [[ -n "$jid" ]] && wait_for_racadm_job "$idrac_ip" "$jid"
+  if [[ -z "$jid" ]]; then
+    die "Job creation failed committing vdisk deletion on $idrac_ip (controller $raid_id) — the delete request was sent but never committed. Do not proceed to create a new OS vdisk until this is resolved; check manually with: racadm storage get vdisks -o -p name"
+  fi
+  wait_for_racadm_job "$idrac_ip" "$jid" || die "Vdisk deletion job $jid never completed on $idrac_ip"
 }
 
 # create_os_vdisk <idrac_ip> <os_disk_size_gb>
@@ -110,10 +127,17 @@ create_os_vdisk(){
   fi
 
   local disk1="${candidates[0]}" disk2="${candidates[1]}"
-  log INFO "Creating RAID1 OS_Disk on $disk1 + $disk2"
-  local out raid_id
-  out=$(run_racadm "$idrac_ip" storage createvd:RAID.Slot.3-1 -rl r1 -pdkey:"$disk1","$disk2" -name OS_Disk)
-  raid_id="RAID.Slot.3-1"
+  # Controller ID lives embedded in the disk FQDD itself (3rd colon field,
+  # e.g. Disk.Bay.0:Enclosure.Internal.0-1:RAID.SL.3-1 -> RAID.SL.3-1).
+  # This MUST be derived dynamically, not hardcoded — controller naming
+  # varies by hardware generation/config (RAID.Slot.3-1 vs RAID.SL.3-1 seen
+  # in practice), and a wrong hardcoded value here fails createvd outright
+  # regardless of whether disk matching succeeded.
+  local raid_id; raid_id=$(echo "$disk1" | awk -F: '{print $3}')
+  [[ -z "$raid_id" ]] && die "Could not determine RAID controller ID from disk FQDD: $disk1"
+  log INFO "Creating RAID1 OS_Disk on $disk1 + $disk2 (controller $raid_id)"
+  local out
+  out=$(run_racadm "$idrac_ip" storage createvd:"$raid_id" -rl r1 -pdkey:"$disk1","$disk2" -name OS_Disk)
   local jid; jid=$(create_racadm_job "$idrac_ip" "$raid_id")
   [[ -z "$jid" ]] && die "Job creation failed creating OS vdisk"
   wait_for_racadm_job "$idrac_ip" "$jid" 60 30 || die "OS vdisk creation job never completed"

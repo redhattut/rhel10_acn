@@ -1,0 +1,23 @@
+cd /staging/BareMetalBuilds/CompleteBuild2
+IDRAC=10.83.233.23
+SSHOPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+# 1) See the REAL vdisk block structure — confirm the full FQDD
+sshpass -f .xsmrgautomat ssh $SSHOPTS xsmrgautomat@pncbank.com@$IDRAC "racadm storage get vdisks -o -p name"
+
+# 2) Fuller detail (state, raid level, layout) for context
+sshpass -f .xsmrgautomat ssh $SSHOPTS xsmrgautomat@pncbank.com@$IDRAC "racadm storage get vdisks"
+
+# 3) Manually delete against the FULL vdisk FQDD from step 1 (not just "RAID.SL.3-1")
+sshpass -f .xsmrgautomat ssh $SSHOPTS xsmrgautomat@pncbank.com@$IDRAC "racadm storage deletevd:<Disk.Virtual.X:RAID.SL.3-1 — paste the real one from step 1>"
+
+# 4) Commit the pending delete on the controller
+sshpass -f .xsmrgautomat ssh $SSHOPTS xsmrgautomat@pncbank.com@$IDRAC "racadm jobqueue create RAID.SL.3-1 -r pwrcycle"
+
+# 5) Poll using the JID printed by step 4
+sshpass -f .xsmrgautomat ssh $SSHOPTS xsmrgautomat@pncbank.com@$IDRAC "racadm jobqueue view -i <JID>"
+
+# 6) Confirm it's actually gone
+sshpass -f .xsmrgautomat ssh $SSHOPTS xsmrgautomat@pncbank.com@$IDRAC "racadm storage get vdisks -o -p name"
+
+sshpass -f .xsmrgautomat ssh $SSHOPTS xsmrgautomat@pncbank.com@$IDRAC "racadm help storage" | grep -i erase
