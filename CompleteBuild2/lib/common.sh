@@ -203,9 +203,11 @@ parse_pdisks(){
 # -----------------------------------------------------------------------------
 wait_for_racadm_job(){
   local idrac_ip="$1" job_id="$2"
-  local max_polls="${3:-40}" sleep_s="${4:-15}"
+  local max_polls="${3:-30}" sleep_s="${4:-60}" initial_delay="${5:-300}"
+  log INFO "Job $job_id created — waiting ${initial_delay}s before first status check (jobs created with -r pwrcycle require an actual server reboot to apply, so checking immediately just wastes calls)"
+  sleep "$initial_delay"
   local n=0
-  log INFO "Waiting for racadm job $job_id to complete"
+  log INFO "Polling racadm job $job_id every ${sleep_s}s"
   while (( n < max_polls )); do
     if run_racadm "$idrac_ip" jobqueue view -i "$job_id" | grep -q "Percent Complete.*\[100\]"; then
       log INFO "Job $job_id completed"
@@ -214,7 +216,7 @@ wait_for_racadm_job(){
     sleep "$sleep_s"
     ((n++))
   done
-  log ERROR "Job $job_id did not complete after $((max_polls*sleep_s))s"
+  log ERROR "Job $job_id did not complete after ${initial_delay}s + $((max_polls*sleep_s))s of polling"
   return 1
 }
 

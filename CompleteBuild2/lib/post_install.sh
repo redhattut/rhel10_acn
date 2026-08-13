@@ -79,7 +79,7 @@ configure_extra_disk_dell(){
   run_racadm "$idrac_ip" storage createvd:"$raid_id" -rl "r${raid}" -pdkey:"$pdkey" -name "extra_${raid}_${size_gb}" >/dev/null
   local jid; jid=$(create_racadm_job "$idrac_ip" "$raid_id")
   [[ -z "$jid" ]] && { log ERROR "Job creation failed for extra disk RAID${raid}"; return 1; }
-  wait_for_racadm_job "$idrac_ip" "$jid" 60 15
+  wait_for_racadm_job "$idrac_ip" "$jid"
 }
 
 # -----------------------------------------------------------------------------

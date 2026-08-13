@@ -95,6 +95,56 @@ remove_existing_vdisks(){
     die "Job creation failed committing vdisk deletion on $idrac_ip (controller $raid_id) — the delete request was sent but never committed. Do not proceed to create a new OS vdisk until this is resolved; check manually with: racadm storage get vdisks -o -p name"
   fi
   wait_for_racadm_job "$idrac_ip" "$jid" || die "Vdisk deletion job $jid never completed on $idrac_ip"
+
+  cryptographic_erase_disks "$idrac_ip"
+}
+
+# -----------------------------------------------------------------------------
+# cryptographic_erase_disks <idrac_ip>
+# Called after an existing vdisk has been removed, for a genuinely clean
+# slate before physical-disk enumeration and RAID recreation — confirmed
+# subcommand name via `racadm help storage | grep -i erase` on real
+# hardware: `cryptographicerase`.
+#
+# NOT FULLY VERIFIED: whether cryptographicerase self-commits (returns its
+# own job ID directly) or needs the same controller-level `jobqueue create`
+# commit that deletevd/createvd need, was not confirmed against real job
+# output. This tries the commit path defensively and warns (rather than
+# failing the whole build) if it can't confirm completion — check the
+# warning message against real output on the next test run and tighten this
+# up once confirmed.
+# -----------------------------------------------------------------------------
+cryptographic_erase_disks(){
+  local idrac_ip="$1"
+  log INFO "Cryptographically erasing physical disks on $idrac_ip for a clean slate"
+  local pdisks; pdisks=$(run_racadm "$idrac_ip" storage get pdisks -o -p mediatype,size)
+  local parsed; parsed=$(echo "$pdisks" | parse_pdisks)
+
+  local disk_id media disk_size raid_id="" erased_any="no"
+  while IFS=$'\t' read -r disk_id media disk_size; do
+    [[ -z "$disk_id" ]] && continue
+    # NVMe excluded — can't be RAID'd through this controller path at all
+    # (same exclusion as everywhere else NVMe is handled in this pipeline).
+    [[ "${media^^}" == "NVME" ]] && continue
+    log INFO "cryptographicerase: $disk_id"
+    run_racadm "$idrac_ip" storage cryptographicerase:"$disk_id" >/dev/null
+    erased_any="yes"
+    [[ -z "$raid_id" ]] && raid_id=$(echo "$disk_id" | awk -F: '{print $3}')
+  done <<< "$parsed"
+
+  if [[ "$erased_any" == "no" ]]; then
+    log INFO "No SSD/HDD physical disks found to erase"
+    return 0
+  fi
+
+  if [[ -n "$raid_id" ]]; then
+    local jid; jid=$(create_racadm_job "$idrac_ip" "$raid_id")
+    if [[ -n "$jid" ]]; then
+      wait_for_racadm_job "$idrac_ip" "$jid" || log WARN "cryptographicerase commit job $jid did not confirm completion — verify manually before trusting the disks are actually erased"
+    else
+      log WARN "cryptographicerase issued but no follow-up commit job could be created — this may be normal (self-committing) or may mean it didn't actually run. Verify manually: racadm storage get pdisks -o -p mediatype,size,securitystate"
+    fi
+  fi
 }
 
 # create_os_vdisk <idrac_ip> <os_disk_size_gb>
@@ -140,7 +190,7 @@ create_os_vdisk(){
   out=$(run_racadm "$idrac_ip" storage createvd:"$raid_id" -rl r1 -pdkey:"$disk1","$disk2" -name OS_Disk)
   local jid; jid=$(create_racadm_job "$idrac_ip" "$raid_id")
   [[ -z "$jid" ]] && die "Job creation failed creating OS vdisk"
-  wait_for_racadm_job "$idrac_ip" "$jid" 60 30 || die "OS vdisk creation job never completed"
+  wait_for_racadm_job "$idrac_ip" "$jid" || die "OS vdisk creation job never completed"
 }
 
 # get_mac <idrac_ip>
