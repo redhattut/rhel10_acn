@@ -72,6 +72,7 @@ if [[ "$HARDWARE" == "Cisco" ]]; then
   ORG="$ORG_NAME"
 
   log STEP "Cisco bring-up: $PROFILE in org $ORG via UCSM $MGMT_IP"
+  require_ucsm_reachable "$MGMT_IP"
   UCSM_TEMPLATE_NAME=$(get_template_name "$MGMT_IP" "$PROFILE" "$ORG")
   MAC=$(get_mac_ucsm "$MGMT_IP" "$PROFILE" "$ORG")
   [[ -z "$MAC" ]] && die "Could not determine MAC address from UCSM"
@@ -89,6 +90,7 @@ if [[ "$HARDWARE" == "Cisco" ]]; then
 else
   NIC="ens0"
   log STEP "Dell bring-up: $HOSTNAME via iDRAC $MGMT_IP"
+  require_idrac_reachable "$MGMT_IP"
   racreset_idrac "$MGMT_IP"
   ensure_power_on "$MGMT_IP"
   set_cpufreq "$MGMT_IP"
