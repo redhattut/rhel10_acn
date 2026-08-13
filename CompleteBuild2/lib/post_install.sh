@@ -29,23 +29,22 @@
 # -----------------------------------------------------------------------------
 find_matching_pdisks_dell(){
   local idrac_ip="$1" disk_type="$2" size_gb="$3" count="$4"
-  local media_filter="HDD"
-  [[ "${disk_type^^}" == "SSD" ]] && media_filter="SSD"
+  local media_filter="${disk_type^^}"
 
   local pdisks; pdisks=$(run_racadm "$idrac_ip" storage get pdisks -o -p mediatype,size)
-  local found=() disk_id disk_size size_up size_down
-  while read -r line; do
-    [[ "$line" =~ $media_filter ]] || continue
-    disk_id=$(echo "$line" | awk -F: '{print $1}')
-    disk_size=$(echo "$line" | grep -oE '[0-9]+' | tail -1)
-    [[ -z "$disk_id" || -z "$disk_size" ]] && continue
+  local parsed; parsed=$(echo "$pdisks" | parse_pdisks)
+
+  local found=() disk_id media disk_size size_up size_down
+  while IFS=$'\t' read -r disk_id media disk_size; do
+    [[ "${media^^}" == "$media_filter" ]] || continue
+    [[ -z "$disk_size" ]] && continue
     size_up=$(( disk_size + disk_size*15/100 ))
     size_down=$(( disk_size - disk_size*15/100 ))
     if (( size_up >= size_gb && size_down <= size_gb )); then
       found+=("$disk_id")
       (( ${#found[@]} >= count )) && break
     fi
-  done <<< "$pdisks"
+  done <<< "$parsed"
   printf '%s\n' "${found[@]}"
 }
 

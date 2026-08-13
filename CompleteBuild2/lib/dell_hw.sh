@@ -31,7 +31,10 @@ ensure_power_on(){
   local idrac_ip="$1"
   local power_status
   power_status=$(run_racadm "$idrac_ip" getsysinfo | grep "Power Status" | awk '{print $NF}')
-  log INFO "Current power status: ${power_status:-unknown}"
+  if [[ -z "$power_status" ]]; then
+    die "Could not parse Power Status from racadm getsysinfo output on $idrac_ip. require_idrac_reachable already confirmed racadm works, so this means the output format wasn't what was expected — check manually before assuming anything about power state (see README iDRAC10 open item)."
+  fi
+  log INFO "Current power status: $power_status"
   if [[ "$power_status" != "ON" ]]; then
     log INFO "Server is off — power cycling and waiting"
     run_racadm "$idrac_ip" serveraction powercycle
@@ -88,20 +91,19 @@ create_os_vdisk(){
 
   log INFO "Enumerating physical disks for OS vdisk (target ${size_gb}GB)"
   local pdisks; pdisks=$(run_racadm "$idrac_ip" storage get pdisks -o -p mediatype,size)
+  local parsed; parsed=$(echo "$pdisks" | parse_pdisks)
 
   local candidates=()
-  local disk_id disk_size size_up size_down
-  while read -r line; do
-    [[ "$line" =~ SSD ]] || continue
-    disk_id=$(echo "$line" | awk -F: '{print $1}')
-    disk_size=$(echo "$line" | grep -oE '[0-9]+' | tail -1)
-    [[ -z "$disk_id" || -z "$disk_size" ]] && continue
+  local disk_id media disk_size size_up size_down
+  while IFS=$'\t' read -r disk_id media disk_size; do
+    [[ "$media" == "SSD" ]] || continue
+    [[ -z "$disk_size" ]] && continue
     size_up=$(( disk_size + disk_size*15/100 ))
     size_down=$(( disk_size - disk_size*15/100 ))
     if (( size_up >= size_gb && size_down <= size_gb )); then
       candidates+=("$disk_id")
     fi
-  done <<< "$pdisks"
+  done <<< "$parsed"
 
   if (( ${#candidates[@]} < 2 )); then
     die "Could not find 2 SSDs matching OS disk size ${size_gb}GB — check physical disk config"

@@ -92,7 +92,15 @@ record_result(){
 # -----------------------------------------------------------------------------
 run_racadm(){
   local idrac_ip="$1"; shift
-  sshpass -f "$XSMRGAUTOMAT_PW_FILE" ssh $SSH_OPTS "${IDRAC_USER}@${IDRAC_AD_DOMAIN}@${idrac_ip}" "racadm $*" 2>/dev/null
+  local errfile out rc
+  errfile=$(mktemp)
+  out=$(sshpass -f "$XSMRGAUTOMAT_PW_FILE" ssh $SSH_OPTS "${IDRAC_USER}@${IDRAC_AD_DOMAIN}@${idrac_ip}" "racadm $*" 2>"$errfile")
+  rc=$?
+  if (( rc != 0 )); then
+    log ERROR "racadm '$*' on $idrac_ip failed (ssh exit $rc): $(cat "$errfile")"
+  fi
+  rm -f "$errfile"
+  echo "$out"
 }
 
 # -----------------------------------------------------------------------------
@@ -101,7 +109,87 @@ run_racadm(){
 # -----------------------------------------------------------------------------
 run_ucsm(){
   local ucsm_ip="$1"; shift
-  sshpass -f "$XSMRGAUTOMAT_PW_FILE" ssh $SSH_OPTS "${UCSM_AD_DOMAIN}\\\\${IDRAC_USER}@${ucsm_ip}" "$*" 2>/dev/null
+  local errfile out rc
+  errfile=$(mktemp)
+  out=$(sshpass -f "$XSMRGAUTOMAT_PW_FILE" ssh $SSH_OPTS "${UCSM_AD_DOMAIN}\\\\${IDRAC_USER}@${ucsm_ip}" "$*" 2>"$errfile")
+  rc=$?
+  if (( rc != 0 )); then
+    log ERROR "UCSM command on $ucsm_ip failed (ssh exit $rc): $(cat "$errfile")"
+  fi
+  rm -f "$errfile"
+  echo "$out"
+}
+
+# -----------------------------------------------------------------------------
+# require_idrac_reachable <idrac_ip>
+# Real pre-flight check — call this BEFORE any hardware bring-up. This is
+# what would have caught the lmrg181a failure immediately instead of 10+
+# minutes into a racreset/power-cycle sequence that silently never happened:
+# every racadm call was failing, but empty output was being read as "server
+# is off" instead of "we never actually reached the iDRAC."
+# -----------------------------------------------------------------------------
+require_idrac_reachable(){
+  local idrac_ip="$1"
+  log INFO "Pre-flight: checking TCP/22 reachability to iDRAC $idrac_ip"
+  if ! timeout 5 bash -c "cat < /dev/null > /dev/tcp/${idrac_ip}/22" 2>/dev/null; then
+    die "iDRAC $idrac_ip is not reachable on TCP/22 from this host. Ping succeeding does NOT mean this will — check the network path/firewall before anything else. Manual test: timeout 5 bash -c 'cat < /dev/null > /dev/tcp/${idrac_ip}/22' && echo OPEN"
+  fi
+  log INFO "Pre-flight: confirming racadm auth against $idrac_ip"
+  local out; out=$(run_racadm "$idrac_ip" getsysinfo)
+  if [[ -z "$out" ]]; then
+    die "racadm getsysinfo returned nothing from $idrac_ip — SSH connected but auth or the racadm call itself failed. Re-run manually to see the real error: sshpass -f ${XSMRGAUTOMAT_PW_FILE} ssh -vvv ${SSH_OPTS} ${IDRAC_USER}@${IDRAC_AD_DOMAIN}@${idrac_ip} \"racadm getsysinfo\""
+  fi
+  log INFO "Pre-flight OK: racadm is working against $idrac_ip"
+}
+
+# -----------------------------------------------------------------------------
+# require_ucsm_reachable <ucsm_ip>
+# Same idea as require_idrac_reachable, for Cisco.
+# -----------------------------------------------------------------------------
+require_ucsm_reachable(){
+  local ucsm_ip="$1"
+  log INFO "Pre-flight: checking TCP/22 reachability to UCSM $ucsm_ip"
+  if ! timeout 5 bash -c "cat < /dev/null > /dev/tcp/${ucsm_ip}/22" 2>/dev/null; then
+    die "UCSM $ucsm_ip is not reachable on TCP/22 from this host. Manual test: timeout 5 bash -c 'cat < /dev/null > /dev/tcp/${ucsm_ip}/22' && echo OPEN"
+  fi
+  log INFO "Pre-flight: confirming UCSM auth against $ucsm_ip"
+  local out; out=$(run_ucsm "$ucsm_ip" "show clock")
+  if [[ -z "$out" ]]; then
+    die "UCSM command returned nothing from $ucsm_ip — SSH connected but auth failed. Re-run manually: sshpass -f ${XSMRGAUTOMAT_PW_FILE} ssh -vvv ${SSH_OPTS} \"${UCSM_AD_DOMAIN}\\\\${IDRAC_USER}@${ucsm_ip}\" \"show clock\""
+  fi
+  log INFO "Pre-flight OK: UCSM auth is working against $ucsm_ip"
+}
+
+# -----------------------------------------------------------------------------
+# parse_pdisks
+# Reads racadm's `storage get pdisks -o -p mediatype,size` output on stdin
+# and emits clean tab-separated "diskid<TAB>mediatype<TAB>size_gb_int" lines.
+#
+# This output is NOT one flat "key: value" line per disk — it's a block per
+# disk, e.g.:
+#   Disk.Bay.0:Enclosure.Internal.0-1:RAID.Slot.3-1
+#       MediaType = SSD
+#       Size = 893.75 GB
+# Treating it as single-line "key: value" pairs (an earlier version of this
+# script did) silently matches nothing — the disk ID itself contains colons
+# (it's a Dell FQDD), and MediaType/Size are on separate lines from the ID
+# entirely. This is what caused "Could not find 2 SSDs matching OS disk size
+# 894GB" against a real iDRAC showing two visible 893.75GB SSDs: it wasn't a
+# rounding/tolerance problem, the parser just never found anything to match
+# in the first place. Size is truncated to an integer GB (matching the
+# original dell_functions' `awk -F. '{print $1}'` behavior) before the
+# +-15% tolerance check that lives at each call site.
+# -----------------------------------------------------------------------------
+parse_pdisks(){
+  awk '
+    /^[^[:space:]]/ && NF>0 { diskid=$0; mediatype=""; next }
+    /MediaType[ \t]*=/ { split($0,a,"="); mediatype=a[2]; gsub(/^[ \t]+|[ \t]+$/,"",mediatype); next }
+    /Size[ \t]*=/ {
+      split($0,a,"="); size=a[2]; gsub(/^[ \t]+|[ \t]+$/,"",size); gsub(/ *GB.*/,"",size)
+      split(size,b,"."); sizeint=b[1]
+      if (diskid != "" && mediatype != "") print diskid "\t" mediatype "\t" sizeint
+    }
+  '
 }
 
 # -----------------------------------------------------------------------------
