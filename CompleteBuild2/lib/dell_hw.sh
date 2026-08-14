@@ -69,7 +69,7 @@ gather_server_info(){
   } > "$raw_file" 2>&1
   log INFO "Raw hardware inventory saved to $raw_file"
 
-  local power; power=$(grep "PowerState" "$raw_file" | awk '{print $NF}' | head -1)
+  local power; power=$(sed -n '/=== getsysinfo/,/=== hwinventory/p' "$raw_file" | grep "Power Status" | awk '{print $NF}' | head -1)
   local domain; domain=$(echo "$HOSTNAME" | cut -d'.' -f2-)
   local mnemonic; mnemonic=$(echo "$HOSTNAME" | head -c4 | tail -c3 | tr '[:lower:]' '[:upper:]')
   local subnet; subnet=$(echo "$IP" | sed 's/\.[0-9]*$/.0/')
@@ -84,9 +84,6 @@ gather_server_info(){
     { p = p $0 ORS }
     END { if (p && f) print p }
   ' | grep -oE '[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}' | sort -u)
-
-  # RAID controller FQDN — best effort, see confidence note above.
-  local raid_ctrl; raid_ctrl=$(sed -n '/=== hwinventory/,/=== storage/p' "$raw_file" | grep -B2 -i "RAIDController" | grep -v -i "RAIDController\|--\|===" | head -1 | awk '{print $1}')
 
   local disk_section; disk_section=$(sed -n '/=== storage get pdisks/,/=== BIOS/p' "$raw_file" | grep -v "===")
   local disk_lines; disk_lines=$(echo "$disk_section" | parse_pdisks_full)
@@ -104,7 +101,6 @@ gather_server_info(){
     printf "%-16s= %s\n" "SUBNET" "$subnet"
     printf "%-16s= %s\n" "iDRAC NAME" "${idrac_name:-unknown}"
     printf "%-16s= %s\n" "iDRAC IP" "$idrac_ip"
-    printf "%-16s= %s\n" "RAID CONTROLLER" "${raid_ctrl:-unknown}"
     printf "%-16s= %s\n" "BIOS MODE" "${bios_mode:-unknown}"
     local i=1
     while read -r mac; do
@@ -114,9 +110,11 @@ gather_server_info(){
     done <<< "$nics"
     printf "%-16s= %s\n" "DISK COUNT" "${disk_count:-0}"
     local d=1
+    local sizestr
     while IFS=$'\t' read -r did media size state; do
       [[ -z "$did" ]] && continue
-      printf "%-16s= %-58s|  TYPE: %-4s|  SIZE: %sG  |  STATUS: %s\n" "DISK-$d" "$did" "$media" "$size" "${state:-unknown}"
+      sizestr="${size}G"
+      printf "%-16s= %-58s|  TYPE: %-5s|  SIZE: %-7s|  STATUS: %s\n" "DISK-$d" "$did" "$media" "$sizestr" "${state:-unknown}"
       ((d++))
     done <<< "$disk_lines"
     echo ""
@@ -130,9 +128,9 @@ gather_server_info(){
 ensure_power_on(){
   local idrac_ip="$1"
   local power_status
-  power_status=$(run_racadm "$idrac_ip" getsysinfo | grep "PowerState" | awk '{print $NF}')
+  power_status=$(run_racadm "$idrac_ip" getsysinfo | grep "Power Status" | awk '{print $NF}')
   if [[ -z "$power_status" ]]; then
-    die "Could not parse PowerState from racadm getsysinfo output on $idrac_ip. require_idrac_reachable already confirmed racadm works, so this means the output format wasn't what was expected — check manually before assuming anything about power state (see README iDRAC10 open item)."
+    die "Could not parse Power Status from racadm getsysinfo output on $idrac_ip. require_idrac_reachable already confirmed racadm works, so this means the output format wasn't what was expected — check manually before assuming anything about power state (see README iDRAC10 open item)."
   fi
   log INFO "Current power status: $power_status"
   if [[ "${power_status^^}" != "ON" ]]; then
