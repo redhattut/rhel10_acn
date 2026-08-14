@@ -178,11 +178,12 @@ else
   gather_server_info "$MGMT_IP"
   racreset_idrac "$MGMT_IP"
   ensure_power_on "$MGMT_IP"
-  set_cpufreq "$MGMT_IP"
+  stage_bios_settings "$MGMT_IP"
+  set_boot_mode "$MGMT_IP" "$BOOT_MODE"
+  commit_bios_settings "$MGMT_IP"
   create_os_vdisk "$MGMT_IP" "$OS_DISK_GB"
   MAC=$(get_mac "$MGMT_IP")
   [[ -z "$MAC" ]] && die "Could not determine MAC address from iDRAC"
-  set_boot_mode "$MGMT_IP" "$BOOT_MODE"
 
   generate_kickstart "$KS_OUT"
   build_boot_iso "$KS_OUT"
