@@ -72,6 +72,21 @@ if (( ${#POSITIONAL[@]} == 1 )); then
   fi
   HOSTNAME_ARG=$(head -1 "$hostlist")
 
+  # CSV mode dispatches to itself in direct mode, backgrounded — same UX as
+  # build.sh: print where to watch, then return control immediately. You
+  # shouldn't have to babysit one server's live output when you're about to
+  # kick off others.
+  dispatch_job_log_dir="${PROJECT_ROOT}/logs/${JOB_NAME}"
+  mkdir -p "$dispatch_job_log_dir"
+  dispatch_extra_args=()
+  (( SKIP_IDRAC_RESET == 1 )) && dispatch_extra_args=(-t)
+  nohup "${PROJECT_ROOT}/bin/build_server.sh" "${dispatch_extra_args[@]}" "$HOSTNAME_ARG" "$JOB_NAME" </dev/null >/dev/null 2>&1 &
+  echo "$! $HOSTNAME_ARG" >> "${dispatch_job_log_dir}/pids.txt"
+  short_name="${HOSTNAME_ARG%%.*}"
+  echo "Dispatched $HOSTNAME_ARG (job $JOB_NAME)."
+  echo "Watch it with: tail -f ${dispatch_job_log_dir}/${short_name}.log"
+  exit 0
+
 elif (( ${#POSITIONAL[@]} == 2 )); then
   # Direct mode — hostname + job name (build.sh's internal dispatch uses this)
   HOSTNAME_ARG="${POSITIONAL[0]}"
