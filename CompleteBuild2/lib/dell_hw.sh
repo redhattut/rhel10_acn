@@ -16,14 +16,13 @@
 # doing anything else against it.
 racreset_idrac(){
   local idrac_ip="$1"
-  log INFO "Resetting iDRAC controller"
-  run_racadm "$idrac_ip" racreset
-  local reset_wait=600
-  if [[ "${SKIP_IDRAC_RESET_WAIT:-0}" == "1" ]]; then
-    log INFO "-t: skipping the normal ${reset_wait}s post-racreset wait"
-    reset_wait=15
+  if [[ "${SKIP_IDRAC_RESET:-0}" == "1" ]]; then
+    log INFO "-t: skipping iDRAC reboot entirely"
+    return 0
   fi
-  sleep "$reset_wait"
+  log INFO "Rebooting iDRAC"
+  run_racadm "$idrac_ip" racreset >/dev/null
+  sleep 600
   ping_wait "$idrac_ip" 30 30
   sleep 60
 }
@@ -70,11 +69,11 @@ gather_server_info(){
   } > "$raw_file" 2>&1
   log INFO "Raw hardware inventory saved to $raw_file"
 
-  local power; power=$(grep "Power Status" "$raw_file" | awk '{print $NF}')
+  local power; power=$(grep "PowerState" "$raw_file" | awk '{print $NF}' | head -1)
   local domain; domain=$(echo "$HOSTNAME" | cut -d'.' -f2-)
   local mnemonic; mnemonic=$(echo "$HOSTNAME" | head -c4 | tail -c3 | tr '[:lower:]' '[:upper:]')
   local subnet; subnet=$(echo "$IP" | sed 's/\.[0-9]*$/.0/')
-  local idrac_name; idrac_name=$(sed -n '/=== iDRAC name/,/=== end/p' "$raw_file" | grep -v "===" | awk -F= '{print $2}' | tr -d ' ')
+  local idrac_name; idrac_name=$(grep "DNSRacName" "$raw_file" | awk '{print $3}' | head -1)
   local bios_mode; bios_mode=$(sed -n '/=== BIOS boot mode/,/=== iDRAC name/p' "$raw_file" | grep -oE '(Uefi|Bios)' | head -1)
 
   # NICs — same hwinventory block shape get_mac() already parses, just
@@ -121,7 +120,7 @@ gather_server_info(){
       ((d++))
     done <<< "$disk_lines"
     echo ""
-  } | while IFS= read -r line; do log INFO "$line"; done
+  } | while IFS= read -r line; do log_raw "$line"; done
 }
 
 # ensure_power_on <idrac_ip>
@@ -131,12 +130,12 @@ gather_server_info(){
 ensure_power_on(){
   local idrac_ip="$1"
   local power_status
-  power_status=$(run_racadm "$idrac_ip" getsysinfo | grep "Power Status" | awk '{print $NF}')
+  power_status=$(run_racadm "$idrac_ip" getsysinfo | grep "PowerState" | awk '{print $NF}')
   if [[ -z "$power_status" ]]; then
-    die "Could not parse Power Status from racadm getsysinfo output on $idrac_ip. require_idrac_reachable already confirmed racadm works, so this means the output format wasn't what was expected — check manually before assuming anything about power state (see README iDRAC10 open item)."
+    die "Could not parse PowerState from racadm getsysinfo output on $idrac_ip. require_idrac_reachable already confirmed racadm works, so this means the output format wasn't what was expected — check manually before assuming anything about power state (see README iDRAC10 open item)."
   fi
   log INFO "Current power status: $power_status"
-  if [[ "$power_status" != "ON" ]]; then
+  if [[ "${power_status^^}" != "ON" ]]; then
     log INFO "Server is off — power cycling and waiting"
     run_racadm "$idrac_ip" serveraction powercycle
     sleep 300

@@ -49,7 +49,24 @@ log(){
   local msg="$*"
   local ts; ts=$(date '+%Y-%m-%d %H:%M:%S')
   local host="${HOSTNAME_SHORT:-job}"
-  echo "[$ts] [$level] [$host] $msg"
+  local line="[$ts] [$level] [$host] $msg"
+  echo "$line"
+  if [[ -n "$JOB_LOG_DIR" ]]; then
+    mkdir -p "$JOB_LOG_DIR"
+    echo "$line" >> "${JOB_LOG_DIR}/${host}.log"
+  fi
+}
+
+# log_raw — same destination as log(), no [timestamp][LEVEL][host] prefix.
+# Used for content that needs to stay aligned as a table (the SERVER
+# INFORMATION block) — the prefix was pushing lines past narrow-screen width.
+log_raw(){
+  local msg="$*"
+  echo "$msg"
+  if [[ -n "$JOB_LOG_DIR" ]]; then
+    mkdir -p "$JOB_LOG_DIR"
+    echo "$msg" >> "${JOB_LOG_DIR}/${HOSTNAME_SHORT:-job}.log"
+  fi
 }
 
 die(){
