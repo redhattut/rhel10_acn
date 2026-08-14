@@ -188,29 +188,53 @@ generate_kickstart(){
   [[ "$HARDWARE" != "Cisco" ]] && boot_partitions=$(build_boot_partitions "$BOOT_MODE" "$OS_DISK_GB")
   local provision_block; provision_block=$(build_pnc_provision_config_block "$HOSTNAME" "$IP" "$GATEWAY" "$LOCATION" "$CI_DEVICE")
 
-  sed \
-    -e "s#__HOSTNAME__#${HOSTNAME}#g" \
-    -e "s#__REPO_URL__#${repo_url}#g" \
-    -e "s#__ROOTPW_HASH__#${rootpw_hash}#g" \
-    -e "s#__NETWORK_LINE__#${network_line}#g" \
-    -e "s#__IP__#${IP}#g" \
-    -e "s#__GATEWAY__#${GATEWAY}#g" \
-    -e "s#__DOMAIN__#${domain}#g" \
-    -e "s#__MAC__#${MAC}#g" \
-    -e "s#__MTU__#9000#g" \
-    "$tmpl_path" > "$out_path"
-
-  # Multi-line blocks are inserted with a python-free awk pass since sed
-  # can't cleanly substitute newlines-in-replacement across all seds.
-  awk -v boot="$boot_partitions" -v logvol="$logvol_block" -v prov="$provision_block" '
-    { line=$0
+  # Single-pass substitution — one tool, one point of failure. This used to
+  # be sed for simple tokens + a second, separate awk pass for the
+  # multi-line blocks (partition layout, LVM volumes, PNC provisioning
+  # config — genuinely need awk's gsub for multi-line replacement text,
+  # sed struggles with that reliably). But splitting it into two stages
+  # doubled the places this could silently break, and neither stage
+  # captured its own error output — so when it broke on a real test run,
+  # the only visible symptom was "empty file," with no way to tell which
+  # stage failed or why. Consolidating to one awk pass with stderr actually
+  # captured fixes both problems at once.
+  local awk_err; awk_err=$(mktemp)
+  awk \
+    -v hostname="$HOSTNAME" \
+    -v repo_url="$repo_url" \
+    -v rootpw_hash="$rootpw_hash" \
+    -v network_line="$network_line" \
+    -v ip="$IP" \
+    -v gateway="$GATEWAY" \
+    -v domain="$domain" \
+    -v mac="$MAC" \
+    -v boot="$boot_partitions" \
+    -v logvol="$logvol_block" \
+    -v prov="$provision_block" '
+    {
+      line = $0
+      gsub(/__HOSTNAME__/, hostname, line)
+      gsub(/__REPO_URL__/, repo_url, line)
+      gsub(/__ROOTPW_HASH__/, rootpw_hash, line)
+      gsub(/__NETWORK_LINE__/, network_line, line)
+      gsub(/__IP__/, ip, line)
+      gsub(/__GATEWAY__/, gateway, line)
+      gsub(/__DOMAIN__/, domain, line)
+      gsub(/__MAC__/, mac, line)
+      gsub(/__MTU__/, "9000", line)
       gsub(/__BOOT_PARTITIONS__/, boot, line)
       gsub(/__LOGVOL_BLOCK__/, logvol, line)
       gsub(/__PNC_PROVISION_CONFIG_BLOCK__/, prov, line)
       print line
-    }' "$out_path" > "${out_path}.tmp" && mv "${out_path}.tmp" "$out_path"
+    }' "$tmpl_path" > "$out_path" 2>"$awk_err"
+  local awk_rc=$?
 
-  [[ -s "$out_path" ]] || die "Generated kickstart is empty: $out_path — sed/awk pipeline produced no output despite template existing, check $tmpl_path manually"
+  if (( awk_rc != 0 )); then
+    die "awk failed generating kickstart from $tmpl_path (exit $awk_rc): $(cat "$awk_err")"
+  fi
+  rm -f "$awk_err"
+
+  [[ -s "$out_path" ]] || die "Generated kickstart is empty: $out_path — awk exited 0 with no error but produced no output. Template is $(wc -l < "$tmpl_path") lines at $tmpl_path — check it and the substitution values (HOSTNAME=$HOSTNAME, IP=$IP) manually."
 
   log INFO "Kickstart written to $out_path"
 }
