@@ -21,3 +21,27 @@ sshpass -f .xsmrgautomat ssh $SSHOPTS xsmrgautomat@pncbank.com@$IDRAC "racadm jo
 sshpass -f .xsmrgautomat ssh $SSHOPTS xsmrgautomat@pncbank.com@$IDRAC "racadm storage get vdisks -o -p name"
 
 sshpass -f .xsmrgautomat ssh $SSHOPTS xsmrgautomat@pncbank.com@$IDRAC "racadm help storage" | grep -i erase
+
+
+--------
+
+cd /staging/BareMetalBuilds/CompleteBuild2
+IDRAC=10.83.233.23
+HOST=lmrg181a
+SSHOPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
+
+# 1) Check current virtual media state first
+sshpass -f .xsmrgautomat ssh $SSHOPTS xsmrgautomat@pncbank.com@$IDRAC "racadm remoteimage -s"
+
+# 2) If step 1 shows something already mounted/enabled, disconnect it first
+sshpass -f .xsmrgautomat ssh $SSHOPTS xsmrgautomat@pncbank.com@$IDRAC "racadm remoteimage -d"
+
+# 3) Mount the ISO — this is the actual mount command
+sshpass -f .xsmrgautomat ssh $SSHOPTS xsmrgautomat@pncbank.com@$IDRAC "racadm remoteimage -c -l http://100.64.1.101/kickstart/SERVERS/tmpiso/${HOST}/build_${HOST}.iso"
+
+# 4) Set boot-once and first boot device to virtual CD/DVD
+sshpass -f .xsmrgautomat ssh $SSHOPTS xsmrgautomat@pncbank.com@$IDRAC "racadm set iDRAC.VirtualMedia.BootOnce 1"
+sshpass -f .xsmrgautomat ssh $SSHOPTS xsmrgautomat@pncbank.com@$IDRAC "racadm set iDRAC.ServerBoot.FirstBootDevice VCD-DVD"
+
+# 5) Confirm it actually shows connected/mounted before power-cycling
+sshpass -f .xsmrgautomat ssh $SSHOPTS xsmrgautomat@pncbank.com@$IDRAC "racadm remoteimage -s"
