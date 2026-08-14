@@ -122,9 +122,9 @@ gather_server_info(){
 }
 
 # ensure_power_on <idrac_ip>
-# Powers the server on if it's currently off; restarts it if it's already on
-# (mirrors the old get_ready behavior of always recycling power before a
-# fresh build, since Lifecycle Controller state can otherwise interfere).
+# Powers the server on if it's currently off. No BIOS staging/commit here —
+# see stage_bios_settings()/commit_bios_settings() below. Kept separate on
+# purpose: power state is a precondition to check, not a setting to stage.
 ensure_power_on(){
   local idrac_ip="$1"
   local power_status
@@ -138,27 +138,48 @@ ensure_power_on(){
     run_racadm "$idrac_ip" serveraction powercycle
     sleep 300
   fi
-  run_racadm "$idrac_ip" set bios.MiscSettings.ErrPrompt Disabled >/dev/null
-  local jid; jid=$(create_racadm_job "$idrac_ip" "BIOS.Setup.1-1")
-  [[ -z "$jid" ]] && die "Job creation failed enabling BIOS settings"
-  wait_for_racadm_job "$idrac_ip" "$jid" || die "BIOS settings job never completed"
 }
 
-# set_cpufreq <idrac_ip>
-set_cpufreq(){
+# stage_bios_settings <idrac_ip>
+# Stages (does NOT commit) the one-off BIOS attribute changes this pipeline
+# always wants: disabling the F1/F2 error prompt, and CPU frequency policy.
+#
+# FIX: the previous version of this pipeline had set_cpufreq() issue its
+# `racadm set` and stop there — no job, no commit. It never actually took
+# effect on its own; it only "worked" if some unrelated later BIOS.Setup
+# job happened to also commit whatever was still pending. Staging it here
+# alongside the error-prompt setting, with an explicit commit_bios_settings()
+# call, makes it actually apply, deliberately, instead of by accident.
+stage_bios_settings(){
   local idrac_ip="$1"
-  log INFO "Setting CPU frequency policy to PerfOptimized"
+  log INFO "Staging BIOS setting: error prompt disabled"
+  run_racadm "$idrac_ip" set bios.MiscSettings.ErrPrompt Disabled >/dev/null
+  log INFO "Staging BIOS setting: CPU frequency policy PerfOptimized"
   run_racadm "$idrac_ip" set BIOS.SysProfileSettings.sysProfile PerfOptimized >/dev/null
 }
 
 # set_boot_mode <idrac_ip> <UEFI|Legacy>
+# Stages the boot mode change — does NOT commit. Call commit_bios_settings()
+# afterward to apply this along with whatever else was staged.
 set_boot_mode(){
   local idrac_ip="$1" mode="$2"
-  log INFO "Setting boot mode to $mode"
+  log INFO "Staging BIOS setting: boot mode $mode"
   run_racadm "$idrac_ip" set BIOS.BiosBootSettings.BootMode "$mode" >/dev/null
+}
+
+# commit_bios_settings <idrac_ip>
+# Commits every BIOS.Setup attribute staged above in ONE reboot, instead of
+# a separate reboot per setting. All three (error prompt, CPU frequency,
+# boot mode) are the same job type (BIOS.Setup.1-1) with no dependency on
+# each other, so there's no reason they need three separate reboots —
+# unlike the storage operations below, which genuinely do need to stay
+# sequential (each one is a precondition for the next).
+commit_bios_settings(){
+  local idrac_ip="$1"
   local jid; jid=$(create_racadm_job "$idrac_ip" "BIOS.Setup.1-1")
-  [[ -z "$jid" ]] && die "Job creation failed setting boot mode"
-  wait_for_racadm_job "$idrac_ip" "$jid" || die "Boot mode job never completed"
+  [[ -z "$jid" ]] && die "Job creation failed committing BIOS settings"
+  wait_for_racadm_job "$idrac_ip" "$jid" "Committing BIOS settings (error prompt, CPU frequency, boot mode)" \
+    || die "BIOS settings job never completed"
 }
 
 # remove_existing_vdisks <idrac_ip>
@@ -192,7 +213,7 @@ remove_existing_vdisks(){
   if [[ -z "$jid" ]]; then
     die "Job creation failed committing vdisk deletion on $idrac_ip (controller $raid_id) — the delete request was sent but never committed. Do not proceed to create a new OS vdisk until this is resolved; check manually with: racadm storage get vdisks -o -p name"
   fi
-  wait_for_racadm_job "$idrac_ip" "$jid" || die "Vdisk deletion job $jid never completed on $idrac_ip"
+  wait_for_racadm_job "$idrac_ip" "$jid" "Removing existing virtual disk" || die "Vdisk deletion job $jid never completed on $idrac_ip"
 
   cryptographic_erase_disks "$idrac_ip"
 }
@@ -238,7 +259,7 @@ cryptographic_erase_disks(){
   if [[ -n "$raid_id" ]]; then
     local jid; jid=$(create_racadm_job "$idrac_ip" "$raid_id")
     if [[ -n "$jid" ]]; then
-      wait_for_racadm_job "$idrac_ip" "$jid" || log WARN "cryptographicerase commit job $jid did not confirm completion — verify manually before trusting the disks are actually erased"
+      wait_for_racadm_job "$idrac_ip" "$jid" "Cryptographic erase commit" || log WARN "cryptographicerase commit job $jid did not confirm completion — verify manually before trusting the disks are actually erased"
     else
       log WARN "cryptographicerase issued but no follow-up commit job could be created — this may be normal (self-committing) or may mean it didn't actually run. Verify manually: racadm storage get pdisks -o -p mediatype,size,securitystate"
     fi
@@ -288,7 +309,7 @@ create_os_vdisk(){
   out=$(run_racadm "$idrac_ip" storage createvd:"$raid_id" -rl r1 -pdkey:"$disk1","$disk2" -name OS_Disk)
   local jid; jid=$(create_racadm_job "$idrac_ip" "$raid_id")
   [[ -z "$jid" ]] && die "Job creation failed creating OS vdisk"
-  wait_for_racadm_job "$idrac_ip" "$jid" || die "OS vdisk creation job never completed"
+  wait_for_racadm_job "$idrac_ip" "$jid" "Creating OS vdisk" || die "OS vdisk creation job never completed"
 }
 
 # get_mac <idrac_ip>

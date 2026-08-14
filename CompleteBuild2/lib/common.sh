@@ -229,21 +229,19 @@ parse_pdisks_full(){
 # iDRAC10 silently never completed).
 # -----------------------------------------------------------------------------
 wait_for_racadm_job(){
-  local idrac_ip="$1" job_id="$2"
-  local max_polls="${3:-30}" sleep_s="${4:-60}" initial_delay="${5:-300}"
-  log INFO "Job $job_id created — waiting ${initial_delay}s before first status check"
-  sleep "$initial_delay"
+  local idrac_ip="$1" job_id="$2" description="${3:-Job}"
+  local max_polls="${4:-35}" sleep_s="${5:-60}"
+  log INFO "$description — $job_id created, waiting for completion (polling every ${sleep_s}s)"
   local n=0
-  log INFO "Polling racadm job $job_id every ${sleep_s}s"
   while (( n < max_polls )); do
+    sleep "$sleep_s"
     if run_racadm "$idrac_ip" jobqueue view -i "$job_id" | grep -q "Percent Complete.*\[100\]"; then
-      log INFO "Job $job_id completed"
+      log INFO "$description — $job_id completed"
       return 0
     fi
-    sleep "$sleep_s"
     ((n++))
   done
-  log ERROR "Job $job_id did not complete after ${initial_delay}s + $((max_polls*sleep_s))s of polling"
+  log ERROR "$description — $job_id did not complete after $((max_polls*sleep_s))s of polling"
   return 1
 }
 
