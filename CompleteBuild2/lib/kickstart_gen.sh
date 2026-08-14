@@ -16,11 +16,6 @@
 
 TEMPLATE_DIR="${PROJECT_ROOT}/templates"
 
-# Root password hash for every kickstart this generates. Replace this value
-# directly (e.g. `openssl passwd -6`) — it's a hash, not the plaintext
-# password, so it lives here rather than in a separate secrets file.
-ROOTPW_HASH='$6$y5xGWWpN7mRTRQuG$V5.qvYvWJcv8QD6V5n.OgB5wFQmlFdFMKGRlSONg98alArX0Hm4beOnBLtglCuGyn3Ry4S1cKoxdnlPyzLScJ1'
-
 # Fixed toolsvg volumes — keep in sync with the web tool's TOOLSVG_LVS list.
 TOOLSVG_MOUNTS=(
   "/opt/Tanium:lvopttanium:4096"
@@ -102,23 +97,18 @@ build_logvol_block(){
   echo -e "$block"
 }
 
-# bootloader_line <UEFI|Legacy>
-# UEFI: /boot/efi + /boot + rootvg partition + toolsvg partition (80G fixed)
-# Legacy: /boot + rootvg partition + toolsvg partition (80G fixed)
-# bootloader_line <UEFI|Legacy>
-bootloader_line(){
-  local boot_mode="$1"
-  if [[ "$boot_mode" == "UEFI" ]]; then
-    echo 'bootloader --location=partition --boot-drive=sda --append="crashkernel=auto rhgb quiet" --driveorder=/dev/sda'
+# network_device_part <LACP: Yes|No> <nic>
+# The templates now show the full "network" line directly except for this
+# one piece — --device=X differs structurally between a bonded and a plain
+# NIC, not just by value, so it can't be a single-value substitution the
+# way __IP__/__GATEWAY__ are.
+network_device_part(){
+  local lacp="$1" nic="$2"
+  if [[ "$lacp" == "Yes" ]]; then
+    echo "--device=bond0 --bondslaves=${nic} --bondopts=802.3ad,lacp_rate=fast,miimon=100,xmit_hash_policy=layer2+3"
   else
-    echo 'bootloader --location=mbr --append="crashkernel=auto rhgb quiet" --driveorder=/dev/sda'
+    echo "--device=${nic}"
   fi
-}
-
-# boot_efi_line <UEFI|Legacy>
-boot_efi_line(){
-  local boot_mode="$1"
-  [[ "$boot_mode" == "UEFI" ]] && echo "part /boot/efi --fstype efi --size=2048"
 }
 
 # build_pnc_provision_config_block <name> <ip> <gateway> <location> <ci_device>
@@ -144,8 +134,10 @@ generate_kickstart(){
   local tmpl_path
   if [[ "$HARDWARE" == "Cisco" ]]; then
     tmpl_path="${TEMPLATE_DIR}/kickstart-cisco.ks.tmpl"
+  elif [[ "$BOOT_MODE" == "UEFI" ]]; then
+    tmpl_path="${TEMPLATE_DIR}/kickstart-dell-uefi.ks.tmpl"
   else
-    tmpl_path="${TEMPLATE_DIR}/kickstart-dell.ks.tmpl"
+    tmpl_path="${TEMPLATE_DIR}/kickstart-dell-legacy.ks.tmpl"
   fi
   [[ -s "$tmpl_path" ]] || die "Kickstart template missing or empty: $tmpl_path — confirm templates/ was deployed alongside the rest of this project on lmrg34ja"
 
@@ -158,21 +150,10 @@ generate_kickstart(){
   # Satellite during the install itself.
   local major; major=$(rhel_major "$OS_VERSION")
   local repo_url="http://lmrg34ga.prod.pncint.net/PNC/distros/RHEL${major}-x86_64/"
-  local rootpw_hash="$ROOTPW_HASH"
 
-  local network_line
-  if [[ "$LACP" == "Yes" ]]; then
-    network_line="--bootproto static --ip=${IP} --netmask=255.255.255.0 --gateway=${GATEWAY} --nameserver=192.88.246.62 --hostname=${HOSTNAME} --device=bond0 --bondslaves=${NIC} --bondopts=802.3ad,lacp_rate=fast,miimon=100,xmit_hash_policy=layer2+3"
-  else
-    network_line="--bootproto static --ip=${IP} --netmask=255.255.255.0 --gateway=${GATEWAY} --nameserver=192.88.246.62 --hostname=${HOSTNAME} --device=${NIC}"
-  fi
+  local net_device_part; net_device_part=$(network_device_part "$LACP" "$NIC")
 
   local logvol_block; logvol_block=$(build_logvol_block "$CORE_FILESYSTEMS" "$EXTRA_FILESYSTEMS" "$OS_VERSION")
-  local bl_line="" efi_line=""
-  if [[ "$HARDWARE" != "Cisco" ]]; then
-    bl_line=$(bootloader_line "$BOOT_MODE")
-    efi_line=$(boot_efi_line "$BOOT_MODE")
-  fi
   local provision_block; provision_block=$(build_pnc_provision_config_block "$HOSTNAME" "$IP" "$GATEWAY" "$LOCATION" "$CI_DEVICE")
 
   # Single-pass substitution — one tool, one point of failure. This used to
@@ -189,29 +170,23 @@ generate_kickstart(){
   awk \
     -v hostname="$HOSTNAME" \
     -v repo_url="$repo_url" \
-    -v rootpw_hash="$rootpw_hash" \
-    -v network_line="$network_line" \
+    -v net_device_part="$net_device_part" \
     -v ip="$IP" \
     -v gateway="$GATEWAY" \
     -v domain="$domain" \
     -v mac="$MAC" \
-    -v bl="$bl_line" \
-    -v efi="$efi_line" \
     -v logvol="$logvol_block" \
     -v prov="$provision_block" '
     {
       line = $0
       gsub(/__HOSTNAME__/, hostname, line)
       gsub(/__REPO_URL__/, repo_url, line)
-      gsub(/__ROOTPW_HASH__/, rootpw_hash, line)
-      gsub(/__NETWORK_LINE__/, network_line, line)
+      gsub(/__NETWORK_DEVICE_PART__/, net_device_part, line)
       gsub(/__IP__/, ip, line)
       gsub(/__GATEWAY__/, gateway, line)
       gsub(/__DOMAIN__/, domain, line)
       gsub(/__MAC__/, mac, line)
       gsub(/__MTU__/, "9000", line)
-      gsub(/__BOOTLOADER_LINE__/, bl, line)
-      gsub(/__BOOT_EFI_LINE__/, efi, line)
       gsub(/__LOGVOL_BLOCK__/, logvol, line)
       gsub(/__PNC_PROVISION_CONFIG_BLOCK__/, prov, line)
       print line
