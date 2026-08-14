@@ -50,7 +50,7 @@ log(){
   local ts; ts=$(date '+%Y-%m-%d %H:%M:%S')
   local host="${HOSTNAME_SHORT:-job}"
   local line="[$ts] [$level] [$host] $msg"
-  echo "$line"
+  echo "$line" >&2
   if [[ -n "$JOB_LOG_DIR" ]]; then
     mkdir -p "$JOB_LOG_DIR"
     echo "$line" >> "${JOB_LOG_DIR}/${host}.log"
@@ -62,11 +62,26 @@ log(){
 # INFORMATION block) — the prefix was pushing lines past narrow-screen width.
 log_raw(){
   local msg="$*"
-  echo "$msg"
+  echo "$msg" >&2
   if [[ -n "$JOB_LOG_DIR" ]]; then
     mkdir -p "$JOB_LOG_DIR"
     echo "$msg" >> "${JOB_LOG_DIR}/${HOSTNAME_SHORT:-job}.log"
   fi
+}
+
+# log_racadm_output <label> <output>
+# Logs each line of a racadm response (which is often multi-line, e.g.
+# "STOR094: The storage configuration operation is successfully completed
+# and the change is in pending state.") with its own timestamped entry,
+# so the real racadm response is visible in the log instead of just this
+# pipeline's own summary — whether it succeeded or reported an error.
+log_racadm_output(){
+  local label="$1"; shift
+  local output="$*"
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    log INFO "$label: $line"
+  done <<< "$output"
 }
 
 die(){

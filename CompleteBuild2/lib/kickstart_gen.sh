@@ -19,7 +19,7 @@ TEMPLATE_DIR="${PROJECT_ROOT}/templates"
 # Root password hash for every kickstart this generates. Replace this value
 # directly (e.g. `openssl passwd -6`) — it's a hash, not the plaintext
 # password, so it lives here rather than in a separate secrets file.
-ROOTPW_HASH='$6$REPLACE_ME_WITH_REAL_HASH$xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+ROOTPW_HASH='$6$y5xGWWpN7mRTRQuG$V5.qvYvWJcv8QD6V5n.OgB5wFQmlFdFMKGRlSONg98alArX0Hm4beOnBLtglCuGyn3Ry4S1cKoxdnlPyzLScJ1'
 
 # Fixed toolsvg volumes — keep in sync with the web tool's TOOLSVG_LVS list.
 TOOLSVG_MOUNTS=(
@@ -106,33 +106,35 @@ build_logvol_block(){
 # UEFI: /boot/efi + /boot + rootvg partition + toolsvg partition (80G fixed)
 # Legacy: /boot + rootvg partition + toolsvg partition (80G fixed)
 build_boot_partitions(){
-  local boot_mode="$1" osdisk_gb="$2"
-  local toolsvg_gb=80
-  local rootvg_mb
+  local boot_mode="$1" osdisk_gb="$2"  # osdisk_gb no longer used — see below
+  local toolsvg_mb=81920   # 80GB, fixed regardless of actual disk size
+  local rootvg_mb=153600   # 150GB minimum — --grow below consumes whatever
+                            # space is actually left on the disk beyond this;
+                            # this is a floor, not a computed exact-fit size
   if [[ "$boot_mode" == "UEFI" ]]; then
-    rootvg_mb=$(( (osdisk_gb - 2 - 2 - toolsvg_gb) * 1024 ))
     cat <<EOF
+bootloader --location=partition --boot-drive=sda --append="crashkernel=auto rhgb quiet" --driveorder=/dev/sda
 zerombr
-clearpart --all --initlabel
-part /boot/efi --fstype efi --size=2048
+ignoredisk --only-use=/dev/sda
+clearpart --all --drives=/dev/sda
 part /boot --fstype xfs --size=2048
-part pv.13 --size=${rootvg_mb} --grow
-part pv.14 --size=$((toolsvg_gb*1024))
+part /boot/efi --fstype efi --size=2048
+part pv.13 --size=${rootvg_mb} --grow --ondisk=/dev/sda
+part pv.14 --size=${toolsvg_mb} --ondisk=/dev/sda
 volgroup rootvg --pesize=4096 pv.13
 volgroup toolsvg --pesize=4096 pv.14
-bootloader --location=partition --boot-drive=sda
 EOF
   else
-    rootvg_mb=$(( (osdisk_gb - 2 - toolsvg_gb) * 1024 ))
     cat <<EOF
+bootloader --location=mbr --append="crashkernel=auto rhgb quiet" --driveorder=/dev/sda
 zerombr
-clearpart --all --initlabel
+ignoredisk --only-use=/dev/sda
+clearpart --all --drives=/dev/sda
 part /boot --fstype xfs --size=2048
-part pv.13 --size=${rootvg_mb} --grow
-part pv.14 --size=$((toolsvg_gb*1024))
+part pv.13 --size=${rootvg_mb} --grow --ondisk=/dev/sda
+part pv.14 --size=${toolsvg_mb} --ondisk=/dev/sda
 volgroup rootvg --pesize=4096 pv.13
 volgroup toolsvg --pesize=4096 pv.14
-bootloader --location=mbr
 EOF
   fi
 }
@@ -173,7 +175,7 @@ generate_kickstart(){
   # README "Package source" for why this was chosen over registering to
   # Satellite during the install itself.
   local major; major=$(rhel_major "$OS_VERSION")
-  local repo_url="http://100.64.1.101/PNC/distros/RHEL${major}-x86_64/"
+  local repo_url="http://lmrg34ga.prod.pncint.net/PNC/distros/RHEL${major}-x86_64/"
   local rootpw_hash="$ROOTPW_HASH"
 
   local network_line

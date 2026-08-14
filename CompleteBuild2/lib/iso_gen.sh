@@ -23,7 +23,7 @@
 
 ISO_HOST="lmrg34ga"
 ISO_BASE="/mnt/installs/kickstart/SERVERS"
-ISO_HTTP_BASE="http://100.64.1.101/kickstart/SERVERS/tmpiso"
+ISO_HTTP_BASE="http://lmrg34ga.prod.pncint.net/PNC/installs/kickstart/SERVERS/tmpiso"
 
 # rhel_major() is defined in common.sh (shared with kickstart_gen.sh)
 
@@ -91,10 +91,10 @@ Stage the RHEL${major} install media's vmlinuz/initrd.img/isolinux(.bin,.cfg)/bo
 
   if [[ "$BOOT_MODE" == "UEFI" ]]; then
     log INFO "Writing EFI/BOOT/grub.cfg (UEFI boot)"
-    local rhel_label="RHEL-${OS_VERSION} x86_64"
+    local rhel_label="RHEL-${major} x86_64"
     ssh $SSH_OPTS "$ISO_HOST" "cat > '${remote_tmpiso}/EFI/BOOT/grub.cfg'" <<EOF
 label ${HOSTNAME_SHORT}
-menuentry 'Install Red Hat Enterprise Linux ${OS_VERSION}' --class fedora --class gnu-linux --class gnu --class os {
+menuentry 'Install Red Hat Enterprise Linux ${major}' --class fedora --class gnu-linux --class gnu --class os {
 	linuxefi /images/pxeboot/vmlinuz ${append_line}
 	initrdefi /images/pxeboot/initrd.img
 }
@@ -116,7 +116,7 @@ EOF
   log INFO "Running mkisofs on ${ISO_HOST}"
   local iso_out="${remote_tmpiso}/build_${HOSTNAME_SHORT}.iso"
   if [[ "$BOOT_MODE" == "UEFI" ]]; then
-    ssh $SSH_OPTS "$ISO_HOST" "cd '${remote_tmpiso}' && mkisofs -U -A '${rhel_label:-RHEL-${OS_VERSION} x86_64}' -V '${rhel_label:-RHEL-${OS_VERSION} x86_64}' -volset '${rhel_label:-RHEL-${OS_VERSION} x86_64}' -J -joliet-long -r -v -T -o '${iso_out}' -b isolinux.bin -c boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot -e efiboot.img -no-emul-boot . >/dev/null 2>&1" \
+    ssh $SSH_OPTS "$ISO_HOST" "cd '${remote_tmpiso}' && mkisofs -U -A '${rhel_label:-RHEL-${major} x86_64}' -V '${rhel_label:-RHEL-${major} x86_64}' -volset '${rhel_label:-RHEL-${major} x86_64}' -J -joliet-long -r -v -T -o '${iso_out}' -b isolinux.bin -c boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot -e efiboot.img -no-emul-boot . >/dev/null 2>&1" \
       || die "mkisofs (UEFI) failed on ${ISO_HOST}"
   else
     ssh $SSH_OPTS "$ISO_HOST" "cd '${remote_tmpiso}' && mkisofs -J -R -v -T -V KickStart -o '${iso_out}' -b isolinux.bin -c boot.cat -no-emul-boot -boot-load-size 4 -boot-in . >/dev/null 2>&1" \

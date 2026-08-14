@@ -76,7 +76,8 @@ configure_extra_disk_dell(){
   local raid_id; raid_id=$(echo "${disks[0]}" | awk -F: '{print $3}')
   [[ -z "$raid_id" ]] && { log ERROR "Could not determine RAID controller ID from disk FQDD: ${disks[0]}"; return 1; }
   log INFO "Creating RAID${raid} on ${pdkey} (controller $raid_id)"
-  run_racadm "$idrac_ip" storage createvd:"$raid_id" -rl "r${raid}" -pdkey:"$pdkey" -name "extra_${raid}_${size_gb}" >/dev/null
+  local createvd_out; createvd_out=$(run_racadm "$idrac_ip" storage createvd:"$raid_id" -rl "r${raid}" -pdkey:"$pdkey" -name "extra_${raid}_${size_gb}")
+  log_racadm_output "createvd" "$createvd_out"
   local jid; jid=$(create_racadm_job "$idrac_ip" "$raid_id")
   [[ -z "$jid" ]] && { log ERROR "Job creation failed for extra disk RAID${raid}"; return 1; }
   wait_for_racadm_job "$idrac_ip" "$jid" "Creating extra disk RAID${raid} (${type})"

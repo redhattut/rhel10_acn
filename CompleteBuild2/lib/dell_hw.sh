@@ -202,7 +202,8 @@ remove_existing_vdisks(){
   while read -r vdisk_id; do
     [[ -z "$vdisk_id" ]] && continue
     log INFO "Removing existing virtual disk $vdisk_id"
-    run_racadm "$idrac_ip" storage deletevd:"$vdisk_id" >/dev/null
+    local del_out; del_out=$(run_racadm "$idrac_ip" storage deletevd:"$vdisk_id")
+    log_racadm_output "deletevd" "$del_out"
     raid_id=$(echo "$vdisk_id" | awk -F: '{print $2}')
   done <<< "$vdisk_ids"
 
@@ -245,7 +246,8 @@ cryptographic_erase_disks(){
     # (same exclusion as everywhere else NVMe is handled in this pipeline).
     [[ "${media^^}" == "NVME" ]] && continue
     log INFO "cryptographicerase: $disk_id"
-    run_racadm "$idrac_ip" storage cryptographicerase:"$disk_id" >/dev/null
+    local erase_out; erase_out=$(run_racadm "$idrac_ip" storage cryptographicerase:"$disk_id")
+    log_racadm_output "cryptographicerase" "$erase_out"
     erased_any="yes"
     [[ -z "$raid_id" ]] && raid_id=$(echo "$disk_id" | awk -F: '{print $3}')
   done <<< "$parsed"
@@ -306,6 +308,7 @@ create_os_vdisk(){
   log INFO "Creating RAID1 OS_Disk on $disk1 + $disk2 (controller $raid_id)"
   local out
   out=$(run_racadm "$idrac_ip" storage createvd:"$raid_id" -rl r1 -pdkey:"$disk1","$disk2" -name OS_Disk)
+  log_racadm_output "createvd" "$out"
   local jid; jid=$(create_racadm_job "$idrac_ip" "$raid_id")
   [[ -z "$jid" ]] && die "Job creation failed creating OS vdisk"
   wait_for_racadm_job "$idrac_ip" "$jid" "Creating OS vdisk" 30 60 600 || die "OS vdisk creation job never completed"
@@ -347,7 +350,7 @@ mount_install_media(){
     run_racadm "$idrac_ip" remoteimage -d >/dev/null
   fi
   log INFO "Mounting install ISO for $host"
-  run_racadm "$idrac_ip" remoteimage -c -l "http://100.64.1.101/kickstart/SERVERS/tmpiso/${host}/build_${host}.iso" >/dev/null
+  run_racadm "$idrac_ip" remoteimage -c -l "http://lmrg34ga.prod.pncint.net/PNC/installs/kickstart/SERVERS/tmpiso/${host}/build_${host}.iso" >/dev/null
   run_racadm "$idrac_ip" set iDRAC.VirtualMedia.BootOnce 1 >/dev/null
   run_racadm "$idrac_ip" set iDRAC.ServerBoot.FirstBootDevice VCD-DVD >/dev/null
 }

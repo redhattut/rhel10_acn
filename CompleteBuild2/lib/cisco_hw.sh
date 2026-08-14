@@ -57,7 +57,13 @@ get_template_name(){
 create_and_mount_vmedia(){
   local ucsm_ip="$1" profile="$2" org="$3"
   log INFO "Creating vmedia policy for $profile"
-  run_ucsm "$ucsm_ip" "scope org;enter org /${org};create vmedia-policy ${profile};create vmedia-mapping map${profile};set device-type cdd;set remote-ip 100.64.1.101;set image-file-name build_${profile}.iso;set image-path /kickstart/SERVERS/tmpiso/${profile};set mount-protocol http;commit-buffer" >/dev/null
+  # NOT CONFIRMED: remote-ip here needs lmrg34ga's real IP (UCSM's field
+  # name suggests it can't take a hostname the way the Dell remoteimage
+  # path now does). 100.64.1.101 was confirmed WRONG for the Dell path
+  # (RAC0720 — "unable to locate... file or folder path... incorrect"), so
+  # don't trust it here either without separately confirming the correct
+  # value for lmrg34ga on the UCSM-reachable network.
+  run_ucsm "$ucsm_ip" "scope org;enter org /${org};create vmedia-policy ${profile};create vmedia-mapping map${profile};set device-type cdd;set remote-ip 100.64.1.101;set image-file-name build_${profile}.iso;set image-path /PNC/installs/kickstart/SERVERS/tmpiso/${profile};set mount-protocol http;commit-buffer" >/dev/null
   sleep 3
   log INFO "Mounting vmedia policy onto service profile"
   run_ucsm "$ucsm_ip" "scope org;enter org /${org};enter service-profile ${profile} instance;set vmedia-policy ${profile};commit-buffer" >/dev/null
