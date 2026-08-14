@@ -122,17 +122,23 @@ source "${WORK_DIR}/server.env"
 log STEP "=== Starting build for $HOSTNAME (job $JOB_NAME, hardware $HARDWARE) ==="
 
 # ---- Network facts ----
-IP=$(dig +short "$HOSTNAME" | head -1)
-[[ -z "$IP" ]] && die "DNS lookup failed for $HOSTNAME"
+IP=$(resolve_ip "$HOSTNAME" "server hostname")
 GATEWAY=$(echo "$IP" | sed 's/\.[0-9]*$/.1/')
 log INFO "Resolved $HOSTNAME -> $IP (gateway $GATEWAY)"
 
 MGMT_IP="$MGMT_ADDRESS"
 if [[ ! "$MGMT_ADDRESS" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  MGMT_IP=$(dig +short "$MGMT_ADDRESS" | head -1)
-  [[ -z "$MGMT_IP" ]] && die "DNS lookup failed for management address $MGMT_ADDRESS"
+  MGMT_IP=$(resolve_ip "$MGMT_ADDRESS" "iDRAC management address")
 fi
 log INFO "Management address: $MGMT_ADDRESS -> $MGMT_IP"
+
+# Durable record of what was actually resolved and used — not just in the
+# log, so it can be checked independent of scrolling back through it.
+{
+  echo "RESOLVED_IP=$IP"
+  echo "RESOLVED_GATEWAY=$GATEWAY"
+  echo "RESOLVED_MGMT_IP=$MGMT_IP"
+} >> "${WORK_DIR}/server.env"
 
 CORE_FILESYSTEMS="/:${ROOT_MB},swap:${SWAP_MB},/var:${VAR_MB},/opt:${OPT_MB},/app:${APP_MB},/home:${HOME_MB},/tmp:${TMP_MB}"
 # NOTE: OPTAPP_MB ("/opt/app MB" in the CSV/web tool) is intentionally NOT
