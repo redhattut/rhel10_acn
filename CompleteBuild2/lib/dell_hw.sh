@@ -18,9 +18,110 @@ racreset_idrac(){
   local idrac_ip="$1"
   log INFO "Resetting iDRAC controller"
   run_racadm "$idrac_ip" racreset
-  sleep 600
+  local reset_wait=600
+  if [[ "$FAST_MODE" == "1" ]]; then
+    log INFO "FAST_MODE=1 — skipping the normal ${reset_wait}s post-racreset wait"
+    reset_wait=15
+  fi
+  sleep "$reset_wait"
   ping_wait "$idrac_ip" 30 30
   sleep 60
+}
+
+# -----------------------------------------------------------------------------
+# gather_server_info <idrac_ip>
+# Runs once per server, before any changes are made — a clean snapshot of
+# what's actually on the box. Saves ALL raw racadm output to a single file
+# for reference/debugging, then logs a compact human-readable summary.
+#
+# Purely diagnostic: never fails the build. Fields it can't determine show
+# as "unknown" rather than aborting anything.
+#
+# Confidence varies by field:
+#   - POWER, HOST IP/DOMAIN/MNEMONIC/SUBNET, disk list/count: confirmed —
+#     these reuse the same racadm calls (getsysinfo, storage get pdisks)
+#     already proven working elsewhere in this pipeline, or are derived
+#     directly from values this script already has (hostname, resolved IP).
+#   - BIOS MODE: reasonably confident (mirrors set_boot_mode's proven
+#     target path, just a `get` instead of a `set`).
+#   - iDRAC NAME, RAID CONTROLLER: best-effort guesses at the right
+#     racadm attribute path / hwinventory block, NOT confirmed against
+#     real output. Expect "unknown" here until verified on a real box —
+#     check the raw dump file this function saves if either comes back
+#     empty and the real attribute path/label needs adjusting.
+# -----------------------------------------------------------------------------
+gather_server_info(){
+  local idrac_ip="$1"
+  log INFO "Gathering server information"
+  local raw_file="${JOB_LOG_DIR}/${HOSTNAME_SHORT}.hwinventory.raw"
+
+  {
+    echo "=== getsysinfo ==="
+    run_racadm "$idrac_ip" getsysinfo
+    echo "=== hwinventory ==="
+    run_racadm "$idrac_ip" hwinventory
+    echo "=== storage get pdisks (mediatype,size,state) ==="
+    run_racadm "$idrac_ip" storage get pdisks -o -p mediatype,size,state
+    echo "=== BIOS boot mode ==="
+    run_racadm "$idrac_ip" get BIOS.BiosBootSettings.BootMode
+    echo "=== iDRAC name (best effort) ==="
+    run_racadm "$idrac_ip" get iDRAC.NIC.DNSRacName
+    echo "=== end ==="
+  } > "$raw_file" 2>&1
+  log INFO "Raw hardware inventory saved to $raw_file"
+
+  local power; power=$(grep "Power Status" "$raw_file" | awk '{print $NF}')
+  local domain; domain=$(echo "$HOSTNAME" | cut -d'.' -f2-)
+  local mnemonic; mnemonic=$(echo "$HOSTNAME" | head -c4 | tail -c3 | tr '[:lower:]' '[:upper:]')
+  local subnet; subnet=$(echo "$IP" | sed 's/\.[0-9]*$/.0/')
+  local idrac_name; idrac_name=$(sed -n '/=== iDRAC name/,/=== end/p' "$raw_file" | grep -v "===" | awk -F= '{print $2}' | tr -d ' ')
+  local bios_mode; bios_mode=$(sed -n '/=== BIOS boot mode/,/=== iDRAC name/p' "$raw_file" | grep -oE '(Uefi|Bios)' | head -1)
+
+  # NICs — same hwinventory block shape get_mac() already parses, just
+  # collecting every NIC's MAC instead of stopping at the first Up link.
+  local nics; nics=$(sed -n '/=== hwinventory/,/=== storage/p' "$raw_file" | awk '
+    /^-+$/ { if (p && f) print p; p=""; f=0 }
+    /Device Type = NIC/ { f=1 }
+    { p = p $0 ORS }
+    END { if (p && f) print p }
+  ' | grep -oE '[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}' | sort -u)
+
+  # RAID controller FQDN — best effort, see confidence note above.
+  local raid_ctrl; raid_ctrl=$(sed -n '/=== hwinventory/,/=== storage/p' "$raw_file" | grep -B2 -i "RAIDController" | grep -v -i "RAIDController\|--\|===" | head -1 | awk '{print $1}')
+
+  local disk_section; disk_section=$(sed -n '/=== storage get pdisks/,/=== BIOS/p' "$raw_file" | grep -v "===")
+  local disk_lines; disk_lines=$(echo "$disk_section" | parse_pdisks_full)
+  local disk_count; disk_count=$(echo "$disk_lines" | grep -c . || true)
+
+  {
+    echo ""
+    echo "SERVER INFORMATION:"
+    echo ""
+    printf "%-16s= %s\n" "POWER" "${power:-unknown}"
+    printf "%-16s= %s\n" "HOST NAME" "$HOSTNAME"
+    printf "%-16s= %s\n" "DOMAIN" "$domain"
+    printf "%-16s= %s\n" "MNEMONIC" "$mnemonic"
+    printf "%-16s= %s\n" "HOST IP" "$IP"
+    printf "%-16s= %s\n" "SUBNET" "$subnet"
+    printf "%-16s= %s\n" "iDRAC NAME" "${idrac_name:-unknown}"
+    printf "%-16s= %s\n" "iDRAC IP" "$idrac_ip"
+    printf "%-16s= %s\n" "RAID CONTROLLER" "${raid_ctrl:-unknown}"
+    printf "%-16s= %s\n" "BIOS MODE" "${bios_mode:-unknown}"
+    local i=1
+    while read -r mac; do
+      [[ -z "$mac" ]] && continue
+      printf "%-16s= %s\n" "NIC-$i MAC" "$mac"
+      ((i++))
+    done <<< "$nics"
+    printf "%-16s= %s\n" "DISK COUNT" "${disk_count:-0}"
+    local d=1
+    while IFS=$'\t' read -r did media size state; do
+      [[ -z "$did" ]] && continue
+      printf "%-16s= %-58s|  TYPE: %-4s|  SIZE: %sG  |  STATUS: %s\n" "DISK-$d" "$did" "$media" "$size" "${state:-unknown}"
+      ((d++))
+    done <<< "$disk_lines"
+    echo ""
+  } | while IFS= read -r line; do log INFO "$line"; done
 }
 
 # ensure_power_on <idrac_ip>

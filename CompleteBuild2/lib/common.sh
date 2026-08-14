@@ -49,18 +49,14 @@ log(){
   local msg="$*"
   local ts; ts=$(date '+%Y-%m-%d %H:%M:%S')
   local host="${HOSTNAME_SHORT:-job}"
-  local line="[$ts] [$level] [$host] $msg"
-
-  echo "$line"
-
-  if [[ -n "$JOB_LOG_DIR" ]]; then
-    mkdir -p "$JOB_LOG_DIR"
-    echo "$line" >> "${JOB_LOG_DIR}/${host}.log"
-  fi
-  if [[ -n "$JOB_SUMMARY_LOG" ]]; then
-    echo "$line" >> "$JOB_SUMMARY_LOG"
-  fi
+  echo "[$ts] [$level] [$host] $msg"
 }
+
+# FAST_MODE=1 (set as an env var before invoking build.sh/build_server.sh)
+# shortens the long hardware-settle waits for iterative testing — see
+# racreset_idrac() in dell_hw.sh and wait_for_racadm_job() below. Leave
+# unset/0 for real builds: -r pwrcycle jobs genuinely need the full wait.
+FAST_MODE="${FAST_MODE:-0}"
 
 die(){
   log ERROR "$*"
@@ -182,13 +178,33 @@ require_ucsm_reachable(){
 # -----------------------------------------------------------------------------
 parse_pdisks(){
   awk '
-    /^[^[:space:]]/ && NF>0 { diskid=$0; mediatype=""; next }
+    function emit() { if (diskid != "" && mediatype != "") print diskid "\t" mediatype "\t" sizeint }
+    /^[^[:space:]]/ && NF>0 { emit(); diskid=$0; mediatype=""; sizeint=""; next }
     /MediaType[ \t]*=/ { split($0,a,"="); mediatype=a[2]; gsub(/^[ \t]+|[ \t]+$/,"",mediatype); next }
     /Size[ \t]*=/ {
       split($0,a,"="); size=a[2]; gsub(/^[ \t]+|[ \t]+$/,"",size); gsub(/ *GB.*/,"",size)
-      split(size,b,"."); sizeint=b[1]
-      if (diskid != "" && mediatype != "") print diskid "\t" mediatype "\t" sizeint
+      split(size,b,"."); sizeint=b[1]; next
     }
+    END { emit() }
+  '
+}
+
+# parse_pdisks_full — same block format as parse_pdisks(), but also captures
+# State (Online/Ready/Failed/...). A separate function rather than changing
+# parse_pdisks() itself, so existing RAID-creation callers (which read
+# exactly 3 tab fields) can't be silently broken by a 4th field showing up.
+# Used only by gather_server_info() below.
+parse_pdisks_full(){
+  awk '
+    function emit() { if (diskid != "" && mediatype != "") print diskid "\t" mediatype "\t" sizeint "\t" state }
+    /^[^[:space:]]/ && NF>0 { emit(); diskid=$0; mediatype=""; state=""; sizeint=""; next }
+    /MediaType[ \t]*=/ { split($0,a,"="); mediatype=a[2]; gsub(/^[ \t]+|[ \t]+$/,"",mediatype); next }
+    /State[ \t]*=/ { split($0,a,"="); state=a[2]; gsub(/^[ \t]+|[ \t]+$/,"",state); next }
+    /Size[ \t]*=/ {
+      split($0,a,"="); size=a[2]; gsub(/^[ \t]+|[ \t]+$/,"",size); gsub(/ *GB.*/,"",size)
+      split(size,b,"."); sizeint=b[1]; next
+    }
+    END { emit() }
   '
 }
 
@@ -204,7 +220,8 @@ parse_pdisks(){
 wait_for_racadm_job(){
   local idrac_ip="$1" job_id="$2"
   local max_polls="${3:-30}" sleep_s="${4:-60}" initial_delay="${5:-300}"
-  log INFO "Job $job_id created — waiting ${initial_delay}s before first status check (jobs created with -r pwrcycle require an actual server reboot to apply, so checking immediately just wastes calls)"
+  [[ "$FAST_MODE" == "1" ]] && initial_delay=5
+  log INFO "Job $job_id created — waiting ${initial_delay}s before first status check"
   sleep "$initial_delay"
   local n=0
   log INFO "Polling racadm job $job_id every ${sleep_s}s"
