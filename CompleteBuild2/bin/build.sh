@@ -13,8 +13,8 @@
 #   cd /staging/BareMetalBuilds/CompleteBuild2
 #   ./bin/build.sh BDP-cedar-20260729-482.csv
 #
-# -t / --skip-idrac-wait: same flag as build_server.sh, passed through to
-# every dispatched server — skips only the 10-minute post-racreset wait.
+# -t / --skip-idrac-reset: same flag as build_server.sh, passed through to
+# every dispatched server — skips the iDRAC reboot entirely, not just a wait.
 #
 # Launches one backgrounded build_server.sh per server found in the CSV,
 # same parallel-dispatch model as the old build_wrapper.sh.
@@ -23,11 +23,11 @@ set -u
 
 usage(){ echo "usage: build.sh [-t] <csv_filename_in_csv/incoming>"; }
 
-SKIP_IDRAC_RESET_WAIT=0
+SKIP_IDRAC_RESET=0
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -t|--skip-idrac-wait) SKIP_IDRAC_RESET_WAIT=1; shift ;;
+    -t|--skip-idrac-wait) SKIP_IDRAC_RESET=1; shift ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "Unknown option: $1" >&2; usage; exit 1 ;;
     *) POSITIONAL+=("$1"); shift ;;
@@ -43,16 +43,17 @@ CSV_PATH="${PROJECT_ROOT}/csv/incoming/${CSV_FILENAME}"
 WORK_DIR="${PROJECT_ROOT}/work/${JOB_NAME}"
 JOB_LOG_DIR="${PROJECT_ROOT}/logs/${JOB_NAME}"
 JOB_RESULTS_FILE="${JOB_LOG_DIR}/results.csv"
-HOSTNAME_SHORT="dispatcher"
+HOSTNAME_SHORT="dispatch"
 
 # This dispatcher's own handful of messages (archiving the CSV, parsing it,
-# launching each server) go to their own small file — deliberately NOT an
-# aggregate of every server's detailed activity (each server's full log is
-# logs/<job>/<hostname>.log; see the message printed at the end of this
-# script for which one to actually watch).
+# launching each server) go to their own small file, dispatch.log —
+# deliberately NOT an aggregate of every server's detailed activity. Each
+# server's full log is logs/<job>/<hostname>.log; see the message printed
+# at the end of this script for which one to actually watch. log() (in
+# common.sh) writes directly to that file — no subshell, so this script
+# returns control to the terminal immediately after dispatching, which
+# matters when you're launching several jobs back to back.
 mkdir -p "$JOB_LOG_DIR"
-DISPATCH_LOG="${JOB_LOG_DIR}/dispatch.log"
-exec > >(tee -a "$DISPATCH_LOG") 2>&1
 
 source "${PROJECT_ROOT}/lib/common.sh"
 check_secrets
@@ -86,7 +87,7 @@ while read -r host; do
   # build_server.sh sets up its own log file internally (see its exec+tee
   # near the top) — nothing further to capture at this level.
   extra_args=()
-  [[ "$SKIP_IDRAC_RESET_WAIT" == "1" ]] && extra_args=(-t)
+  [[ "$SKIP_IDRAC_RESET" == "1" ]] && extra_args=(-t)
   nohup "${PROJECT_ROOT}/bin/build_server.sh" "${extra_args[@]}" "$host" "$JOB_NAME" </dev/null >/dev/null 2>&1 &
   echo "$! $host" >> "${JOB_LOG_DIR}/pids.txt"
 done < "$hostlist"

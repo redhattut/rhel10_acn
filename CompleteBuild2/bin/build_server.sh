@@ -17,10 +17,11 @@
 #                                 type by hand. The CSV must contain exactly
 #                                 one server; for more than one, use build.sh.
 #
-# -t / --skip-idrac-wait skips ONLY the 10-minute post-racreset settle wait.
-# Every other wait (300s before polling any -r pwrcycle job, then 60s
-# between polls) always happens regardless of -t — those aren't optional,
-# iDRAC needs them to actually apply what it's committing.
+# -t / --skip-idrac-reset skips the iDRAC reboot (racadm racreset) entirely
+# — no reboot, no 10-minute settle wait. Everything else (300s before
+# polling any -r pwrcycle job, then 60s between polls) always happens
+# regardless of -t — those aren't optional, iDRAC needs them to actually
+# apply what it's committing.
 #
 # Everything after the OS comes up runs right here — no CGI relay, no
 # second jumpbox hop.
@@ -32,14 +33,14 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 usage(){
   echo "usage: build_server.sh [-t] <hostname> <job_name>"
   echo "       build_server.sh [-t] <csv_filename>   (CSV must contain exactly one server)"
-  echo "  -t   skip the 10-minute post-racreset wait; everything else waits normally"
+  echo "  -t   skip the iDRAC reboot (racreset) entirely; everything else waits normally"
 }
 
-SKIP_IDRAC_RESET_WAIT=0
+SKIP_IDRAC_RESET=0
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -t|--skip-idrac-wait) SKIP_IDRAC_RESET_WAIT=1; shift ;;
+    -t|--skip-idrac-wait) SKIP_IDRAC_RESET=1; shift ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "Unknown option: $1" >&2; usage; exit 1 ;;
     *) POSITIONAL+=("$1"); shift ;;
@@ -86,15 +87,9 @@ JOB_LOG_DIR="${PROJECT_ROOT}/logs/${JOB_NAME}"
 JOB_RESULTS_FILE="${JOB_LOG_DIR}/results.csv"
 HOSTNAME_SHORT="${HOSTNAME_ARG%%.*}"
 
-# Everything this script prints — from here on, whether via log() or a raw
-# tool/SSH error that never went through log() at all — goes to exactly one
-# file: logs/<job>/<hostname>.log. This is THE file to watch for one server.
-# Works the same whether this script is run directly (as you've been doing
-# for testing) or backgrounded by build.sh — no separate .nohup.out, no
-# separate job-summary.log; tee also mirrors to the terminal if run directly.
+# log() (in common.sh, sourced next) writes directly to
+# logs/<job>/<hostname>.log — that's THE file to watch for one server.
 mkdir -p "$JOB_LOG_DIR"
-LOGFILE="${JOB_LOG_DIR}/${HOSTNAME_SHORT}.log"
-exec > >(tee -a "$LOGFILE") 2>&1
 
 # shellcheck source=../lib/common.sh
 source "${PROJECT_ROOT}/lib/common.sh"
