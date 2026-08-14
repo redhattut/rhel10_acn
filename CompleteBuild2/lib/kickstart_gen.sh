@@ -111,50 +111,30 @@ network_device_part(){
   fi
 }
 
-# build_pnc_provision_config_block <name> <ip> <gateway> <location> <ci_device>
-build_pnc_provision_config_block(){
-  local name="$1" ip="$2" gw="$3" location="$4" ci_device="$5"
-  cat <<EOF
-echo "BUILDSERVER=\\"lmrg34ja\\"
-BUILD_OS=\\"RHEL\\"
-HOSTNAME=\\"${name}\\"
-FINALIPADDR=\\"${ip}\\"
-GATEWAY=\\"${gw}\\"
-LOCATION=\\"${location}\\"
-CIDEVICE=\\"${ci_device}\\"
-###" >/boot/PNC_PROVISION_CONFIG
-EOF
-}
-
 # generate_kickstart — main entry point
 # Reads all fields from the already-sourced server.env (see build_server.sh),
 # writes the finished .ks to $1
 generate_kickstart(){
   local out_path="$1"
+
+  local major; major=$(rhel_major "$OS_VERSION")
+  if [[ "$major" != "8" ]]; then
+    die "Only RHEL 8 is supported right now (OS_VERSION=$OS_VERSION, major=$major) — no RHEL 9 templates exist yet. See templates/ — add kickstart-dell-rhel9-uefi.ks.tmpl etc. when that's ready, and extend this check."
+  fi
+
   local tmpl_path
   if [[ "$HARDWARE" == "Cisco" ]]; then
-    tmpl_path="${TEMPLATE_DIR}/kickstart-cisco.ks.tmpl"
+    tmpl_path="${TEMPLATE_DIR}/kickstart-cisco-rhel8.ks.tmpl"
   elif [[ "$BOOT_MODE" == "UEFI" ]]; then
-    tmpl_path="${TEMPLATE_DIR}/kickstart-dell-uefi.ks.tmpl"
+    tmpl_path="${TEMPLATE_DIR}/kickstart-dell-rhel8-uefi.ks.tmpl"
   else
-    tmpl_path="${TEMPLATE_DIR}/kickstart-dell-legacy.ks.tmpl"
+    tmpl_path="${TEMPLATE_DIR}/kickstart-dell-rhel8-legacy.ks.tmpl"
   fi
   [[ -s "$tmpl_path" ]] || die "Kickstart template missing or empty: $tmpl_path — confirm templates/ was deployed alongside the rest of this project on lmrg34ja"
 
   local domain; domain=$(echo "$HOSTNAME" | cut -d'.' -f2-)
-  # Package source: a static mirror per RHEL MAJOR version, not per exact
-  # minor. Every 8.x build (8.8 or 8.10 selected in the CSV) installs from
-  # the same RHEL8-x86_64 base tree; Satellite patches it to the exact
-  # requested minor afterward, triggered by GOMP after submission — see
-  # README "Package source" for why this was chosen over registering to
-  # Satellite during the install itself.
-  local major; major=$(rhel_major "$OS_VERSION")
-  local repo_url="http://lmrg34ga.prod.pncint.net/PNC/distros/RHEL${major}-x86_64/"
-
   local net_device_part; net_device_part=$(network_device_part "$LACP" "$NIC")
-
   local logvol_block; logvol_block=$(build_logvol_block "$CORE_FILESYSTEMS" "$EXTRA_FILESYSTEMS" "$OS_VERSION")
-  local provision_block; provision_block=$(build_pnc_provision_config_block "$HOSTNAME" "$IP" "$GATEWAY" "$LOCATION" "$CI_DEVICE")
 
   # Single-pass substitution — one tool, one point of failure. This used to
   # be sed for simple tokens + a second, separate awk pass for the
@@ -166,31 +146,38 @@ generate_kickstart(){
   # the only visible symptom was "empty file," with no way to tell which
   # stage failed or why. Consolidating to one awk pass with stderr actually
   # captured fixes both problems at once.
+  #
+  # PNC_PROVISION_CONFIG_BLOCK no longer exists as a whole-block token — the
+  # echo/PNC_PROVISION_CONFIG structure is now static text directly in each
+  # template, with only the actual per-server values (__LOCATION__,
+  # __CI_DEVICE__, plus the pre-existing __HOSTNAME__/__IP__/__GATEWAY__)
+  # substituted individually.
   local awk_err; awk_err=$(mktemp)
   awk \
     -v hostname="$HOSTNAME" \
-    -v repo_url="$repo_url" \
     -v net_device_part="$net_device_part" \
     -v ip="$IP" \
     -v gateway="$GATEWAY" \
     -v domain="$domain" \
     -v mac="$MAC" \
-    -v logvol="$logvol_block" \
-    -v prov="$provision_block" '
+    -v location="$LOCATION" \
+    -v ci_device="$CI_DEVICE" \
+    -v logvol="$logvol_block" '
     {
       line = $0
       gsub(/__HOSTNAME__/, hostname, line)
-      gsub(/__REPO_URL__/, repo_url, line)
       gsub(/__NETWORK_DEVICE_PART__/, net_device_part, line)
       gsub(/__IP__/, ip, line)
       gsub(/__GATEWAY__/, gateway, line)
       gsub(/__DOMAIN__/, domain, line)
       gsub(/__MAC__/, mac, line)
       gsub(/__MTU__/, "9000", line)
+      gsub(/__LOCATION__/, location, line)
+      gsub(/__CI_DEVICE__/, ci_device, line)
       gsub(/__LOGVOL_BLOCK__/, logvol, line)
-      gsub(/__PNC_PROVISION_CONFIG_BLOCK__/, prov, line)
       print line
     }' "$tmpl_path" > "$out_path" 2>"$awk_err"
+  local awk_rc=$?
   local awk_rc=$?
 
   if (( awk_rc != 0 )); then
