@@ -90,6 +90,43 @@ die(){
   exit 1
 }
 
+# resolve_ip <hostname> <label>
+# Explicit A-record lookup, filtered to only accept a well-formed IPv4
+# result. Replaces a previous "dig +short | head -1" with no validation at
+# all — dig can return CNAME chain lines, stale cache hits, or other
+# non-address text, and that was being used blindly. Real-world failure
+# this caused: a bad IP got baked into a boot ISO's kernel append line,
+# which the install environment used to bring networking up BEFORE it
+# ever reached the point of fetching the kickstart — editing the .ks
+# file's own network line afterward had zero effect, since the install
+# environment's networking was already up (or not) on the wrong address
+# by then, from a value resolved at ISO-build time, not read from the .ks
+# file at install time.
+resolve_ip(){
+  local hostname="$1" label="$2"
+  local raw ip
+  raw=$(dig "$hostname" +short)
+  ip=$(echo "$raw" | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' | head -1)
+
+  if [[ -z "$ip" ]]; then
+    die "DNS lookup failed for $label ($hostname) — dig returned: '$(echo "$raw" | tr '\n' ' ')'"
+  fi
+
+  # Shape alone isn't enough — 999.999.999.999 matches this too.
+  local IFS=. octet
+  local -a octets=($ip)
+  for octet in "${octets[@]}"; do
+    if (( octet < 0 || octet > 255 )); then
+      die "DNS lookup for $label ($hostname) returned a malformed address: $ip"
+    fi
+  done
+  if [[ "$ip" == "0.0.0.0" || "$ip" == 127.* ]]; then
+    die "DNS lookup for $label ($hostname) returned a non-routable address: $ip — check the DNS record manually before trusting anything downstream of this"
+  fi
+
+  echo "$ip"
+}
+
 # Records a final PASS/FAIL row for this server into the job's results CSV,
 # so `build.sh` (or a human, or a spreadsheet) can see a one-row-per-server
 # summary without having to grep through every individual log.
