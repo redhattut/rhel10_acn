@@ -19,8 +19,8 @@ racreset_idrac(){
   log INFO "Resetting iDRAC controller"
   run_racadm "$idrac_ip" racreset
   local reset_wait=600
-  if [[ "$FAST_MODE" == "1" ]]; then
-    log INFO "FAST_MODE=1 — skipping the normal ${reset_wait}s post-racreset wait"
+  if [[ "${SKIP_IDRAC_RESET_WAIT:-0}" == "1" ]]; then
+    log INFO "-t: skipping the normal ${reset_wait}s post-racreset wait"
     reset_wait=15
   fi
   sleep "$reset_wait"

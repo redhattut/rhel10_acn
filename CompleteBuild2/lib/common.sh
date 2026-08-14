@@ -52,12 +52,6 @@ log(){
   echo "[$ts] [$level] [$host] $msg"
 }
 
-# FAST_MODE=1 (set as an env var before invoking build.sh/build_server.sh)
-# shortens the long hardware-settle waits for iterative testing — see
-# racreset_idrac() in dell_hw.sh and wait_for_racadm_job() below. Leave
-# unset/0 for real builds: -r pwrcycle jobs genuinely need the full wait.
-FAST_MODE="${FAST_MODE:-0}"
-
 die(){
   log ERROR "$*"
   record_result "FAILED" "$*"
@@ -220,7 +214,6 @@ parse_pdisks_full(){
 wait_for_racadm_job(){
   local idrac_ip="$1" job_id="$2"
   local max_polls="${3:-30}" sleep_s="${4:-60}" initial_delay="${5:-300}"
-  [[ "$FAST_MODE" == "1" ]] && initial_delay=5
   log INFO "Job $job_id created — waiting ${initial_delay}s before first status check"
   sleep "$initial_delay"
   local n=0
