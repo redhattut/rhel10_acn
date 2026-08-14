@@ -27,16 +27,24 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CSV_PATH="${PROJECT_ROOT}/csv/incoming/${CSV_FILENAME}"
 WORK_DIR="${PROJECT_ROOT}/work/${JOB_NAME}"
 JOB_LOG_DIR="${PROJECT_ROOT}/logs/${JOB_NAME}"
-JOB_SUMMARY_LOG="${JOB_LOG_DIR}/job-summary.log"
 JOB_RESULTS_FILE="${JOB_LOG_DIR}/results.csv"
 HOSTNAME_SHORT="dispatcher"
+
+# This dispatcher's own handful of messages (archiving the CSV, parsing it,
+# launching each server) go to their own small file — deliberately NOT an
+# aggregate of every server's detailed activity (each server's full log is
+# logs/<job>/<hostname>.log; see the message printed at the end of this
+# script for which one to actually watch).
+mkdir -p "$JOB_LOG_DIR"
+DISPATCH_LOG="${JOB_LOG_DIR}/dispatch.log"
+exec > >(tee -a "$DISPATCH_LOG") 2>&1
 
 source "${PROJECT_ROOT}/lib/common.sh"
 check_secrets
 
 [[ -f "$CSV_PATH" ]] || die "CSV not found: $CSV_PATH (expected under csv/incoming/)"
 
-mkdir -p "$JOB_LOG_DIR" "$WORK_DIR" "${PROJECT_ROOT}/csv/archive"
+mkdir -p "$WORK_DIR" "${PROJECT_ROOT}/csv/archive"
 rm -f "$JOB_RESULTS_FILE"
 
 log STEP "=== Starting job $JOB_NAME from $CSV_FILENAME ==="
@@ -59,13 +67,19 @@ log INFO "Launching $count server build(s) in parallel"
 
 while read -r host; do
   [[ -z "$host" ]] && continue
-  log INFO "Dispatching $host"
-  nohup "${PROJECT_ROOT}/bin/build_server.sh" "$host" "$JOB_NAME" \
-    > "${JOB_LOG_DIR}/${host%%.*}.nohup.out" 2>&1 &
+  log INFO "Dispatching $host — its full log will be logs/${JOB_NAME}/${host%%.*}.log"
+  # build_server.sh sets up its own log file internally (see its exec+tee
+  # near the top) — nothing further to capture at this level.
+  nohup "${PROJECT_ROOT}/bin/build_server.sh" "$host" "$JOB_NAME" </dev/null >/dev/null 2>&1 &
   echo "$! $host" >> "${JOB_LOG_DIR}/pids.txt"
 done < "$hostlist"
 
-log STEP "All builds dispatched. Track progress with:"
-log INFO "  tail -f ${JOB_LOG_DIR}/*.log"
-log INFO "Final per-server pass/fail summary will accumulate in:"
-log INFO "  ${JOB_RESULTS_FILE}"
+log STEP "All builds dispatched."
+if (( count == 1 )); then
+  only_host=$(head -1 "$hostlist")
+  log INFO "One server — watch it with: tail -f ${JOB_LOG_DIR}/${only_host%%.*}.log"
+else
+  log INFO "Watch one server:  tail -f ${JOB_LOG_DIR}/<hostname>.log"
+  log INFO "Watch everything:  tail -f ${JOB_LOG_DIR}/*.log"
+fi
+log INFO "Final per-server pass/fail summary will accumulate in: ${JOB_RESULTS_FILE}"

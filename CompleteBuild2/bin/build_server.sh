@@ -18,9 +18,18 @@ JOB_NAME="$2"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="${PROJECT_ROOT}/work/${JOB_NAME}/${HOSTNAME_ARG}"
 JOB_LOG_DIR="${PROJECT_ROOT}/logs/${JOB_NAME}"
-JOB_SUMMARY_LOG="${JOB_LOG_DIR}/job-summary.log"
 JOB_RESULTS_FILE="${JOB_LOG_DIR}/results.csv"
 HOSTNAME_SHORT="${HOSTNAME_ARG%%.*}"
+
+# Everything this script prints — from here on, whether via log() or a raw
+# tool/SSH error that never went through log() at all — goes to exactly one
+# file: logs/<job>/<hostname>.log. This is THE file to watch for one server.
+# Works the same whether this script is run directly (as you've been doing
+# for testing) or backgrounded by build.sh — no separate .nohup.out, no
+# separate job-summary.log; tee also mirrors to the terminal if run directly.
+mkdir -p "$JOB_LOG_DIR"
+LOGFILE="${JOB_LOG_DIR}/${HOSTNAME_SHORT}.log"
+exec > >(tee -a "$LOGFILE") 2>&1
 
 # shellcheck source=../lib/common.sh
 source "${PROJECT_ROOT}/lib/common.sh"
@@ -91,6 +100,7 @@ else
   NIC="ens0"
   log STEP "Dell bring-up: $HOSTNAME via iDRAC $MGMT_IP"
   require_idrac_reachable "$MGMT_IP"
+  gather_server_info "$MGMT_IP"
   racreset_idrac "$MGMT_IP"
   ensure_power_on "$MGMT_IP"
   set_cpufreq "$MGMT_IP"
