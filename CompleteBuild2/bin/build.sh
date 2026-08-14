@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# build.sh <csv_filename>
+# build.sh [-t] <csv_filename>
 #
 # Entrypoint. Run this from lmrg34ja after uploading the exported combined
 # CSV to csv/incoming/. The job name is taken automatically from the CSV
@@ -13,13 +13,28 @@
 #   cd /staging/BareMetalBuilds/CompleteBuild2
 #   ./bin/build.sh BDP-cedar-20260729-482.csv
 #
+# -t / --skip-idrac-wait: same flag as build_server.sh, passed through to
+# every dispatched server — skips only the 10-minute post-racreset wait.
+#
 # Launches one backgrounded build_server.sh per server found in the CSV,
 # same parallel-dispatch model as the old build_wrapper.sh.
 # =============================================================================
 set -u
 
-CSV_FILENAME="$1"
-[[ -z "$CSV_FILENAME" ]] && { echo "usage: build.sh <csv_filename_in_csv/incoming>"; exit 1; }
+usage(){ echo "usage: build.sh [-t] <csv_filename_in_csv/incoming>"; }
+
+SKIP_IDRAC_RESET_WAIT=0
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -t|--skip-idrac-wait) SKIP_IDRAC_RESET_WAIT=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    -*) echo "Unknown option: $1" >&2; usage; exit 1 ;;
+    *) POSITIONAL+=("$1"); shift ;;
+  esac
+done
+CSV_FILENAME="${POSITIONAL[0]:-}"
+[[ -z "$CSV_FILENAME" ]] && { usage; exit 1; }
 
 JOB_NAME="${CSV_FILENAME%.*}"   # strip extension -> becomes the job name
 
@@ -70,7 +85,9 @@ while read -r host; do
   log INFO "Dispatching $host — its full log will be logs/${JOB_NAME}/${host%%.*}.log"
   # build_server.sh sets up its own log file internally (see its exec+tee
   # near the top) — nothing further to capture at this level.
-  nohup "${PROJECT_ROOT}/bin/build_server.sh" "$host" "$JOB_NAME" </dev/null >/dev/null 2>&1 &
+  extra_args=()
+  [[ "$SKIP_IDRAC_RESET_WAIT" == "1" ]] && extra_args=(-t)
+  nohup "${PROJECT_ROOT}/bin/build_server.sh" "${extra_args[@]}" "$host" "$JOB_NAME" </dev/null >/dev/null 2>&1 &
   echo "$! $host" >> "${JOB_LOG_DIR}/pids.txt"
 done < "$hostlist"
 

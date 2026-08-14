@@ -1,21 +1,86 @@
 #!/bin/bash
 # =============================================================================
-# build_server.sh <hostname> <job_name>
+# build_server.sh [-t] <hostname> <job_name>
+# build_server.sh [-t] <csv_filename>
 #
 # Full lifecycle for one server: hardware bring-up -> kickstart generation ->
 # OS install -> post-install disk/LVM config -> CMDB submission.
 #
-# Called by build.sh, backgrounded (one process per server, same as the old
-# build_wrapper.sh's parallel dispatch). Everything after the OS comes up
-# runs right here — no CGI relay, no second jumpbox hop.
+# Two ways to call this:
+#   [-t] <hostname> <job_name>   used internally by build.sh's per-host
+#                                 parallel dispatch — one process per server.
+#   [-t] <csv_filename>          single-server convenience: point it straight
+#                                 at a CSV in csv/incoming/ (same .csv file
+#                                 the web tool produces, same filename
+#                                 convention as build.sh). Hostname and job
+#                                 name both come from the CSV — nothing to
+#                                 type by hand. The CSV must contain exactly
+#                                 one server; for more than one, use build.sh.
+#
+# -t / --skip-idrac-wait skips ONLY the 10-minute post-racreset settle wait.
+# Every other wait (300s before polling any -r pwrcycle job, then 60s
+# between polls) always happens regardless of -t — those aren't optional,
+# iDRAC needs them to actually apply what it's committing.
+#
+# Everything after the OS comes up runs right here — no CGI relay, no
+# second jumpbox hop.
 # =============================================================================
 set -u
 
-HOSTNAME_ARG="$1"
-JOB_NAME="$2"
-[[ -z "$HOSTNAME_ARG" || -z "$JOB_NAME" ]] && { echo "usage: build_server.sh <hostname> <job_name>"; exit 1; }
-
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage(){
+  echo "usage: build_server.sh [-t] <hostname> <job_name>"
+  echo "       build_server.sh [-t] <csv_filename>   (CSV must contain exactly one server)"
+  echo "  -t   skip the 10-minute post-racreset wait; everything else waits normally"
+}
+
+SKIP_IDRAC_RESET_WAIT=0
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -t|--skip-idrac-wait) SKIP_IDRAC_RESET_WAIT=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    -*) echo "Unknown option: $1" >&2; usage; exit 1 ;;
+    *) POSITIONAL+=("$1"); shift ;;
+  esac
+done
+
+HOSTNAME_ARG=""
+JOB_NAME=""
+
+if (( ${#POSITIONAL[@]} == 1 )); then
+  # CSV mode
+  CSV_FILENAME="${POSITIONAL[0]}"
+  JOB_NAME="${CSV_FILENAME%.*}"
+  CSV_PATH="${PROJECT_ROOT}/csv/incoming/${CSV_FILENAME}"
+  [[ -f "$CSV_PATH" ]] || { echo "CSV not found: $CSV_PATH (expected under csv/incoming/)"; exit 1; }
+
+  csv_work_dir="${PROJECT_ROOT}/work/${JOB_NAME}"
+  mkdir -p "$csv_work_dir"
+  python3 "${PROJECT_ROOT}/lib/csv_split.py" "$CSV_PATH" "$csv_work_dir" \
+    || { echo "csv_split.py failed to parse $CSV_PATH"; exit 1; }
+
+  hostlist="${csv_work_dir}/hostlist.txt"
+  [[ -s "$hostlist" ]] || { echo "No servers found in $CSV_FILENAME"; exit 1; }
+  host_count=$(wc -l < "$hostlist")
+  if (( host_count > 1 )); then
+    echo "This CSV has $host_count servers — build_server.sh only builds one at a time."
+    echo "Use build.sh for multi-server batches: ./bin/build.sh $CSV_FILENAME"
+    exit 1
+  fi
+  HOSTNAME_ARG=$(head -1 "$hostlist")
+
+elif (( ${#POSITIONAL[@]} == 2 )); then
+  # Direct mode — hostname + job name (build.sh's internal dispatch uses this)
+  HOSTNAME_ARG="${POSITIONAL[0]}"
+  JOB_NAME="${POSITIONAL[1]}"
+
+else
+  usage
+  exit 1
+fi
+
 WORK_DIR="${PROJECT_ROOT}/work/${JOB_NAME}/${HOSTNAME_ARG}"
 JOB_LOG_DIR="${PROJECT_ROOT}/logs/${JOB_NAME}"
 JOB_RESULTS_FILE="${JOB_LOG_DIR}/results.csv"
