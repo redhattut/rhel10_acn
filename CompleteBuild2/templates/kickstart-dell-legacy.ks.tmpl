@@ -1,0 +1,140 @@
+## TEMPLATE — Dell, Legacy/BIOS boot. Everything below is real,
+## directly-editable content — edit this file for that. Only __TOKEN__
+## placeholders get substituted per-server by kickstart_gen.sh (hostname,
+## network values, LVM filesystem list from the CSV, PNC provisioning
+## config). There is a separate kickstart-dell-uefi.ks.tmpl for UEFI boot —
+## the two are picked by boot mode at generation time rather than
+## branching inside one shared file, since bootloader/partitioning
+## genuinely differ by mode.
+## Server: __HOSTNAME__
+
+## --- Package source ---
+## Static HTTP mirror of the install tree, one copy per RHEL MAJOR version
+## (not per exact minor) — see README "Package source". This is the one
+## line that varies per build, since the same Dell template covers both
+## RHEL 8 and RHEL 9 servers.
+url --url __REPO_URL__
+
+lang en_US.UTF-8
+keyboard us
+skipx
+
+network --bootproto static --ip=__IP__ --netmask=255.255.255.0 --gateway=__GATEWAY__ --nameserver=192.88.246.62 --hostname=__HOSTNAME__ __NETWORK_DEVICE_PART__
+
+## --- Root password ---
+## Pre-hashed (openssl passwd -6) — never plaintext, unlike the original
+## template which had this in the clear over anonymous HTTP.
+rootpw --iscrypted $6$y5xGWWpN7mRTRQuG$V5.qvYvWJcv8QD6V5n.OgB5wFQmlFdFMKGRlSONg98alArX0Hm4beOnBLtglCuGyn3Ry4S1cKoxdnlPyzLScJ1
+
+firewall --service=ssh
+timezone --utc EST
+services --disabled gpm,sendmail,cups,pcmcia,isdn,rawdevices,hpoj,bluetooth,openibd,avahi-daemon,avahi-dnsconfd,hidd,hplip,pcscd,firewalld
+
+bootloader --location=mbr --append="crashkernel=auto rhgb quiet" --driveorder=/dev/sda
+zerombr
+ignoredisk --only-use=/dev/sda
+clearpart --all --drives=/dev/sda
+part /boot --fstype xfs --size=2048
+part pv.13 --size=153600 --grow --ondisk=/dev/sda
+part pv.14 --size=81920 --ondisk=/dev/sda
+volgroup rootvg --pesize=4096 pv.13
+volgroup toolsvg --pesize=4096 pv.14
+
+# Standard rootvg/toolsvg layout — filesystems below this line are generated
+# from the CSV (core + extra), plus fixed toolsvg volumes and (RHEL9 only)
+# rootvg extras that are NOT configurable from the intake tool.
+__LOGVOL_BLOCK__
+
+text
+reboot
+
+%packages
+@^minimal-environment
+kexec-tools
+jq
+%end
+
+%post
+logger "Starting anaconda __HOSTNAME__ postinstall"
+exec < /dev/tty3 > /dev/tty3
+/usr/bin/chvt 3
+(
+
+mkdir -p /root/.ssh
+chmod 700 /root/.ssh
+# Copying keys
+cat << EOF >> /root/.ssh/authorized_keys
+#add root keys here that needs to be at the instalation time
+from="lean309a.prod.pncint.net,lean311a.prod.pncint.net,lean312a.prod.pncint.net,lean313a.prod.pncint.net,10.6.171.188,10.8.172.57,10.8.172.58,10.6.171.189" ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDKYs6FVSSFLnYDGwHWzllkC537JNeBszcgvMrJUhOg3hzRqsfuy8mmrvC5KqNDMYAlX6NpktK/F2N+LHedhxbebG/Gqwxyd0F0LQC8exjKrW3CoQME9tfqXipamez2Xi8VN84AID3/UUtmpAON2WiillyV0cjbIVYycoJJzN9vSHeynUw7P4wR2a1H8eyIXOwpMS6nC6uOWx9T3/3z3vAePZbAzEr47WoEcf6GzwhXWBMM0lLSVRX/GgCOzERV/F4LyVMEqr/JR3zSq/d7pnPcl4eZN0aahRW0hEYXxXJ33q/HOoX9BLcfyc7ymdHxXGT9NQUvhgehLcETpdKjlkTV
+from="lean065a.rnd.pncint.net,lean066a.rnd.pncint.net,10.11.204.97,10.11.204.98" ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCeShBIXx2lGsfjGUqOVKxkIF5nhZcQ0bEJqAmP30yxBfOTQWKc9rjmoU9YrJDGmjZlhRKWIKySDF3S2WNSOj6QHgRJiRQAfMO3Mlln5IhiH3L3njnRq28UJeJ17qoGtiNrIgCSx+Tktz60UxwuL0YZWcIR3fAP+9cmkY+ZFuXU33/ClnSvzEwFSZO3IA0uz6M3ZKHWDLBxSlVU+Z4Jmu83IchBFPSbvUvymEqH4eASXi7Caispvhzlh8LBJ4vSTlawmORPwGKNjeS2Thn75P9g4XmubT4wI2eisH3h2LdRx/lxoH+wDkKZQOlkB7wm23U92I9pLaJvsRmw9nS/yq5p
+EOF
+chmod 0600 /root/.ssh/authorized_keys
+chown -R root: /root/.ssh
+command -v restorecon && restorecon -RvF /root/.ssh || true
+
+systemctl disable firewalld
+
+__PNC_PROVISION_CONFIG_BLOCK__
+
+) >>/root/PNC_PostInstall.log 2>&1
+
+echo "[main]
+dns=none" >/etc/NetworkManager/conf.d/90-dns-none.conf
+
+interface=$(udevadm info /sys/class/net/nic | grep ID_NET_NAME_ONBOARD | awk -F= '{print $2}')
+cat << EOF > /etc/sysconfig/network-scripts/ifcfg-$interface
+BOOTPROTO="none"
+IPADDR="__IP__"
+NETMASK="255.255.255.0"
+GATEWAY="__GATEWAY__"
+DOMAIN="__DOMAIN__"
+DEVICE=$interface
+HWADDR="__MAC__"
+ONBOOT=yes
+PEERDNS=no
+PEERROUTES=no
+DEFROUTE=yes
+MTU=__MTU__
+NAME=$interface
+EOF
+
+rm -rf /etc/systemd/network/10-anaconda-ifname-*
+fixfiles onboot
+
+cat > /usr/bin/firstboot.sh << 'EOF'
+#!/bin/bash
+rm -rf /etc/resolv.conf
+echo "search __DOMAIN__ pncint.net
+nameserver 192.88.246.200
+nameserver 192.88.246.203
+options timeout:2" >> /etc/resolv.conf
+systemctl disable firstboot.service
+rm -rf /etc/systemd/system/firstboot.service
+reboot
+EOF
+chmod +x /usr/bin/firstboot.sh
+
+cat > /etc/systemd/system/firstboot.service << 'EOF'
+[Unit]
+Description=First boot config
+DefaultDependencies=no
+Conflicts=shutdown.target
+Wants=network-online.target
+After=network.target network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/bin/sleep 60
+ExecStart=/usr/bin/firstboot.sh
+TimeoutSec=0
+
+[Install]
+WantedBy=sysinit.target
+EOF
+systemctl enable firstboot.service
+
+grub2-mkconfig -o /boot/grub2/grub.cfg
+sync
+exit 0
+%end
