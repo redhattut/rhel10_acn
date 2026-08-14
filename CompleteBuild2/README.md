@@ -186,13 +186,14 @@ from a separate secrets file:**
 - **GOMP auth** — a `.headers` file in the project root, read via
   `curl -H @.headers`, exactly like the old `gomp_submit.sh` did.
 - **Root password hash** — hardcoded directly into each kickstart template
-  (`templates/kickstart-dell-uefi.ks.tmpl`, `kickstart-dell-legacy.ks.tmpl`,
-  `kickstart-cisco.ks.tmpl`) as a plain `rootpw --iscrypted <hash>` line —
+  (`templates/kickstart-dell-rhel8-uefi.ks.tmpl`,
+  `kickstart-dell-rhel8-legacy.ks.tmpl`, `kickstart-cisco-rhel8.ks.tmpl`) as
+  a plain `rootpw --iscrypted <hash>` line —
   edit it directly with real `openssl passwd -6` output. It's the same
   fixed value everywhere, so it isn't generated/substituted by
   `kickstart_gen.sh` at all anymore.
-- **SSH authorized_keys** — added directly into all three templates above,
-  the same way the original `templateDELL.ks`/`templateCISCO.ks` had real
+- **SSH authorized_keys** — added directly into all three RHEL 8 templates
+  above, the same way the original `templateDELL.ks`/`templateCISCO.ks` had real
   keys baked in inline. **Whatever key goes here needs to be able to SSH
   into every newly built
   server**, since `lib/post_install.sh` uses it for post-install disk/LVM
@@ -220,6 +221,15 @@ credential set above.
     operational task, not something scriptable from here.
 
 ## Open items — verify before trusting this on real hardware
+
+- **RHEL 9 is not implemented.** `generate_kickstart()` dies deliberately
+  if `OS_VERSION`'s major version isn't 8 — there's no
+  `kickstart-dell-rhel9-*.ks.tmpl`/`kickstart-cisco-rhel9.ks.tmpl` yet.
+  Kickstart templates are now split per RHEL major version as well as per
+  boot mode (four Dell files total once RHEL 9 exists: UEFI/Legacy ×
+  8/9), each fully static rather than sharing one file with a version
+  token — add the RHEL 9 files the same way the RHEL 8 ones are
+  structured when that's ready, and extend the version check above.
 
 These are places where the rewrite made a reasonable, documented choice but
 **could not be validated against real Dell/Cisco gear** during this exercise:
