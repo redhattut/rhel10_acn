@@ -57,7 +57,7 @@ get_template_name(){
 create_and_mount_vmedia(){
   local ucsm_ip="$1" profile="$2" org="$3"
   log INFO "Creating vmedia policy for $profile"
-  run_ucsm "$ucsm_ip" "scope org;enter org /${org};create vmedia-policy ${profile};create vmedia-mapping map${profile};set device-type cdd;set remote-ip 10.8.171.50;set image-file-name build_${profile}.iso;set image-path /kickstart/SERVERS/tmpiso/${profile};set mount-protocol http;commit-buffer" >/dev/null
+  run_ucsm "$ucsm_ip" "scope org;enter org /${org};create vmedia-policy ${profile};create vmedia-mapping map${profile};set device-type cdd;set remote-ip 100.64.1.101;set image-file-name build_${profile}.iso;set image-path /kickstart/SERVERS/tmpiso/${profile};set mount-protocol http;commit-buffer" >/dev/null
   sleep 3
   log INFO "Mounting vmedia policy onto service profile"
   run_ucsm "$ucsm_ip" "scope org;enter org /${org};enter service-profile ${profile} instance;set vmedia-policy ${profile};commit-buffer" >/dev/null

@@ -23,7 +23,7 @@
 
 ISO_HOST="lmrg34ga"
 ISO_BASE="/mnt/installs/kickstart/SERVERS"
-ISO_HTTP_BASE="http://10.8.171.50/kickstart/SERVERS/tmpiso"
+ISO_HTTP_BASE="http://100.64.1.101/kickstart/SERVERS/tmpiso"
 
 # rhel_major() is defined in common.sh (shared with kickstart_gen.sh)
 
@@ -78,9 +78,16 @@ Stage the RHEL${major} install media's vmlinuz/initrd.img/isolinux(.bin,.cfg)/bo
     cp -r ${ISO_BASE}/${tmpl_dir}/* '${remote_tmpiso}/'
   " || die "Failed to stage installer boilerplate on ${ISO_HOST}"
 
+  [[ -s "$local_ks_path" ]] || die "Local kickstart is empty or missing: $local_ks_path — generate_kickstart should have caught this; something is wrong upstream"
+
   log INFO "Copying generated kickstart to ${ISO_HOST}:${remote_tmpiso}/${HOSTNAME}.ks"
   scp $SSH_OPTS "$local_ks_path" "${ISO_HOST}:${remote_tmpiso}/${HOSTNAME}.ks" \
     || die "Failed to copy kickstart to ${ISO_HOST}"
+
+  local remote_ks_size; remote_ks_size=$(ssh $SSH_OPTS "$ISO_HOST" "stat -c %s '${remote_tmpiso}/${HOSTNAME}.ks' 2>/dev/null || echo 0")
+  if [[ "$remote_ks_size" -eq 0 ]]; then
+    die "Kickstart copied to ${ISO_HOST}:${remote_tmpiso}/${HOSTNAME}.ks but landed empty (0 bytes) — scp reported success but the remote file is empty; check disk space / permissions on ${ISO_HOST}"
+  fi
 
   if [[ "$BOOT_MODE" == "UEFI" ]]; then
     log INFO "Writing EFI/BOOT/grub.cfg (UEFI boot)"

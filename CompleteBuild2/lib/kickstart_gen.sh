@@ -163,6 +163,7 @@ generate_kickstart(){
   else
     tmpl_path="${TEMPLATE_DIR}/kickstart-dell.ks.tmpl"
   fi
+  [[ -s "$tmpl_path" ]] || die "Kickstart template missing or empty: $tmpl_path — confirm templates/ was deployed alongside the rest of this project on lmrg34ja"
 
   local domain; domain=$(echo "$HOSTNAME" | cut -d'.' -f2-)
   # Package source: a static mirror per RHEL MAJOR version, not per exact
@@ -172,7 +173,7 @@ generate_kickstart(){
   # README "Package source" for why this was chosen over registering to
   # Satellite during the install itself.
   local major; major=$(rhel_major "$OS_VERSION")
-  local repo_url="http://10.8.171.50/PNC/distros/RHEL${major}-x86_64/"
+  local repo_url="http://100.64.1.101/PNC/distros/RHEL${major}-x86_64/"
   local rootpw_hash="$ROOTPW_HASH"
 
   local network_line
@@ -208,6 +209,8 @@ generate_kickstart(){
       gsub(/__PNC_PROVISION_CONFIG_BLOCK__/, prov, line)
       print line
     }' "$out_path" > "${out_path}.tmp" && mv "${out_path}.tmp" "$out_path"
+
+  [[ -s "$out_path" ]] || die "Generated kickstart is empty: $out_path — sed/awk pipeline produced no output despite template existing, check $tmpl_path manually"
 
   log INFO "Kickstart written to $out_path"
 }

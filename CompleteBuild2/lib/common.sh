@@ -230,18 +230,22 @@ parse_pdisks_full(){
 # -----------------------------------------------------------------------------
 wait_for_racadm_job(){
   local idrac_ip="$1" job_id="$2" description="${3:-Job}"
-  local max_polls="${4:-35}" sleep_s="${5:-60}"
-  log INFO "$description — $job_id created, waiting for completion (polling every ${sleep_s}s)"
+  local max_polls="${4:-30}" sleep_s="${5:-60}" initial_delay="${6:-300}"
+  log INFO "$description — $job_id created, waiting ${initial_delay}s before first status check"
+  sleep "$initial_delay"
   local n=0
   while (( n < max_polls )); do
-    sleep "$sleep_s"
-    if run_racadm "$idrac_ip" jobqueue view -i "$job_id" | grep -q "Percent Complete.*\[100\]"; then
+    local status_out; status_out=$(run_racadm "$idrac_ip" jobqueue view -i "$job_id")
+    local pct; pct=$(echo "$status_out" | grep "Percent Complete" | grep -oE "[0-9]+")
+    if [[ "$pct" == "100" ]]; then
       log INFO "$description — $job_id completed"
       return 0
     fi
+    log INFO "$description — Waiting for racadm job $job_id to complete, ${pct:-0}%"
+    sleep "$sleep_s"
     ((n++))
   done
-  log ERROR "$description — $job_id did not complete after $((max_polls*sleep_s))s of polling"
+  log ERROR "$description — $job_id did not complete after ${initial_delay}s + $((max_polls*sleep_s))s of polling"
   return 1
 }
 

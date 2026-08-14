@@ -152,7 +152,6 @@ ensure_power_on(){
 # call, makes it actually apply, deliberately, instead of by accident.
 stage_bios_settings(){
   local idrac_ip="$1"
-  log INFO "Staging BIOS setting: error prompt disabled"
   run_racadm "$idrac_ip" set bios.MiscSettings.ErrPrompt Disabled >/dev/null
   log INFO "Staging BIOS setting: CPU frequency policy PerfOptimized"
   run_racadm "$idrac_ip" set BIOS.SysProfileSettings.sysProfile PerfOptimized >/dev/null
@@ -178,7 +177,7 @@ commit_bios_settings(){
   local idrac_ip="$1"
   local jid; jid=$(create_racadm_job "$idrac_ip" "BIOS.Setup.1-1")
   [[ -z "$jid" ]] && die "Job creation failed committing BIOS settings"
-  wait_for_racadm_job "$idrac_ip" "$jid" "Committing BIOS settings (error prompt, CPU frequency, boot mode)" \
+  wait_for_racadm_job "$idrac_ip" "$jid" "Applying BIOS settings" \
     || die "BIOS settings job never completed"
 }
 
@@ -309,7 +308,7 @@ create_os_vdisk(){
   out=$(run_racadm "$idrac_ip" storage createvd:"$raid_id" -rl r1 -pdkey:"$disk1","$disk2" -name OS_Disk)
   local jid; jid=$(create_racadm_job "$idrac_ip" "$raid_id")
   [[ -z "$jid" ]] && die "Job creation failed creating OS vdisk"
-  wait_for_racadm_job "$idrac_ip" "$jid" "Creating OS vdisk" || die "OS vdisk creation job never completed"
+  wait_for_racadm_job "$idrac_ip" "$jid" "Creating OS vdisk" 30 60 600 || die "OS vdisk creation job never completed"
 }
 
 # get_mac <idrac_ip>
@@ -348,7 +347,7 @@ mount_install_media(){
     run_racadm "$idrac_ip" remoteimage -d >/dev/null
   fi
   log INFO "Mounting install ISO for $host"
-  run_racadm "$idrac_ip" remoteimage -c -l "http://10.8.171.50/kickstart/SERVERS/tmpiso/${host}/build_${host}.iso" >/dev/null
+  run_racadm "$idrac_ip" remoteimage -c -l "http://100.64.1.101/kickstart/SERVERS/tmpiso/${host}/build_${host}.iso" >/dev/null
   run_racadm "$idrac_ip" set iDRAC.VirtualMedia.BootOnce 1 >/dev/null
   run_racadm "$idrac_ip" set iDRAC.ServerBoot.FirstBootDevice VCD-DVD >/dev/null
 }
