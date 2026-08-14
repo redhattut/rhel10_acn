@@ -102,41 +102,23 @@ build_logvol_block(){
   echo -e "$block"
 }
 
-# build_boot_partitions <boot_mode> <os_disk_gb>
+# bootloader_line <UEFI|Legacy>
 # UEFI: /boot/efi + /boot + rootvg partition + toolsvg partition (80G fixed)
 # Legacy: /boot + rootvg partition + toolsvg partition (80G fixed)
-build_boot_partitions(){
-  local boot_mode="$1" osdisk_gb="$2"  # osdisk_gb no longer used — see below
-  local toolsvg_mb=81920   # 80GB, fixed regardless of actual disk size
-  local rootvg_mb=153600   # 150GB minimum — --grow below consumes whatever
-                            # space is actually left on the disk beyond this;
-                            # this is a floor, not a computed exact-fit size
+# bootloader_line <UEFI|Legacy>
+bootloader_line(){
+  local boot_mode="$1"
   if [[ "$boot_mode" == "UEFI" ]]; then
-    cat <<EOF
-bootloader --location=partition --boot-drive=sda --append="crashkernel=auto rhgb quiet" --driveorder=/dev/sda
-zerombr
-ignoredisk --only-use=/dev/sda
-clearpart --all --drives=/dev/sda
-part /boot --fstype xfs --size=2048
-part /boot/efi --fstype efi --size=2048
-part pv.13 --size=${rootvg_mb} --grow --ondisk=/dev/sda
-part pv.14 --size=${toolsvg_mb} --ondisk=/dev/sda
-volgroup rootvg --pesize=4096 pv.13
-volgroup toolsvg --pesize=4096 pv.14
-EOF
+    echo 'bootloader --location=partition --boot-drive=sda --append="crashkernel=auto rhgb quiet" --driveorder=/dev/sda'
   else
-    cat <<EOF
-bootloader --location=mbr --append="crashkernel=auto rhgb quiet" --driveorder=/dev/sda
-zerombr
-ignoredisk --only-use=/dev/sda
-clearpart --all --drives=/dev/sda
-part /boot --fstype xfs --size=2048
-part pv.13 --size=${rootvg_mb} --grow --ondisk=/dev/sda
-part pv.14 --size=${toolsvg_mb} --ondisk=/dev/sda
-volgroup rootvg --pesize=4096 pv.13
-volgroup toolsvg --pesize=4096 pv.14
-EOF
+    echo 'bootloader --location=mbr --append="crashkernel=auto rhgb quiet" --driveorder=/dev/sda'
   fi
+}
+
+# boot_efi_line <UEFI|Legacy>
+boot_efi_line(){
+  local boot_mode="$1"
+  [[ "$boot_mode" == "UEFI" ]] && echo "part /boot/efi --fstype efi --size=2048"
 }
 
 # build_pnc_provision_config_block <name> <ip> <gateway> <location> <ci_device>
@@ -186,8 +168,11 @@ generate_kickstart(){
   fi
 
   local logvol_block; logvol_block=$(build_logvol_block "$CORE_FILESYSTEMS" "$EXTRA_FILESYSTEMS" "$OS_VERSION")
-  local boot_partitions=""
-  [[ "$HARDWARE" != "Cisco" ]] && boot_partitions=$(build_boot_partitions "$BOOT_MODE" "$OS_DISK_GB")
+  local bl_line="" efi_line=""
+  if [[ "$HARDWARE" != "Cisco" ]]; then
+    bl_line=$(bootloader_line "$BOOT_MODE")
+    efi_line=$(boot_efi_line "$BOOT_MODE")
+  fi
   local provision_block; provision_block=$(build_pnc_provision_config_block "$HOSTNAME" "$IP" "$GATEWAY" "$LOCATION" "$CI_DEVICE")
 
   # Single-pass substitution — one tool, one point of failure. This used to
@@ -210,7 +195,8 @@ generate_kickstart(){
     -v gateway="$GATEWAY" \
     -v domain="$domain" \
     -v mac="$MAC" \
-    -v boot="$boot_partitions" \
+    -v bl="$bl_line" \
+    -v efi="$efi_line" \
     -v logvol="$logvol_block" \
     -v prov="$provision_block" '
     {
@@ -224,7 +210,8 @@ generate_kickstart(){
       gsub(/__DOMAIN__/, domain, line)
       gsub(/__MAC__/, mac, line)
       gsub(/__MTU__/, "9000", line)
-      gsub(/__BOOT_PARTITIONS__/, boot, line)
+      gsub(/__BOOTLOADER_LINE__/, bl, line)
+      gsub(/__BOOT_EFI_LINE__/, efi, line)
       gsub(/__LOGVOL_BLOCK__/, logvol, line)
       gsub(/__PNC_PROVISION_CONFIG_BLOCK__/, prov, line)
       print line
