@@ -84,7 +84,14 @@ gather_server_info(){
   local mnemonic; mnemonic=$(echo "$HOSTNAME" | head -c4 | tail -c3 | tr '[:lower:]' '[:upper:]')
   local subnet; subnet=$(echo "$IP" | sed 's/\.[0-9]*$/.0/')
   local idrac_name; idrac_name=$(grep "DNSRacName" "$raw_file" | awk '{print $3}' | head -1)
-  local bios_mode; bios_mode=$(sed -n '/=== BIOS boot mode/,/=== iDRAC name/p' "$raw_file" | grep -oE '(Uefi|Bios)' | head -1)
+  # NOT `grep -oE '(Uefi|Bios)'` — same landmine as verify_boot_mode()
+  # below: the "[Key=BIOS.Setup.1-1#BiosBootSettings]" header line in this
+  # block contains "Bios" as a substring of "BiosBootSettings", and an
+  # unanchored match finds THAT before ever reaching the real
+  # "BootMode=Uefi" value line — confirmed this was actually happening
+  # (this field showed "Bios" on a real box whose manually-checked boot
+  # mode was actually Uefi). Anchor to "BootMode=" specifically.
+  local bios_mode; bios_mode=$(sed -n '/=== BIOS boot mode/,/=== iDRAC name/p' "$raw_file" | grep -oE 'BootMode=(Uefi|Bios)' | cut -d= -f2)
 
   # NICs — same hwinventory block shape get_mac() already parses, just
   # collecting every NIC's MAC instead of stopping at the first Up link.
@@ -214,7 +221,15 @@ verify_boot_mode(){
   local idrac_ip="$1" requested_mode="$2"
   local expected; expected=$(dell_racadm_boot_mode "$requested_mode")
   local actual
-  actual=$(run_racadm "$idrac_ip" get BIOS.BiosBootSettings.BootMode | grep -oE '(Uefi|Bios)' | head -1)
+  # NOT `grep -oE '(Uefi|Bios)'` — the get output's OWN key header line is
+  # "[Key=BIOS.Setup.1-1#BiosBootSettings]", which contains "Bios" as a
+  # substring of "BiosBootSettings". An unanchored match finds that first
+  # and never reaches the real "BootMode=Uefi" line below it — confirmed
+  # exactly this way against real output on lmrg181a (manual racadm get
+  # correctly showed BootMode=Uefi; this function reported Bios). Anchoring
+  # to "BootMode=" specifically is what actually distinguishes the value
+  # from the label text surrounding it.
+  actual=$(run_racadm "$idrac_ip" get BIOS.BiosBootSettings.BootMode | grep -oE 'BootMode=(Uefi|Bios)' | cut -d= -f2)
   if [[ "$actual" != "$expected" ]]; then
     die "Boot mode verification failed on $idrac_ip: requested $requested_mode (racadm value $expected), but the server is actually in $actual. Building an ISO for the wrong boot mode produces a boot menu/install that looks nothing like expected and typically fails outright — not proceeding. Check manually with: racadm get BIOS.BiosBootSettings.BootMode"
   fi
