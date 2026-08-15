@@ -80,14 +80,17 @@ template_dir_for(){
 #      relying on the fetch's own short retry loop to paper over a network
 #      that isn't ready yet. Generous, not exact — tune down once you've
 #      confirmed real-world negotiation time on this switch/port config.
-#   2. ksdevice=bond0 (bonded case only) — explicit, instead of
-#      ksdevice=link. "ksdevice=link" tells Anaconda to use whichever
-#      configured device gets carrier FIRST. During LACP negotiation, an
-#      individual slave NIC commonly shows physical link/carrier before the
-#      bond itself has finished aggregating — Anaconda can grab that slave
-#      directly (which has no IP of its own; the address is on bond0) and
-#      then fail to fetch anything over it. Naming bond0 explicitly makes
-#      Anaconda wait for the actual device the ip= line configures.
+#   2. ksdevice — explicit (bond0, or the target NIC name), instead of
+#      ksdevice=link in either branch. "ksdevice=link" tells Anaconda to
+#      use whichever configured device gets carrier FIRST — on a
+#      multi-NIC box (this hardware has 6: onboard eno* ports plus the
+#      add-in ens0/ens6f0/ens6f1 ports), that is not guaranteed to be the
+#      one actually configured by ip=/ifname=. Confirmed on lmrg181a's
+#      boot log: eno12409 got "NIC Link is up" before ens0 did — an
+#      onboard port with no IP of its own winning the race against the
+#      one we actually configured is exactly the kind of ambiguity that
+#      produces "link is up but nothing works." Naming the device
+#      explicitly removes the ambiguity entirely, for both branches.
 build_kernel_append_line(){
   local ks_url="${KS_FETCH_HTTP_BASE}/${HOSTNAME_SHORT}/${HOSTNAME}.ks"
   # rd.net.timeout.carrier added on top of ifup/route: this is the knob that
@@ -105,8 +108,8 @@ build_kernel_append_line(){
     log INFO "LACP='${LACP}' -> bonded boot params (bond0, ksdevice=bond0)"
     echo "initrd=initrd.img ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:bond0:none bond=bond0:[${MAC}]:mode=802.3ad,lacp_rate=fast,miimon=100,xmit_hash_policy=layer2+3 ipv6.disable=1 ${net_timeouts} inst.ks=${ks_url} ksdevice=bond0 nompath kssendmac"
   else
-    log INFO "LACP='${LACP}' -> non-bonded boot params (${NIC}, ksdevice=link)"
-    echo "initrd=initrd.img ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:${NIC}:none ifname=${NIC}:${MAC} ${net_timeouts} inst.ks=${ks_url} ksdevice=link kssendmac"
+    log INFO "LACP='${LACP}' -> non-bonded boot params (${NIC}, ksdevice=${NIC})"
+    echo "initrd=initrd.img ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:${NIC}:none ifname=${NIC}:${MAC} ${net_timeouts} inst.ks=${ks_url} ksdevice=${NIC} kssendmac"
   fi
 }
 
