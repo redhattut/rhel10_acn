@@ -114,6 +114,7 @@ build_kernel_append_line(){
 # Main entry point. Everything after this runs on lmrg34ga over SSH.
 build_boot_iso(){
   local local_ks_path="$1"
+  log_section "ISO build (on ${ISO_HOST})"
   local tmpl_dir; tmpl_dir=$(template_dir_for "$OS_VERSION" "$BOOT_MODE")
   local remote_tmpiso="${ISO_BASE}/tmpiso/${HOSTNAME_SHORT}"
   local append_line; append_line=$(build_kernel_append_line)
@@ -121,7 +122,7 @@ build_boot_iso(){
 
   log INFO "Kernel append line: ${append_line}"
 
-  log STEP "Checking installer boilerplate for RHEL${major} / ${BOOT_MODE} on ${ISO_HOST}"
+  log INFO "Checking installer boilerplate for RHEL${major} / ${BOOT_MODE} on ${ISO_HOST}"
   if ! ssh $SSH_OPTS "$ISO_HOST" "[ -d '${ISO_BASE}/${tmpl_dir}' ]"; then
     die "Missing installer boilerplate: ${ISO_HOST}:${ISO_BASE}/${tmpl_dir} does not exist. \
 Stage the RHEL${major} install media's vmlinuz/initrd.img/isolinux(.bin,.cfg)/boot.cat \

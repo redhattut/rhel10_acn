@@ -69,6 +69,20 @@ log_raw(){
   fi
 }
 
+# log_section <title>
+# Visual divider for major phase transitions (hardware bring-up, storage,
+# network/kickstart, waiting for OS install, post-install, ...). The title
+# line still goes through log() — full [timestamp][STEP][host] — so it's
+# still real signal for anything that parses the log the normal way; the
+# divider bars themselves are log_raw() so they don't compete with that.
+log_section(){
+  local title="$1"
+  log_raw ""
+  log_raw "════════════════════════════════════════════════════════════════════"
+  log STEP "$title"
+  log_raw "════════════════════════════════════════════════════════════════════"
+}
+
 die(){
   log ERROR "$*"
   record_result "FAILED" "$*"
@@ -132,10 +146,15 @@ record_result(){
 # Central place that decides HOW a racadm command's result gets logged —
 # called by run_racadm() for every call. Three tiers:
 #
-#   1. SILENT — getsysinfo, hwinventory, "storage get pdisks"/"get vdisks"
-#      (any -p variant), and job-queue polling/creation (both have their own
-#      purpose-built summary lines from wait_for_racadm_job()/
-#      create_racadm_job() instead — see common.sh). Nothing printed here.
+#   1. SILENT — getsysinfo, hwinventory, bare attribute "get ..." reads
+#      (BIOS boot mode / iDRAC name — used inside gather_server_info, which
+#      already prints its own SERVER INFORMATION summary from these),
+#      "nicstatistics ..." (used per-NIC while hunting for the live link in
+#      get_mac() — 6 NICs' worth of full stats per server is pure noise),
+#      "storage get pdisks"/"get vdisks" (any -p variant), and job-queue
+#      polling/creation (both have their own purpose-built summary lines
+#      from wait_for_racadm_job()/create_racadm_job() instead — see
+#      common.sh). Nothing printed here for any of these.
 #   2. CONDENSED — "set ..." and the storage delete/erase/create commands.
 #      These always return the same few-line legal-notice boilerplate
 #      (RAC1017/RAC1024/RAC1040/STOR094/"Object value modified
@@ -153,7 +172,7 @@ log_racadm_result(){
   local cmd="$1" out="$2"
 
   case "$cmd" in
-    getsysinfo|hwinventory|"storage get pdisks"*|"storage get vdisks"*|"jobqueue view -i "*|"jobqueue create "*)
+    getsysinfo|hwinventory|"get "*|"nicstatistics "*|"storage get pdisks"*|"storage get vdisks"*|"jobqueue view -i "*|"jobqueue create "*)
       return 0
       ;;
   esac
@@ -418,6 +437,12 @@ ssh_wait(){
       log INFO "SSH is up on $target"
       return 0
     fi
+    # One line every 5 polls (2.5min at the default 30s interval) rather
+    # than every single poll — a max_polls=40 wait would otherwise print 40
+    # near-identical "not yet" lines; this still proves the wait is alive
+    # without flooding the log during what's normally just "OS still
+    # installing, nothing wrong yet."
+    (( n > 0 && n % 5 == 0 )) && log INFO "Still waiting for SSH on $target ($n of $max_polls)"
     sleep "$sleep_s"
     ((n++))
   done

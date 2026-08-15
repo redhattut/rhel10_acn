@@ -29,9 +29,19 @@ racreset_idrac(){
 
 # -----------------------------------------------------------------------------
 # gather_server_info <idrac_ip>
-# Runs once per server, before any changes are made — a clean snapshot of
-# what's actually on the box. Saves ALL raw racadm output to a single file
-# for reference/debugging, then logs a compact human-readable summary.
+# Runs once per server, after racreset_idrac()/ensure_power_on() but before
+# any BIOS/RAID changes — a snapshot of what's actually on the box, taken
+# with the server in a known-good state (iDRAC responsive, power confirmed
+# on) rather than whatever state it happened to be in when the script
+# started. Saves ALL raw racadm output to a single file for
+# reference/debugging, then logs a compact human-readable summary right
+# after "Gathering server information" — nothing else prints in between.
+#
+# NOTE on ordering: this deliberately runs AFTER ensure_power_on(), so its
+# own POWER field will always read ON — that's fine, not a bug. The actual
+# pre-existing power state (in case the server was found off) is captured
+# and logged by ensure_power_on() itself, before it does anything; nothing
+# is lost by gather_server_info() no longer being the one to report it.
 #
 # Purely diagnostic: never fails the build. Fields it can't determine show
 # as "unknown" rather than aborting anything.
@@ -152,6 +162,7 @@ ensure_power_on(){
 # call, makes it actually apply, deliberately, instead of by accident.
 stage_bios_settings(){
   local idrac_ip="$1"
+  log_section "BIOS settings"
   run_racadm "$idrac_ip" set bios.MiscSettings.ErrPrompt Disabled >/dev/null
   log INFO "Staging BIOS setting: CPU frequency policy PerfOptimized"
   run_racadm "$idrac_ip" set BIOS.SysProfileSettings.sysProfile PerfOptimized >/dev/null
@@ -160,10 +171,54 @@ stage_bios_settings(){
 # set_boot_mode <idrac_ip> <UEFI|Legacy>
 # Stages the boot mode change — does NOT commit. Call commit_bios_settings()
 # afterward to apply this along with whatever else was staged.
+#
+# CRITICAL: BIOS.BiosBootSettings.BootMode is a case-sensitive racadm enum.
+# The pipeline's own $BOOT_MODE convention (used everywhere else — template
+# selection in iso_gen.sh/kickstart_gen.sh) is "UEFI" (all caps) / anything
+# else for Legacy. That is NOT a valid value for this specific racadm
+# attribute — confirmed against real hardware output (`racadm get
+# BIOS.BiosBootSettings.BootMode` returns exactly "Uefi" or "Bios", title
+# case). Sending "UEFI" gets rejected with RAC947 "Invalid object value
+# specified" — silently, since the caller discards this command's output.
+# Translate here, at the one place this pipeline talks to the actual racadm
+# attribute, rather than changing the "UEFI" convention used everywhere
+# else in the pipeline.
+dell_racadm_boot_mode(){
+  local mode="$1"
+  if [[ "${mode^^}" == "UEFI" ]]; then
+    echo "Uefi"
+  else
+    echo "Bios"
+  fi
+}
+
 set_boot_mode(){
   local idrac_ip="$1" mode="$2"
-  log INFO "Staging BIOS setting: boot mode $mode"
-  run_racadm "$idrac_ip" set BIOS.BiosBootSettings.BootMode "$mode" >/dev/null
+  local racadm_mode; racadm_mode=$(dell_racadm_boot_mode "$mode")
+  log INFO "Staging BIOS setting: boot mode $mode (racadm value: $racadm_mode)"
+  run_racadm "$idrac_ip" set BIOS.BiosBootSettings.BootMode "$racadm_mode" >/dev/null
+}
+
+# verify_boot_mode <idrac_ip> <UEFI|Legacy>
+# Re-reads the boot mode AFTER commit_bios_settings() and compares against
+# what was actually requested — a job reaching "Completed 100%" only means
+# the JOB finished, not that every individual staged value was accepted;
+# an invalid enum value (like the UEFI/Uefi casing bug this pipeline had)
+# gets silently dropped from the batch while the rest of the job still
+# commits and reports success. Building the wrong ISO format (EFI-only vs
+# Legacy/isolinux) for whatever boot mode the firmware ACTUALLY ends up in
+# is exactly the kind of mismatch that produces a boot menu that looks
+# nothing like expected and an install that never really starts — this
+# check exists so that failure mode is a loud die(), not a silent one.
+verify_boot_mode(){
+  local idrac_ip="$1" requested_mode="$2"
+  local expected; expected=$(dell_racadm_boot_mode "$requested_mode")
+  local actual
+  actual=$(run_racadm "$idrac_ip" get BIOS.BiosBootSettings.BootMode | grep -oE '(Uefi|Bios)' | head -1)
+  if [[ "$actual" != "$expected" ]]; then
+    die "Boot mode verification failed on $idrac_ip: requested $requested_mode (racadm value $expected), but the server is actually in $actual. Building an ISO for the wrong boot mode produces a boot menu/install that looks nothing like expected and typically fails outright — not proceeding. Check manually with: racadm get BIOS.BiosBootSettings.BootMode"
+  fi
+  log INFO "Boot mode verified: $actual"
 }
 
 # commit_bios_settings <idrac_ip>
@@ -184,6 +239,7 @@ commit_bios_settings(){
 # remove_existing_vdisks <idrac_ip>
 remove_existing_vdisks(){
   local idrac_ip="$1"
+  log_section "Storage: clearing existing vdisk"
   local vdisk_out; vdisk_out=$(run_racadm "$idrac_ip" storage get vdisks -o -p name)
   if echo "$vdisk_out" | grep -qi ERROR; then
     log INFO "No existing virtual disks to remove"
@@ -234,6 +290,7 @@ remove_existing_vdisks(){
 # -----------------------------------------------------------------------------
 cryptographic_erase_disks(){
   local idrac_ip="$1"
+  log_section "Storage: cryptographic erase"
   log INFO "Cryptographically erasing physical disks on $idrac_ip for a clean slate"
   local pdisks; pdisks=$(run_racadm "$idrac_ip" storage get pdisks -o -p mediatype,size)
   local parsed; parsed=$(echo "$pdisks" | parse_pdisks)
@@ -274,6 +331,7 @@ create_os_vdisk(){
   local idrac_ip="$1" size_gb="$2"
   remove_existing_vdisks "$idrac_ip"
 
+  log_section "Storage: creating OS vdisk"
   log INFO "Enumerating physical disks for OS vdisk (target ${size_gb}GB)"
   local pdisks; pdisks=$(run_racadm "$idrac_ip" storage get pdisks -o -p mediatype,size)
   local parsed; parsed=$(echo "$pdisks" | parse_pdisks)
@@ -341,6 +399,7 @@ get_mac(){
 # mount_install_media <idrac_ip> <hostname_short>
 mount_install_media(){
   local idrac_ip="$1" host="$2"
+  log_section "Mounting install media & booting"
   local vmedia; vmedia=$(run_racadm "$idrac_ip" remoteimage -s | grep Enabled)
   if [[ -n "$vmedia" ]]; then
     log INFO "Unmounting existing virtual media first"
