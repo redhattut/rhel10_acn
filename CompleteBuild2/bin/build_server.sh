@@ -106,6 +106,33 @@ HOSTNAME_SHORT="${HOSTNAME_ARG%%.*}"
 # logs/<job>/<hostname>.log — that's THE file to watch for one server.
 mkdir -p "$JOB_LOG_DIR"
 
+# Per-host lock — refuses a second concurrent build_server.sh run against
+# the SAME host+job. Without this, running the same host twice (e.g.
+# re-running after CSV-mode's dispatch-and-detach returned control
+# immediately, not realizing the first run was still going in the
+# background) launches two processes that both reconfigure the same
+# physical server's BIOS/RAID/network concurrently and both append to the
+# same per-host log file — the two timelines interleave, and one process's
+# late-stage "waiting for SSH" can land chronologically in the middle of
+# the other's still-in-progress RAID setup, which is exactly as confusing
+# and as dangerous as it sounds for actual shared hardware.
+LOCK_FILE="${JOB_LOG_DIR}/${HOSTNAME_SHORT}.lock"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  existing_pid=$(cat "$LOCK_FILE" 2>/dev/null)
+  msg="A build_server.sh run for $HOSTNAME_ARG (job $JOB_NAME) is already in progress (lock held${existing_pid:+, pid in lock file: $existing_pid}). Not starting a second one. If that run is actually dead, remove $LOCK_FILE and retry."
+  echo "$msg" >&2
+  # Also written directly to the per-host log file, not just stderr — the
+  # CSV-mode dispatch path above launches this exact script a second time
+  # via `nohup ... >/dev/null 2>&1 &`, so stderr alone would be silently
+  # swallowed and this rejection would never be seen anywhere. This is the
+  # one line in this script written to the log file before common.sh
+  # (and its log()/log_raw()) are even sourced, for exactly that reason.
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] [${HOSTNAME_SHORT}] ${msg}" >> "${JOB_LOG_DIR}/${HOSTNAME_SHORT}.log"
+  exit 1
+fi
+echo "$$" >&9
+
 # shellcheck source=../lib/common.sh
 source "${PROJECT_ROOT}/lib/common.sh"
 source "${PROJECT_ROOT}/lib/dell_hw.sh"
@@ -119,7 +146,7 @@ check_secrets
 [[ -f "${WORK_DIR}/server.env" ]] || die "No server.env found for $HOSTNAME_ARG — did csv_split.py run?"
 source "${WORK_DIR}/server.env"
 
-log STEP "=== Starting build for $HOSTNAME (job $JOB_NAME, hardware $HARDWARE) ==="
+log_section "Starting build for $HOSTNAME (job $JOB_NAME, hardware $HARDWARE)"
 
 # ---- Network facts ----
 IP=$(resolve_ip "$HOSTNAME" "server hostname")
@@ -161,9 +188,10 @@ if [[ "$HARDWARE" == "Cisco" ]]; then
   PROFILE="$HOSTNAME_SHORT"
   ORG="$ORG_NAME"
 
-  log STEP "Cisco bring-up: $PROFILE in org $ORG via UCSM $MGMT_IP"
+  log_section "Cisco bring-up: $PROFILE in org $ORG via UCSM $MGMT_IP"
   require_ucsm_reachable "$MGMT_IP"
   UCSM_TEMPLATE_NAME=$(get_template_name "$MGMT_IP" "$PROFILE" "$ORG")
+  log_section "Network / kickstart"
   MAC=$(get_mac_ucsm "$MGMT_IP" "$PROFILE" "$ORG")
   [[ -z "$MAC" ]] && die "Could not determine MAC address from UCSM"
   ucsm_boot_mode=$(get_boot_mode_ucsm "$MGMT_IP" "$PROFILE" "$ORG")
@@ -179,15 +207,17 @@ if [[ "$HARDWARE" == "Cisco" ]]; then
 
 else
   NIC="ens0"
-  log STEP "Dell bring-up: $HOSTNAME via iDRAC $MGMT_IP"
+  log_section "Dell bring-up: $HOSTNAME via iDRAC $MGMT_IP"
   require_idrac_reachable "$MGMT_IP"
-  gather_server_info "$MGMT_IP"
   racreset_idrac "$MGMT_IP"
   ensure_power_on "$MGMT_IP"
+  gather_server_info "$MGMT_IP"
   stage_bios_settings "$MGMT_IP"
   set_boot_mode "$MGMT_IP" "$BOOT_MODE"
   commit_bios_settings "$MGMT_IP"
+  verify_boot_mode "$MGMT_IP" "$BOOT_MODE"
   create_os_vdisk "$MGMT_IP" "$OS_DISK_GB"
+  log_section "Network / kickstart"
   MAC=$(get_mac "$MGMT_IP")
   [[ -z "$MAC" ]] && die "Could not determine MAC address from iDRAC"
 
@@ -198,15 +228,16 @@ else
   restart_server_dell "$MGMT_IP"
 fi
 
-log INFO "Kickstart and hardware bring-up complete for $HOSTNAME. Waiting for OS install."
+log INFO "Kickstart and hardware bring-up complete for $HOSTNAME."
 
 # =============================================================================
 # Wait for OS install to finish, then run post-install
 # =============================================================================
+log_section "Waiting for OS install on $HOSTNAME"
 sleep 900   # rough estimate for a RHEL minimal install; ssh_wait below is the real gate
 ssh_wait "$HOSTNAME" 40 30 || die "SSH never came up on $HOSTNAME after install"
 
-log STEP "OS is up on $HOSTNAME — starting post-install configuration"
+log_section "OS is up on $HOSTNAME — starting post-install configuration"
 # Satellite registration/patching is triggered downstream by GOMP after
 # gomp_submit() below, not by this script — see lib/post_install.sh.
 configure_extra_disks "$HOSTNAME_SHORT" "$HOSTNAME" "$HARDWARE" "$MGMT_IP" "${WORK_DIR}/disks.tsv"
@@ -217,5 +248,5 @@ fi
 
 gomp_submit "$HOSTNAME_SHORT" "$DATACENTER" "$OS_VERSION"
 
-log STEP "=== Build complete for $HOSTNAME ==="
+log_section "Build complete for $HOSTNAME"
 record_result "SUCCESS" "build and post-install complete"
