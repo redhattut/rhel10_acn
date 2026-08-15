@@ -69,23 +69,6 @@ log_raw(){
   fi
 }
 
-# log_racadm_output <label> <output>
-# Logs a racadm response (often multi-line, e.g. "STOR094: The storage
-# configuration operation is successfully completed and the change is in
-# pending state.") as PLAIN TEXT — no [timestamp][LEVEL][host] prefix per
-# line — via log_raw(), so what lands in the log/console is exactly what
-# racadm itself printed, not our own formatting wrapped around it. A single
-# labeled header line (through log(), so it still gets a timestamp) marks
-# where the raw block starts, since the raw lines themselves carry no
-# indication of which command produced them.
-log_racadm_output(){
-  local label="$1"; shift
-  local output="$*"
-  [[ -z "$output" ]] && return
-  log INFO "${label} output:"
-  log_raw "$output"
-}
-
 die(){
   log ERROR "$*"
   record_result "FAILED" "$*"
@@ -145,6 +128,64 @@ record_result(){
 }
 
 # -----------------------------------------------------------------------------
+# log_racadm_result <full_cmd> <output>
+# Central place that decides HOW a racadm command's result gets logged —
+# called by run_racadm() for every call. Three tiers:
+#
+#   1. SILENT — getsysinfo, hwinventory, "storage get pdisks"/"get vdisks"
+#      (any -p variant), and job-queue polling/creation (both have their own
+#      purpose-built summary lines from wait_for_racadm_job()/
+#      create_racadm_job() instead — see common.sh). Nothing printed here.
+#   2. CONDENSED — "set ..." and the storage delete/erase/create commands.
+#      These always return the same few-line legal-notice boilerplate
+#      (RAC1017/RAC1024/RAC1040/STOR094/"Object value modified
+#      successfully") on success — condensed to one line. Genuine errors
+#      (an "ERROR:" line anywhere in the output) are never condensed away —
+#      those still show in full, since that's exactly the case you need
+#      the detail for.
+#   3. FALLBACK — anything not matched above (remoteimage, serveraction,
+#      etc.) still gets the original header + full raw dump. These are
+#      already short, one-shot, meaningful results as-is, and defaulting to
+#      "show everything" is the safe choice for command shapes this
+#      function doesn't specifically know about yet.
+# -----------------------------------------------------------------------------
+log_racadm_result(){
+  local cmd="$1" out="$2"
+
+  case "$cmd" in
+    getsysinfo|hwinventory|"storage get pdisks"*|"storage get vdisks"*|"jobqueue view -i "*|"jobqueue create "*)
+      return 0
+      ;;
+  esac
+
+  case "$cmd" in
+    "set "*|"storage deletevd:"*|"storage cryptographicerase:"*|"storage createvd:"*)
+      local result="" err_line=""
+      err_line=$(echo "$out" | grep -m1 "^ERROR")
+      if [[ -n "$err_line" ]]; then
+        log ERROR "racadm ${cmd} -> ${err_line}"
+        return 0
+      elif [[ "$out" == *"Object value modified successfully"* ]]; then
+        result="OK"
+      elif [[ "$out" == *"RAC1017"* ]]; then
+        result="pending (reboot required)"
+      elif [[ "$out" == *"STOR094"* || "$out" == *"RAC1040"* ]]; then
+        result="accepted, pending"
+      fi
+      if [[ -n "$result" ]]; then
+        log INFO "racadm ${cmd} -> ${result}"
+        return 0
+      fi
+      # Unrecognized shape for a command family we normally condense —
+      # fall through to the full dump rather than silently show nothing.
+      ;;
+  esac
+
+  log INFO "racadm ${cmd}:"
+  log_raw "$out"
+}
+
+# -----------------------------------------------------------------------------
 # racadm wrapper (Dell / iDRAC)
 #   run_racadm <idrac_ip> <racadm-args...>
 # Centralizes the sshpass/ssh invocation so credential handling and timeouts
@@ -161,13 +202,11 @@ run_racadm(){
     log ERROR "racadm '$*' on $idrac_ip failed (ssh exit $rc): $(cat "$errfile")"
   fi
   rm -f "$errfile"
-  # Every racadm call's raw output goes to the log here, centrally — not
-  # just the handful of call sites that used to call log_racadm_output()
-  # explicitly. This goes through log()/log_raw() (stderr), so it's safe
-  # even for callers doing `out=$(run_racadm ...)` to parse the result —
-  # nothing here touches the stdout `echo "$out"` below.
-  log INFO "racadm $*:"
-  log_raw "$out"
+  # log_racadm_result() decides what actually gets logged (silent/condensed/
+  # full) — see it above for the rules. This goes through log()/log_raw()
+  # (stderr), so it's safe even for callers doing `out=$(run_racadm ...)`
+  # to parse the result — nothing here touches the stdout `echo` below.
+  log_racadm_result "$*" "$out"
   echo "$out"
 }
 
@@ -288,6 +327,12 @@ parse_pdisks_full(){
 # consistently (the old code mixed --realtime and -r pwrcycle across
 # different functions, which is the most likely reason some HDD/RAID jobs on
 # iDRAC10 silently never completed).
+#
+# Logging: "jobqueue view -i ..." raw output is silenced in
+# log_racadm_result() above — the full 8-line JOB block on every single poll
+# was most of the log's length for no added information. This prints exactly
+# one line per poll instead, and pulls Actual Start/Completion Time out of
+# the final "Completed" poll for a one-line summary with elapsed time.
 # -----------------------------------------------------------------------------
 wait_for_racadm_job(){
   local idrac_ip="$1" job_id="$2" description="${3:-Job}"
@@ -299,10 +344,23 @@ wait_for_racadm_job(){
     local status_out; status_out=$(run_racadm "$idrac_ip" jobqueue view -i "$job_id")
     local pct; pct=$(echo "$status_out" | grep "Percent Complete" | grep -oE "[0-9]+")
     if [[ "$pct" == "100" ]]; then
-      log INFO "$description — $job_id completed"
+      local start_str comp_str elapsed_str
+      start_str=$(echo "$status_out" | sed -n 's/^Actual Start Time=\[\(.*\)\]$/\1/p')
+      comp_str=$(echo "$status_out" | sed -n 's/^Actual Completion Time=\[\(.*\)\]$/\1/p')
+      elapsed_str=""
+      if [[ -n "$start_str" && -n "$comp_str" ]]; then
+        local start_epoch comp_epoch
+        start_epoch=$(date -d "$start_str" +%s 2>/dev/null)
+        comp_epoch=$(date -d "$comp_str" +%s 2>/dev/null)
+        if [[ -n "$start_epoch" && -n "$comp_epoch" ]]; then
+          local diff=$(( comp_epoch - start_epoch ))
+          elapsed_str=", ~$((diff/60))m$((diff%60))s"
+        fi
+      fi
+      log INFO "$description — $job_id Completed 100% (${start_str:-?} -> ${comp_str:-?}${elapsed_str})"
       return 0
     fi
-    log INFO "$description — Waiting for racadm job $job_id to complete, ${pct:-0}%"
+    log INFO "$description — $job_id Running ${pct:-0}%"
     sleep "$sleep_s"
     ((n++))
   done
@@ -312,11 +370,15 @@ wait_for_racadm_job(){
 
 # Creates a racadm job (BIOS.Setup.1-1 or a storage RAID id) with -r pwrcycle
 # and returns the parsed Job ID on stdout, or empty string on failure.
+# Logging: "jobqueue create ..." raw output (RAC1024 boilerplate) is
+# silenced in log_racadm_result() above — this prints the one line that
+# actually matters (the resulting Commit JID, or FAILED) instead.
 create_racadm_job(){
   local idrac_ip="$1" raid_or_bios_id="$2"
   local out jid
   out=$(run_racadm "$idrac_ip" jobqueue create "$raid_or_bios_id" -r pwrcycle)
   jid=$(echo "$out" | grep "Commit JID" | awk -F= '{print $2}' | tr -d ' ')
+  log INFO "racadm jobqueue create ${raid_or_bios_id} -r pwrcycle -> ${jid:-FAILED, no Commit JID in output}"
   echo "$jid"
 }
 
