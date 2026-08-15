@@ -70,18 +70,20 @@ log_raw(){
 }
 
 # log_racadm_output <label> <output>
-# Logs each line of a racadm response (which is often multi-line, e.g.
-# "STOR094: The storage configuration operation is successfully completed
-# and the change is in pending state.") with its own timestamped entry,
-# so the real racadm response is visible in the log instead of just this
-# pipeline's own summary — whether it succeeded or reported an error.
+# Logs a racadm response (often multi-line, e.g. "STOR094: The storage
+# configuration operation is successfully completed and the change is in
+# pending state.") as PLAIN TEXT — no [timestamp][LEVEL][host] prefix per
+# line — via log_raw(), so what lands in the log/console is exactly what
+# racadm itself printed, not our own formatting wrapped around it. A single
+# labeled header line (through log(), so it still gets a timestamp) marks
+# where the raw block starts, since the raw lines themselves carry no
+# indication of which command produced them.
 log_racadm_output(){
   local label="$1"; shift
   local output="$*"
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    log INFO "$label: $line"
-  done <<< "$output"
+  [[ -z "$output" ]] && return
+  log INFO "${label} output:"
+  log_raw "$output"
 }
 
 die(){
@@ -159,6 +161,13 @@ run_racadm(){
     log ERROR "racadm '$*' on $idrac_ip failed (ssh exit $rc): $(cat "$errfile")"
   fi
   rm -f "$errfile"
+  # Every racadm call's raw output goes to the log here, centrally — not
+  # just the handful of call sites that used to call log_racadm_output()
+  # explicitly. This goes through log()/log_raw() (stderr), so it's safe
+  # even for callers doing `out=$(run_racadm ...)` to parse the result —
+  # nothing here touches the stdout `echo "$out"` below.
+  log INFO "racadm $*:"
+  log_raw "$out"
   echo "$out"
 }
 
@@ -361,6 +370,29 @@ trim(){ echo "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
 # Shared by kickstart_gen.sh (repo URL) and iso_gen.sh (installer boilerplate
 # selection) so both agree on the same major-version grouping.
 rhel_major(){ echo "${1%%.*}"; }
+
+# LMRG34GA_IP — lmrg34ga's IP address, used anywhere a URL needs to be
+# resolvable from INSIDE the RHEL installer environment during boot
+# (repo url, kickstart inst.ks= fetch). At that point in boot there is no
+# /etc/resolv.conf yet — DNS for lmrg34ga.prod.pncint.net simply doesn't
+# work — so these specific URLs have to be IP-based, confirmed against the
+# legacy scripts (legacy_isolinux.cfg, legacy_create_ks_rhel8_dell.sh,
+# legacy_templateDELL.ks all used this same IP). This is a DIFFERENT
+# concern from ISO_HOST/ISO_HTTP_BASE in iso_gen.sh, which stay
+# hostname-based on purpose — those are used for the iDRAC virtual-media
+# mount, which iDRAC's own firmware/management-network DNS resolves fine,
+# and for the SSH hop from lmrg34ja to lmrg34ga, which also isn't affected
+# by the installed OS having no resolv.conf yet.
+#
+# One more thing confirmed from the legacy scripts: under THIS IP, the
+# docroot layout is NOT the same as under the lmrg34ga.prod.pncint.net
+# vhost — no "/PNC/installs" prefix for the kickstart tmpiso path (legacy:
+# http://10.8.171.50/kickstart/SERVERS/tmpiso/...), while the distros repo
+# path DOES keep "/PNC/distros/..." either way. Don't "fix" that asymmetry
+# without checking with whoever owns the web server config on lmrg34ga —
+# it's exactly the kind of assumption that broke the kickstart fetch once
+# already.
+LMRG34GA_IP="10.8.171.50"
 
 # is_lacp_enabled <raw_lacp_value>
 # Single source of truth for "does this server use LACP/bonding?" — used by

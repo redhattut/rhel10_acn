@@ -203,7 +203,6 @@ remove_existing_vdisks(){
     [[ -z "$vdisk_id" ]] && continue
     log INFO "Removing existing virtual disk $vdisk_id"
     local del_out; del_out=$(run_racadm "$idrac_ip" storage deletevd:"$vdisk_id")
-    log_racadm_output "deletevd" "$del_out"
     raid_id=$(echo "$vdisk_id" | awk -F: '{print $2}')
   done <<< "$vdisk_ids"
 
@@ -247,7 +246,6 @@ cryptographic_erase_disks(){
     [[ "${media^^}" == "NVME" ]] && continue
     log INFO "cryptographicerase: $disk_id"
     local erase_out; erase_out=$(run_racadm "$idrac_ip" storage cryptographicerase:"$disk_id")
-    log_racadm_output "cryptographicerase" "$erase_out"
     erased_any="yes"
     [[ -z "$raid_id" ]] && raid_id=$(echo "$disk_id" | awk -F: '{print $3}')
   done <<< "$parsed"
@@ -308,7 +306,6 @@ create_os_vdisk(){
   log INFO "Creating RAID1 OS_Disk on $disk1 + $disk2 (controller $raid_id)"
   local out
   out=$(run_racadm "$idrac_ip" storage createvd:"$raid_id" -rl r1 -pdkey:"$disk1","$disk2" -name OS_Disk)
-  log_racadm_output "createvd" "$out"
   local jid; jid=$(create_racadm_job "$idrac_ip" "$raid_id")
   [[ -z "$jid" ]] && die "Job creation failed creating OS vdisk"
   wait_for_racadm_job "$idrac_ip" "$jid" "Creating OS vdisk" 30 60 600 || die "OS vdisk creation job never completed"

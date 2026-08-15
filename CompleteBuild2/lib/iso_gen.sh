@@ -23,7 +23,21 @@
 
 ISO_HOST="lmrg34ga"
 ISO_BASE="/mnt/installs/kickstart/SERVERS"
+# ISO_HTTP_BASE — for the informational log line + the iDRAC virtual-media
+# mount URL's shape. Hostname-based ON PURPOSE: this is fetched by iDRAC's
+# own firmware over the management network, which has real DNS, unlike the
+# installer environment (see KS_FETCH_HTTP_BASE below). Not used for
+# inst.ks= — do not reuse this for that.
 ISO_HTTP_BASE="http://lmrg34ga.prod.pncint.net/PNC/installs/kickstart/SERVERS/tmpiso"
+# KS_FETCH_HTTP_BASE — for inst.ks=, the URL the installer itself fetches
+# the kickstart from mid-boot. MUST be IP-based (LMRG34GA_IP, common.sh) —
+# no /etc/resolv.conf exists yet at that point, so lmrg34ga.prod.pncint.net
+# will not resolve. Also note: NO "/PNC/installs" prefix here, unlike
+# ISO_HTTP_BASE above — confirmed against legacy_isolinux.cfg /
+# legacy_create_ks_rhel8_dell.sh, the IP vhost's docroot for this path
+# is laid out differently than the hostname vhost's. Don't "align" the two
+# without confirming with whoever owns lmrg34ga's web server config.
+KS_FETCH_HTTP_BASE="http://${LMRG34GA_IP}/kickstart/SERVERS/tmpiso"
 
 # rhel_major() is defined in common.sh (shared with kickstart_gen.sh)
 
@@ -75,7 +89,7 @@ template_dir_for(){
 #      then fail to fetch anything over it. Naming bond0 explicitly makes
 #      Anaconda wait for the actual device the ip= line configures.
 build_kernel_append_line(){
-  local ks_url="${ISO_HTTP_BASE}/${HOSTNAME_SHORT}/${HOSTNAME}.ks"
+  local ks_url="${KS_FETCH_HTTP_BASE}/${HOSTNAME_SHORT}/${HOSTNAME}.ks"
   # rd.net.timeout.carrier added on top of ifup/route: this is the knob that
   # actually matters for "link light is up but the switch isn't forwarding
   # yet" (e.g. spanning-tree listening/learning on a port without
