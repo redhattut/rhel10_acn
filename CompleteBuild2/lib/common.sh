@@ -103,23 +103,26 @@ die(){
 # by then, from a value resolved at ISO-build time, not read from the .ks
 # file at install time.
 resolve_ip(){
-  local fqdn="$1"
-  local label="$2"
-  local ip
-
-  log INFO "DNS lookup: dig ${fqdn} +short"
-
-  ip=$(dig "$fqdn" +short | head -1 | tr -d '\r')
+  local hostname="$1" label="$2"
+  local raw ip
+  raw=$(dig "$hostname" +short)
+  ip=$(echo "$raw" | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' | head -1)
 
   if [[ -z "$ip" ]]; then
-    die "DNS lookup failed for $label ($fqdn)"
+    die "DNS lookup failed for $label ($hostname) — dig returned: '$(echo "$raw" | tr '\n' ' ')'"
   fi
 
-  if [[ ! "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-    die "DNS lookup for $label ($fqdn) did not return an IPv4 address: $ip"
+  # Shape alone isn't enough — 999.999.999.999 matches this too.
+  local IFS=. octet
+  local -a octets=($ip)
+  for octet in "${octets[@]}"; do
+    if (( octet < 0 || octet > 255 )); then
+      die "DNS lookup for $label ($hostname) returned a malformed address: $ip"
+    fi
+  done
+  if [[ "$ip" == "0.0.0.0" || "$ip" == 127.* ]]; then
+    die "DNS lookup for $label ($hostname) returned a non-routable address: $ip — check the DNS record manually before trusting anything downstream of this"
   fi
-
-  log INFO "DNS result: ${fqdn} -> ${ip}"
 
   echo "$ip"
 }
@@ -358,6 +361,33 @@ trim(){ echo "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
 # Shared by kickstart_gen.sh (repo URL) and iso_gen.sh (installer boilerplate
 # selection) so both agree on the same major-version grouping.
 rhel_major(){ echo "${1%%.*}"; }
+
+# is_lacp_enabled <raw_lacp_value>
+# Single source of truth for "does this server use LACP/bonding?" — used by
+# BOTH kickstart_gen.sh (network --device=... line, applied at install time)
+# and iso_gen.sh (kernel append line, applied at boot time). Those two MUST
+# agree with each other, or the server gets a kickstart file that assumes
+# bonding while the boot-time network never actually formed a bond (or vice
+# versa) — a silent mismatch, not an error either script would ever catch.
+#
+# Historically this was a bare `[[ "$LACP" == "Yes" ]]` in each file
+# separately, exact-match, case-sensitive. The web tool always sends the
+# literal string "Yes"/"No", but any hand-built or legacy-sourced CSV
+# (the old scripts checked lowercase "yes") silently falls through to the
+# non-bonded branch on anything else — "yes", "YES", trailing whitespace,
+# blank. No error, nothing in the log. If the switch port is actually
+# configured for LACP, a single un-bundled NIC often can't pass traffic at
+# all, which looks exactly like "the network never really comes up" at
+# install time. Trim + lowercase here so that class of mismatch can't
+# happen silently again; callers should log the raw value they received so
+# it's visible in the per-server log either way.
+is_lacp_enabled(){
+  local raw="$1"
+  # trim leading/trailing whitespace, lowercase
+  raw="${raw#"${raw%%[![:space:]]*}"}"
+  raw="${raw%"${raw##*[![:space:]]}"}"
+  [[ "${raw,,}" == "yes" ]]
+}
 
 # -----------------------------------------------------------------------------
 # CSV helpers (used by record_result() below and available generally)

@@ -46,12 +46,53 @@ template_dir_for(){
 # installed OS's NetworkManager config even exists — it has to be the MAC,
 # not an interface name, since interface naming isn't guaranteed yet at this
 # point in boot).
+#
+# LACP yes/no is evaluated via is_lacp_enabled() (common.sh) — same function
+# kickstart_gen.sh's network_device_part() uses. Keeping this in one place
+# means the boot-time network config (here) and the install-time network
+# config (the .ks file) can never silently disagree about bonded vs.
+# non-bonded for the same server.
+#
+# Two additions vs. the original legacy append line, both aimed at the same
+# real-world failure mode: LACP negotiation (plus switch-side spanning-tree
+# convergence, if the port isn't set to portfast/edge) can legitimately take
+# well past the ~1s x 3-retry window Anaconda gives the one-shot kickstart
+# fetch. If the link isn't fully up and routable yet, that fetch fails fast
+# and permanently — it does not wait around for the network to finish
+# coming up, it just gives up.
+#   1. rd.net.timeout.ifup / rd.net.timeout.route — tell dracut's network
+#      bring-up itself to wait longer for the interface and its route to be
+#      ready BEFORE anaconda ever attempts the kickstart fetch, instead of
+#      relying on the fetch's own short retry loop to paper over a network
+#      that isn't ready yet. Generous, not exact — tune down once you've
+#      confirmed real-world negotiation time on this switch/port config.
+#   2. ksdevice=bond0 (bonded case only) — explicit, instead of
+#      ksdevice=link. "ksdevice=link" tells Anaconda to use whichever
+#      configured device gets carrier FIRST. During LACP negotiation, an
+#      individual slave NIC commonly shows physical link/carrier before the
+#      bond itself has finished aggregating — Anaconda can grab that slave
+#      directly (which has no IP of its own; the address is on bond0) and
+#      then fail to fetch anything over it. Naming bond0 explicitly makes
+#      Anaconda wait for the actual device the ip= line configures.
 build_kernel_append_line(){
   local ks_url="${ISO_HTTP_BASE}/${HOSTNAME_SHORT}/${HOSTNAME}.ks"
-  if [[ "$LACP" == "Yes" ]]; then
-    echo "initrd=initrd.img ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:bond0:none bond=bond0:[${MAC}]:mode=802.3ad,lacp_rate=fast,miimon=100,xmit_hash_policy=layer2+3 ipv6.disable=1 inst.ks=${ks_url} ksdevice=link nompath kssendmac"
+  # rd.net.timeout.carrier added on top of ifup/route: this is the knob that
+  # actually matters for "link light is up but the switch isn't forwarding
+  # yet" (e.g. spanning-tree listening/learning on a port without
+  # portfast/edge-port set) — the failure mode confirmed on lmrg181a. ifup
+  # and route only wait for local interface/route state, which is already
+  # satisfied with a static ip= config; they don't wait for the switch to
+  # actually start passing frames. carrier is the one that inserts real
+  # wall-clock patience before Anaconda's one-shot kickstart fetch fires.
+  # This is a workaround, not a fix — the real fix is portfast/edge-port on
+  # the switch port itself; ask network team to confirm/set that.
+  local net_timeouts="rd.net.timeout.carrier=60 rd.net.timeout.ifup=120 rd.net.timeout.route=90"
+  if is_lacp_enabled "$LACP"; then
+    log INFO "LACP='${LACP}' -> bonded boot params (bond0, ksdevice=bond0)"
+    echo "initrd=initrd.img ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:bond0:none bond=bond0:[${MAC}]:mode=802.3ad,lacp_rate=fast,miimon=100,xmit_hash_policy=layer2+3 ipv6.disable=1 ${net_timeouts} inst.ks=${ks_url} ksdevice=bond0 nompath kssendmac"
   else
-    echo "initrd=initrd.img ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:${NIC}:none ifname=${NIC}:${MAC} inst.ks=${ks_url} ksdevice=link kssendmac"
+    log INFO "LACP='${LACP}' -> non-bonded boot params (${NIC}, ksdevice=link)"
+    echo "initrd=initrd.img ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:${NIC}:none ifname=${NIC}:${MAC} ${net_timeouts} inst.ks=${ks_url} ksdevice=link kssendmac"
   fi
 }
 
@@ -63,6 +104,8 @@ build_boot_iso(){
   local remote_tmpiso="${ISO_BASE}/tmpiso/${HOSTNAME_SHORT}"
   local append_line; append_line=$(build_kernel_append_line)
   local major; major=$(rhel_major "$OS_VERSION")
+
+  log INFO "Kernel append line: ${append_line}"
 
   log STEP "Checking installer boilerplate for RHEL${major} / ${BOOT_MODE} on ${ISO_HOST}"
   if ! ssh $SSH_OPTS "$ISO_HOST" "[ -d '${ISO_BASE}/${tmpl_dir}' ]"; then

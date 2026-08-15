@@ -102,11 +102,19 @@ build_logvol_block(){
 # one piece — --device=X differs structurally between a bonded and a plain
 # NIC, not just by value, so it can't be a single-value substitution the
 # way __IP__/__GATEWAY__ are.
+#
+# LACP yes/no is evaluated via is_lacp_enabled() (common.sh) — the SAME
+# function iso_gen.sh uses for the boot-time kernel append line. Do not
+# duplicate the comparison here; if the install-time network config and the
+# boot-time kernel append line ever disagree about bonded vs. non-bonded,
+# that's a silent, hard-to-diagnose failure.
 network_device_part(){
   local lacp="$1" nic="$2"
-  if [[ "$lacp" == "Yes" ]]; then
+  if is_lacp_enabled "$lacp"; then
+    log INFO "LACP='${lacp}' -> bonded (--device=bond0, bondslaves=${nic})"
     echo "--device=bond0 --bondslaves=${nic} --bondopts=802.3ad,lacp_rate=fast,miimon=100,xmit_hash_policy=layer2+3"
   else
+    log INFO "LACP='${lacp}' -> non-bonded (--device=${nic})"
     echo "--device=${nic}"
   fi
 }
