@@ -103,26 +103,23 @@ die(){
 # by then, from a value resolved at ISO-build time, not read from the .ks
 # file at install time.
 resolve_ip(){
-  local hostname="$1" label="$2"
-  local raw ip
-  raw=$(dig "$hostname" +short)
-  ip=$(echo "$raw" | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' | head -1)
+  local fqdn="$1"
+  local label="$2"
+  local ip
+
+  log INFO "DNS lookup: dig ${fqdn} +short"
+
+  ip=$(dig "$fqdn" +short | head -1 | tr -d '\r')
 
   if [[ -z "$ip" ]]; then
-    die "DNS lookup failed for $label ($hostname) — dig returned: '$(echo "$raw" | tr '\n' ' ')'"
+    die "DNS lookup failed for $label ($fqdn)"
   fi
 
-  # Shape alone isn't enough — 999.999.999.999 matches this too.
-  local IFS=. octet
-  local -a octets=($ip)
-  for octet in "${octets[@]}"; do
-    if (( octet < 0 || octet > 255 )); then
-      die "DNS lookup for $label ($hostname) returned a malformed address: $ip"
-    fi
-  done
-  if [[ "$ip" == "0.0.0.0" || "$ip" == 127.* ]]; then
-    die "DNS lookup for $label ($hostname) returned a non-routable address: $ip — check the DNS record manually before trusting anything downstream of this"
+  if [[ ! "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    die "DNS lookup for $label ($fqdn) did not return an IPv4 address: $ip"
   fi
+
+  log INFO "DNS result: ${fqdn} -> ${ip}"
 
   echo "$ip"
 }
