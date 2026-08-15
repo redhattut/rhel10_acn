@@ -1,0 +1,83 @@
+## TEMPLATE — Cisco UCS, RHEL 8. Everything below is real, directly-editable
+## content — edit this file for that. Only __TOKEN__ placeholders get
+## substituted per-server by kickstart_gen.sh (hostname, network values,
+## LVM filesystem list from the CSV, PNC provisioning values). RHEL 9 isn't
+## built yet — this pipeline currently only builds RHEL 8.
+## Server: __HOSTNAME__
+## Disk/RAID layout for Cisco is owned by the UCS service profile/storage
+## policy, not this kickstart — that's why there's no vdisk creation step in
+## cisco_hw.sh the way there is in dell_hw.sh.
+
+## --- Package source ---
+url --url http://10.8.171.50/PNC/distros/RHEL8.6-x86_64/
+
+lang en_US.UTF-8
+keyboard us
+skipx
+
+network --bootproto static --ip=__IP__ --netmask=255.255.255.0 --gateway=__GATEWAY__ --nameserver=192.88.246.62 --hostname=__HOSTNAME__ __NETWORK_DEVICE_PART__
+
+## --- Root password ---
+## Pre-hashed (openssl passwd -6) — never plaintext.
+rootpw --iscrypted $6$y5xGWWpN7mRTRQuG$V5.qvYvWJcv8QD6V5n.OgB5wFQmlFdFMKGRlSONg98alArX0Hm4beOnBLtglCuGyn3Ry4S1cKoxdnlPyzLScJ1
+
+firewall --service=ssh
+timezone --utc EST
+services --disabled gpm,sendmail,cups,pcmcia,isdn,rawdevices,hpoj,bluetooth,openibd,avahi-daemon,avahi-dnsconfd,hidd,hplip,pcscd,firewalld
+
+bootloader --location=mbr --append="crashkernel=auto rhgb quiet" --driveorder=/dev/sda
+zerombr
+ignoredisk --only-use=/dev/sda
+clearpart --all --drives=/dev/sda
+part /boot --fstype "xfs" --size=2048 --ondisk=/dev/sda
+part pv.13 --size=153600 --grow --ondisk=/dev/sda
+part pv.14 --size=81920 --ondisk=/dev/sda
+volgroup rootvg --pesize=4096 pv.13
+volgroup toolsvg --pesize=4096 pv.14
+
+__LOGVOL_BLOCK__
+
+text
+reboot
+
+%packages
+@^minimal-environment
+kexec-tools
+jq
+%end
+
+%post
+logger "Starting anaconda __HOSTNAME__ postinstall"
+exec < /dev/tty3 > /dev/tty3
+/usr/bin/chvt 3
+(
+
+mkdir -p /root/.ssh
+chmod 700 /root/.ssh
+# Copying keys
+cat << EOF >> /root/.ssh/authorized_keys
+#add root keys here that needs to be at the instalation time
+from="lean309a.prod.pncint.net,lean311a.prod.pncint.net,lean312a.prod.pncint.net,lean313a.prod.pncint.net,10.6.171.188,10.8.172.57,10.8.172.58,10.6.171.189" ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDKYs6FVSSFLnYDGwHWzllkC537JNeBszcgvMrJUhOg3hzRqsfuy8mmrvC5KqNDMYAlX6NpktK/F2N+LHedhxbebG/Gqwxyd0F0LQC8exjKrW3CoQME9tfqXipamez2Xi8VN84AID3/UUtmpAON2WiillyV0cjbIVYycoJJzN9vSHeynUw7P4wR2a1H8eyIXOwpMS6nC6uOWx9T3/3z3vAePZbAzEr47WoEcf6GzwhXWBMM0lLSVRX/GgCOzERV/F4LyVMEqr/JR3zSq/d7pnPcl4eZN0aahRW0hEYXxXJ33q/HOoX9BLcfyc7ymdHxXGT9NQUvhgehLcETpdKjlkTV
+from="lean065a.rnd.pncint.net,lean066a.rnd.pncint.net,10.11.204.97,10.11.204.98" ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCeShBIXx2lGsfjGUqOVKxkIF5nhZcQ0bEJqAmP30yxBfOTQWKc9rjmoU9YrJDGmjZlhRKWIKySDF3S2WNSOj6QHgRJiRQAfMO3Mlln5IhiH3L3njnRq28UJeJ17qoGtiNrIgCSx+Tktz60UxwuL0YZWcIR3fAP+9cmkY+ZFuXU33/ClnSvzEwFSZO3IA0uz6M3ZKHWDLBxSlVU+Z4Jmu83IchBFPSbvUvymEqH4eASXi7Caispvhzlh8LBJ4vSTlawmORPwGKNjeS2Thn75P9g4XmubT4wI2eisH3h2LdRx/lxoH+wDkKZQOlkB7wm23U92I9pLaJvsRmw9nS/yq5p
+EOF
+chmod 0600 /root/.ssh/authorized_keys
+chown -R root: /root/.ssh
+command -v restorecon && restorecon -RvF /root/.ssh || true
+
+systemctl disable firewalld
+
+echo "BUILDSERVER=\"lmrg34ja\"
+BUILD_OS=\"RHEL\"
+HOSTNAME=\"__HOSTNAME__\"
+FINALIPADDR=\"__IP__\"
+GATEWAY=\"__GATEWAY__\"
+LOCATION=\"__LOCATION__\"
+CIDEVICE=\"__CI_DEVICE__\"
+###" >/boot/PNC_PROVISION_CONFIG
+
+) >>/root/PNC_PostInstall.log 2>&1
+
+grub2-mkconfig -o /boot/grub2/grub.cfg
+sync
+exit 0
+%end
