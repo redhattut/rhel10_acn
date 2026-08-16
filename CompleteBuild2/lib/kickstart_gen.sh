@@ -81,6 +81,17 @@ build_logvol_block(){
     block+="$(emit_logvol_line "$mount" "$size" "rootvg")  # extra filesystem\n"
   done < <(parse_pairs "$extra")
 
+  # NOTE for whoever adds RHEL9 support: this must compare against RHEL9's
+  # actual INSTALL media version (an RHEL9 equivalent of
+  # RHEL8_INSTALL_MEDIA_VERSION in iso_gen.sh), NOT $osver ($OS_VERSION,
+  # the CSV's final GOMP-patched target) directly — same distinction that
+  # caused a real bug in iso_gen.sh's grub.cfg generation (a CSV row
+  # targeting 8.10 generated a grub.cfg searching for install media that
+  # was never staged, when the actual staged/bootable media is always
+  # 8.6; GOMP is what gets the server to 8.10 post-install, not this
+  # step). "9.8" below is a placeholder for whatever version ships as the
+  # actual staged RHEL9 install tree — define and use a real constant for
+  # it instead of comparing directly against the CSV value.
   if [[ "$osver" == "9.8" ]]; then
     for entry in "${RHEL9_ROOTVG_EXTRA[@]}"; do
       IFS=: read -r mount lv size <<< "$entry"

@@ -39,6 +39,22 @@ ISO_HTTP_BASE="http://lmrg34ga.prod.pncint.net/PNC/installs/kickstart/SERVERS/tm
 # without confirming with whoever owns lmrg34ga's web server config.
 KS_FETCH_HTTP_BASE="http://${LMRG34GA_IP}/kickstart/SERVERS/tmpiso"
 
+# RHEL8_INSTALL_MEDIA_VERSION — the ONE RHEL 8.x install tree actually
+# staged on lmrg34ga (TEMPLATE8/TEMPLATE8EFI) and mirrored at
+# /PNC/distros/RHEL8.6-x86_64/ (see the kickstart templates' `url --url`
+# line). This is NOT the same thing as $OS_VERSION from the CSV, which is
+# the FINAL patched version GOMP/Satellite brings the server to
+# post-install (build_server.sh passes $OS_VERSION to gomp_submit for
+# exactly that reason, further down the pipeline) — a CSV row asking for
+# 8.10 still installs from this same 8.6 media; GOMP is what actually gets
+# it to 8.10 afterward. Anything describing the INSTALL ENVIRONMENT itself
+# (the grub menu title, the volume label GRUB searches for) must use this
+# constant, not $OS_VERSION — using $OS_VERSION there was a real bug,
+# confirmed by a generated grub.cfg asking GRUB to search for a
+# 'RHEL-8-10-0-BaseOS-x86_64' volume label that was never actually staged,
+# only 'RHEL-8-6-0-BaseOS-x86_64' exists.
+RHEL8_INSTALL_MEDIA_VERSION="8.6"
+
 # rhel_major() is defined in common.sh (shared with kickstart_gen.sh)
 
 # template_dir_for <os_version> <boot_mode>
@@ -183,11 +199,12 @@ Stage the RHEL${major} install media's vmlinuz/initrd.img/isolinux(.bin,.cfg)/bo
     #     "looked nothing like legacy"), not functional, but worth
     #     matching anyway since it's exactly what's on the media already.
     # Volume label follows the real RHEL install media convention
-    # (confirmed: lmrg182a's media used 'RHEL-8-6-0-BaseOS-x86_64' for
-    # OS_VERSION 8.6) — built from the actual OS_VERSION, not hardcoded,
-    # same reasoning as the repo URL fix earlier: this has to track
-    # whatever OS_VERSION this specific server actually requested.
-    local rhel_label="RHEL-${OS_VERSION//./-}-0-BaseOS-x86_64"
+    # (confirmed: lmrg182a's media used 'RHEL-8-6-0-BaseOS-x86_64') — built
+    # from RHEL8_INSTALL_MEDIA_VERSION (the actual staged media, always
+    # 8.6), NOT $OS_VERSION (the CSV's final GOMP-patched target, e.g.
+    # 8.10) — see RHEL8_INSTALL_MEDIA_VERSION's definition above for why
+    # those are two different things.
+    local rhel_label="RHEL-${RHEL8_INSTALL_MEDIA_VERSION//./-}-0-BaseOS-x86_64"
     ssh $SSH_OPTS "$ISO_HOST" "cat > '${remote_tmpiso}/EFI/BOOT/grub.cfg'" <<EOF
 set default="0"
 
@@ -211,7 +228,7 @@ set timeout=5
 search --no-floppy --set=root -l '${rhel_label}'
 
 label ${HOSTNAME_SHORT}
-menuentry 'Install Red Hat Enterprise Linux ${major}' --class fedora --class gnu-linux --class gnu --class os {
+menuentry 'Install Red Hat Enterprise Linux ${RHEL8_INSTALL_MEDIA_VERSION}' --class fedora --class gnu-linux --class gnu --class os {
 	linuxefi /images/pxeboot/vmlinuz ${append_line}
 	initrdefi /images/pxeboot/initrd.img
 }
