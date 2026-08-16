@@ -26,7 +26,7 @@ firewall --service=ssh
 timezone --utc EST
 services --disabled gpm,sendmail,cups,pcmcia,isdn,rawdevices,hpoj,bluetooth,openibd,avahi-daemon,avahi-dnsconfd,hidd,hplip,pcscd,firewalld
 
-bootloader --location=partition --boot-drive=sda --append="crashkernel=auto rhgb quiet" --driveorder=/dev/sda
+bootloader --location=mbr --boot-drive=sda --append="crashkernel=auto rhgb quiet" --driveorder=/dev/sda
 zerombr
 ignoredisk --only-use=/dev/sda
 clearpart --all --drives=/dev/sda
