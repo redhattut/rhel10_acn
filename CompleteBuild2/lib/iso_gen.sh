@@ -91,6 +91,20 @@ template_dir_for(){
 #      one we actually configured is exactly the kind of ambiguity that
 #      produces "link is up but nothing works." Naming the device
 #      explicitly removes the ambiguity entirely, for both branches.
+#   3. rd.route=0.0.0.0/0:${GATEWAY}:<device> — an EXPLICIT default route,
+#      independent of the gateway field inside ip=. Added after a real
+#      failure on lmrg181a where ip= correctly assigned the address
+#      (confirmed: exact IP, correct /24, right device) but NO route ever
+#      landed in the routing table — not even the basic on-link connected
+#      route for the local subnet (confirmed via `ip route show table
+#      all`: nothing but automatic local-table bookkeeping entries). The
+#      address got noprefixroute, which suppresses the automatic connected
+#      route and normally implies whatever's managing the interface
+#      intends to add routes itself — but on this box it never did, for
+#      reasons not yet fully root-caused. rd.route= is a separate dracut
+#      mechanism from the ip= gateway field, not redundant with something
+#      already proven broken — an independent path to the same outcome,
+#      likely to survive whatever is suppressing the implicit one.
 build_kernel_append_line(){
   local ks_url="${KS_FETCH_HTTP_BASE}/${HOSTNAME_SHORT}/${HOSTNAME}.ks"
   # rd.net.timeout.carrier added on top of ifup/route: this is the knob that
@@ -106,10 +120,10 @@ build_kernel_append_line(){
   local net_timeouts="rd.net.timeout.carrier=60 rd.net.timeout.ifup=120 rd.net.timeout.route=90"
   if is_lacp_enabled "$LACP"; then
     log INFO "LACP='${LACP}' -> bonded boot params (bond0, ksdevice=bond0)"
-    echo "initrd=initrd.img ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:bond0:none bond=bond0:[${MAC}]:mode=802.3ad,lacp_rate=fast,miimon=100,xmit_hash_policy=layer2+3 ipv6.disable=1 ${net_timeouts} inst.ks=${ks_url} ksdevice=bond0 nompath kssendmac"
+    echo "initrd=initrd.img ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:bond0:none bond=bond0:[${MAC}]:mode=802.3ad,lacp_rate=fast,miimon=100,xmit_hash_policy=layer2+3 ipv6.disable=1 ${net_timeouts} rd.route=0.0.0.0/0:${GATEWAY}:bond0 inst.ks=${ks_url} ksdevice=bond0 nompath kssendmac"
   else
     log INFO "LACP='${LACP}' -> non-bonded boot params (${NIC}, ksdevice=${NIC})"
-    echo "initrd=initrd.img ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:${NIC}:none ifname=${NIC}:${MAC} ${net_timeouts} inst.ks=${ks_url} ksdevice=${NIC} kssendmac"
+    echo "initrd=initrd.img ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:${NIC}:none ifname=${NIC}:${MAC} ${net_timeouts} rd.route=0.0.0.0/0:${GATEWAY}:${NIC} inst.ks=${ks_url} ksdevice=${NIC} kssendmac"
   fi
 }
 
@@ -152,8 +166,50 @@ Stage the RHEL${major} install media's vmlinuz/initrd.img/isolinux(.bin,.cfg)/bo
 
   if [[ "$BOOT_MODE" == "UEFI" ]]; then
     log INFO "Writing EFI/BOOT/grub.cfg (UEFI boot)"
-    local rhel_label="RHEL-${major} x86_64"
+    # Full GRUB header + explicit `search --set=root`, matching legacy's
+    # actual working grub.cfg structure exactly — confirmed against
+    # lmrg182a's original legacy-generated grub.cfg (successful install).
+    # The version this replaced wrote ONLY the bare label/menuentry block,
+    # missing:
+    #   - `search --no-floppy --set=root -l '<volume label>'` — tells GRUB
+    #     which device/partition actually holds /images/pxeboot/vmlinuz,
+    #     instead of relying on whatever $root happens to default to.
+    #   - `set timeout=5` — with NO timeout configured at all, GRUB has no
+    #     reason to ever proceed past the menu on its own. This alone
+    #     explains "doesn't auto-start, have to press Enter" — confirmed
+    #     directly against lmrg181a's boot screen, which never had a
+    #     timeout in the first place.
+    #   - the video/gfxpayload/insmod boilerplate — cosmetic (why the menu
+    #     "looked nothing like legacy"), not functional, but worth
+    #     matching anyway since it's exactly what's on the media already.
+    # Volume label follows the real RHEL install media convention
+    # (confirmed: lmrg182a's media used 'RHEL-8-6-0-BaseOS-x86_64' for
+    # OS_VERSION 8.6) — built from the actual OS_VERSION, not hardcoded,
+    # same reasoning as the repo URL fix earlier: this has to track
+    # whatever OS_VERSION this specific server actually requested.
+    local rhel_label="RHEL-${OS_VERSION//./-}-0-BaseOS-x86_64"
     ssh $SSH_OPTS "$ISO_HOST" "cat > '${remote_tmpiso}/EFI/BOOT/grub.cfg'" <<EOF
+set default="0"
+
+function load_video {
+  insmod efi_gop
+  insmod efi_uga
+  insmod video_bochs
+  insmod video_cirrus
+  insmod all_video
+}
+
+load_video
+set gfxpayload=keep
+insmod gzio
+insmod part_gpt
+insmod ext2
+
+set timeout=5
+### END /etc/grub.d/00_header ###
+
+search --no-floppy --set=root -l '${rhel_label}'
+
 label ${HOSTNAME_SHORT}
 menuentry 'Install Red Hat Enterprise Linux ${major}' --class fedora --class gnu-linux --class gnu --class os {
 	linuxefi /images/pxeboot/vmlinuz ${append_line}
