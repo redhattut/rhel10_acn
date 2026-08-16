@@ -90,56 +90,47 @@ template_dir_for(){
 # fetch. If the link isn't fully up and routable yet, that fetch fails fast
 # and permanently — it does not wait around for the network to finish
 # coming up, it just gives up.
-#   1. rd.net.timeout.ifup / rd.net.timeout.route — tell dracut's network
-#      bring-up itself to wait longer for the interface and its route to be
-#      ready BEFORE anaconda ever attempts the kickstart fetch, instead of
-#      relying on the fetch's own short retry loop to paper over a network
-#      that isn't ready yet. Generous, not exact — tune down once you've
-#      confirmed real-world negotiation time on this switch/port config.
-#   2. ksdevice — explicit (bond0, or the target NIC name), instead of
-#      ksdevice=link in either branch. "ksdevice=link" tells Anaconda to
-#      use whichever configured device gets carrier FIRST — on a
-#      multi-NIC box (this hardware has 6: onboard eno* ports plus the
-#      add-in ens0/ens6f0/ens6f1 ports), that is not guaranteed to be the
-#      one actually configured by ip=/ifname=. Confirmed on lmrg181a's
-#      boot log: eno12409 got "NIC Link is up" before ens0 did — an
-#      onboard port with no IP of its own winning the race against the
-#      one we actually configured is exactly the kind of ambiguity that
-#      produces "link is up but nothing works." Naming the device
-#      explicitly removes the ambiguity entirely, for both branches.
-#   3. rd.route=0.0.0.0/0:${GATEWAY}:<device> — an EXPLICIT default route,
-#      independent of the gateway field inside ip=. Added after a real
-#      failure on lmrg181a where ip= correctly assigned the address
-#      (confirmed: exact IP, correct /24, right device) but NO route ever
-#      landed in the routing table — not even the basic on-link connected
-#      route for the local subnet (confirmed via `ip route show table
-#      all`: nothing but automatic local-table bookkeeping entries). The
-#      address got noprefixroute, which suppresses the automatic connected
-#      route and normally implies whatever's managing the interface
-#      intends to add routes itself — but on this box it never did, for
-#      reasons not yet fully root-caused. rd.route= is a separate dracut
-#      mechanism from the ip= gateway field, not redundant with something
-#      already proven broken — an independent path to the same outcome,
-#      likely to survive whatever is suppressing the implicit one.
+#   ksdevice — explicit (bond0, or the target NIC name), instead of
+#   ksdevice=link in either branch. "ksdevice=link" tells Anaconda to
+#   use whichever configured device gets carrier FIRST — on a
+#   multi-NIC box (this hardware has 6: onboard eno* ports plus the
+#   add-in ens0/ens6f0/ens6f1 ports), that is not guaranteed to be the
+#   one actually configured by ip=/ifname=. Confirmed on lmrg181a's
+#   boot log: eno12409 got "NIC Link is up" before ens0 did — an
+#   onboard port with no IP of its own winning the race against the
+#   one we actually configured is exactly the kind of ambiguity that
+#   produces "link is up but nothing works." Naming the device
+#   explicitly removes the ambiguity entirely, for both branches.
 build_kernel_append_line(){
   local ks_url="${KS_FETCH_HTTP_BASE}/${HOSTNAME_SHORT}/${HOSTNAME}.ks"
-  # rd.net.timeout.carrier added on top of ifup/route: this is the knob that
-  # actually matters for "link light is up but the switch isn't forwarding
-  # yet" (e.g. spanning-tree listening/learning on a port without
-  # portfast/edge-port set) — the failure mode confirmed on lmrg181a. ifup
-  # and route only wait for local interface/route state, which is already
-  # satisfied with a static ip= config; they don't wait for the switch to
-  # actually start passing frames. carrier is the one that inserts real
-  # wall-clock patience before Anaconda's one-shot kickstart fetch fires.
-  # This is a workaround, not a fix — the real fix is portfast/edge-port on
-  # the switch port itself; ask network team to confirm/set that.
-  local net_timeouts="rd.net.timeout.carrier=60 rd.net.timeout.ifup=120 rd.net.timeout.route=90"
+  # Simplified to match legacy's actual append line as closely as possible,
+  # per explicit request after the LACP=Yes run got past the network stage
+  # cleanly without needing any of this. Removed here: ipv6.disable=1,
+  # nompath, and the rd.net.timeout.*/rd.route= additions from the earlier
+  # switch-timing and missing-default-route investigations. initrd=initrd.img
+  # is NOT removed globally — it's gone from THIS shared string, but the
+  # Legacy/BIOS isolinux.cfg path (further down this file) needs it inline
+  # (confirmed against legacy's own isolinux.cfg) since ISOLINUX has no
+  # equivalent to GRUB2's separate `initrdefi` directive; that path now adds
+  # it explicitly itself instead of relying on it being in this string.
+  #
+  # WORTH REMEMBERING if either of these symptoms comes back on a future
+  # build — both were removed here, but were added in direct response to
+  # confirmed failures, not speculatively, so they're the first things to
+  # look at restoring rather than re-diagnosing from scratch:
+  #   - rd.net.timeout.carrier/ifup/route: a switch port without
+  #     portfast/edge-port set produced exactly "link's up but the
+  #     kickstart fetch times out anyway."
+  #   - rd.route=0.0.0.0/0:<gw>:<device>: a real run on lmrg181a had ip=
+  #     correctly assign the address but never install ANY route — not
+  #     even the local on-link one — leaving `curl` unable to reach
+  #     anything at all.
   if is_lacp_enabled "$LACP"; then
     log INFO "LACP='${LACP}' -> bonded boot params (bond0, ksdevice=bond0)"
-    echo "initrd=initrd.img ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:bond0:none bond=bond0:[${MAC}]:mode=802.3ad,lacp_rate=fast,miimon=100,xmit_hash_policy=layer2+3 ipv6.disable=1 ${net_timeouts} rd.route=0.0.0.0/0:${GATEWAY}:bond0 inst.ks=${ks_url} ksdevice=bond0 nompath kssendmac"
+    echo "ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:bond0:none bond=bond0:[${MAC}]:mode=802.3ad,lacp_rate=fast,miimon=100,xmit_hash_policy=layer2+3 inst.ks=${ks_url} ksdevice=bond0 kssendmac"
   else
     log INFO "LACP='${LACP}' -> non-bonded boot params (${NIC}, ksdevice=${NIC})"
-    echo "initrd=initrd.img ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:${NIC}:none ifname=${NIC}:${MAC} ${net_timeouts} rd.route=0.0.0.0/0:${GATEWAY}:${NIC} inst.ks=${ks_url} ksdevice=${NIC} kssendmac"
+    echo "ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:${NIC}:none ifname=${NIC}:${MAC} inst.ks=${ks_url} ksdevice=${NIC} kssendmac"
   fi
 }
 
@@ -243,7 +234,7 @@ display boot.msg
 
 label ${HOSTNAME_SHORT}
   kernel vmlinuz
-  append ${append_line}
+  append initrd=initrd.img ${append_line}
 EOF
   fi
 
