@@ -248,11 +248,33 @@ dell_racadm_boot_mode(){
 # "Bios" as a substring of "BiosBootSettings". An unanchored match finds
 # that first and never reaches the real "BootMode=..." line below it.
 # Anchoring to "BootMode=" is what actually distinguishes the value from
-# the label text surrounding it.
+# the label text surrounding it. Confirmed this correctly handles a "#"
+# prefix too (racadm's convention for "currently read-only") — a real
+# read on this same iDRAC10 unit came back "#BootMode=Uefi", not just
+# "BootMode=Uefi", and this still extracts "uefi" from it fine.
+#
+# Retries here are a DIFFERENT failure mode than run_racadm's own
+# ssh-level retry: this handles ssh succeeding but the parsed value coming
+# back empty anyway — confirmed on the same iDRAC10 unit, immediately
+# after a BIOS.Setup.1-1 -r pwrcycle job hit "Completed 100%": no
+# run_racadm ssh-failure was logged (ssh genuinely succeeded), yet the
+# parsed BootMode came back empty. Most likely explanation: the iDRAC's
+# own management stack hadn't fully settled from the reboot that job just
+# triggered, even though the job queue already reported it done. A few
+# retries with a real gap gives it that settling time without needing to
+# hardcode a blind extra sleep after every BIOS job everywhere else.
 read_boot_mode(){
   local idrac_ip="$1"
-  run_racadm "$idrac_ip" get BIOS.BiosBootSettings.BootMode \
-    | grep -oiE 'BootMode=(Uefi|Bios)' | cut -d= -f2 | tr '[:upper:]' '[:lower:]'
+  local result=""
+  local attempt=1 max_attempts=3 delay=10
+  while (( attempt <= max_attempts )); do
+    result=$(run_racadm "$idrac_ip" get BIOS.BiosBootSettings.BootMode \
+      | grep -oiE 'BootMode=(Uefi|Bios)' | cut -d= -f2 | tr '[:upper:]' '[:lower:]')
+    [[ -n "$result" ]] && break
+    (( attempt < max_attempts )) && sleep "$delay"
+    ((attempt++))
+  done
+  echo "$result"
 }
 
 set_boot_mode(){
