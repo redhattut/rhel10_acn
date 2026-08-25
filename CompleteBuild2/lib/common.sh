@@ -269,8 +269,8 @@ log_racadm_result(){
 # before a human noticed.
 # -----------------------------------------------------------------------------
 RACADM_MIN_INTERVAL=3
-RACADM_MAX_ATTEMPTS=3
-RACADM_RETRY_DELAY=15
+RACADM_MAX_ATTEMPTS=15
+RACADM_RETRY_DELAY=10
 RACADM_CONSECUTIVE_FAILURE_LIMIT=3
 _RACADM_LAST_CALL_EPOCH=0
 _RACADM_CONSECUTIVE_FAILURES=0

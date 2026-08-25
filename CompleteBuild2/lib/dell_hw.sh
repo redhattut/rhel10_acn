@@ -79,6 +79,18 @@ gather_server_info(){
   } > "$raw_file" 2>&1
   log INFO "Raw hardware inventory saved to $raw_file"
 
+  # hwinventory specifically is not allowed to silently fail — everything
+  # downstream that enumerates NICs/MACs (get_mac()) and disks depends on
+  # it having real content, not an empty block from an exhausted-retries
+  # racadm failure. A missing/garbage iDRAC NAME or BIOS MODE degrades
+  # gracefully to "unknown" (they're informational), but a missing
+  # hwinventory means the rest of the build has nothing real to work from
+  # — die() here instead of limping forward with placeholder data.
+  local hwinv_block; hwinv_block=$(sed -n '/=== hwinventory/,/=== storage get pdisks/p' "$raw_file")
+  if [[ -z "$(echo "$hwinv_block" | grep -v '===' | tr -d '[:space:]')" ]]; then
+    die "racadm hwinventory returned no usable content on $idrac_ip after retries — everything downstream (NIC/MAC enumeration, disk layout) depends on this. Not proceeding with an incomplete inventory. Check the raw file: $raw_file"
+  fi
+
   local power; power=$(sed -n '/=== getsysinfo/,/=== hwinventory/p' "$raw_file" | grep "Power Status" | awk '{print $NF}' | head -1)
   local domain; domain=$(echo "$HOSTNAME" | cut -d'.' -f2-)
   local mnemonic; mnemonic=$(echo "$HOSTNAME" | head -c4 | tail -c3 | tr '[:lower:]' '[:upper:]')
@@ -393,7 +405,13 @@ cryptographic_erase_disks(){
     log INFO "cryptographicerase: $disk_id"
     local erase_out; erase_out=$(run_racadm "$idrac_ip" storage cryptographicerase:"$disk_id")
     erased_any="yes"
-    [[ -z "$raid_id" ]] && raid_id=$(echo "$disk_id" | awk -F: '{print $3}')
+    # Controller ID is the LAST colon-separated field of the FQDD, not
+    # necessarily the 3rd — confirmed two real, different FQDD shapes:
+    # "Disk.Bay.0:Enclosure.Internal.0-1:RAID.SL.3-1" (3 fields, PERC/RAID
+    # controller) and "Disk.Direct.1-1:BOSS.Slot.41-1" (2 fields, BOSS
+    # controller). `awk -F: '{print $3}'` only worked for the first shape
+    # by coincidence of field count; $NF (last field) is correct for both.
+    [[ -z "$raid_id" ]] && raid_id=$(echo "$disk_id" | awk -F: '{print $NF}')
   done <<< "$parsed"
 
   if [[ "$erased_any" == "no" ]]; then
@@ -442,13 +460,19 @@ create_os_vdisk(){
   fi
 
   local disk1="${candidates[0]}" disk2="${candidates[1]}"
-  # Controller ID lives embedded in the disk FQDD itself (3rd colon field,
-  # e.g. Disk.Bay.0:Enclosure.Internal.0-1:RAID.SL.3-1 -> RAID.SL.3-1).
-  # This MUST be derived dynamically, not hardcoded — controller naming
-  # varies by hardware generation/config (RAID.Slot.3-1 vs RAID.SL.3-1 seen
-  # in practice), and a wrong hardcoded value here fails createvd outright
-  # regardless of whether disk matching succeeded.
-  local raid_id; raid_id=$(echo "$disk1" | awk -F: '{print $3}')
+  # Controller ID is the LAST colon-separated field of the disk FQDD, not
+  # necessarily the 3rd — confirmed two real, different FQDD shapes:
+  # "Disk.Bay.0:Enclosure.Internal.0-1:RAID.SL.3-1" (3 fields, PERC/RAID
+  # controller) -> RAID.SL.3-1, and "Disk.Direct.1-1:BOSS.Slot.41-1"
+  # (2 fields, BOSS controller) -> BOSS.Slot.41-1. This MUST be derived
+  # dynamically, not hardcoded — controller naming varies by hardware
+  # generation/config, and a wrong hardcoded value here fails createvd
+  # outright regardless of whether disk matching succeeded. $NF (last
+  # field) is correct for both shapes; $3 only worked for the first one
+  # by coincidence of field count — confirmed as the actual cause of a
+  # real "Could not determine RAID controller ID" failure on a BOSS-based
+  # server.
+  local raid_id; raid_id=$(echo "$disk1" | awk -F: '{print $NF}')
   [[ -z "$raid_id" ]] && die "Could not determine RAID controller ID from disk FQDD: $disk1"
   log INFO "Creating RAID1 OS_Disk on $disk1 + $disk2 (controller $raid_id)"
   local out

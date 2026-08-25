@@ -73,7 +73,10 @@ configure_extra_disk_dell(){
   fi
 
   local pdkey; pdkey=$(IFS=,; echo "${disks[*]}")
-  local raid_id; raid_id=$(echo "${disks[0]}" | awk -F: '{print $3}')
+  # $NF (last colon field), not $3 — same fix as dell_hw.sh's create_os_vdisk:
+  # controller ID isn't always the 3rd field (e.g. BOSS controllers use a
+  # 2-field FQDD like Disk.Direct.1-1:BOSS.Slot.41-1, where $3 is empty).
+  local raid_id; raid_id=$(echo "${disks[0]}" | awk -F: '{print $NF}')
   [[ -z "$raid_id" ]] && { log ERROR "Could not determine RAID controller ID from disk FQDD: ${disks[0]}"; return 1; }
   log INFO "Creating RAID${raid} on ${pdkey} (controller $raid_id)"
   local createvd_out; createvd_out=$(run_racadm "$idrac_ip" storage createvd:"$raid_id" -rl "r${raid}" -pdkey:"$pdkey" -name "extra_${raid}_${size_gb}")
