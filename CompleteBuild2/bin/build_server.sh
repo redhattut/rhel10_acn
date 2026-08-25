@@ -57,18 +57,38 @@ if (( ${#POSITIONAL[@]} == 1 )); then
   CSV_PATH="${PROJECT_ROOT}/csv/incoming/${CSV_FILENAME}"
   [[ -f "$CSV_PATH" ]] || { echo "CSV not found: $CSV_PATH (expected under csv/incoming/)"; exit 1; }
 
+  # common.sh sourced here (rather than only in direct mode, further down)
+  # so this whole CSV-mode block can use log()/die()/job_has_active_lock —
+  # matches build.sh, which already does this. HOSTNAME_SHORT stays unset
+  # ("job" fallback in log()) until direct mode sets it to the real host.
+  JOB_LOG_DIR="${PROJECT_ROOT}/logs/${JOB_NAME}"
+  mkdir -p "$JOB_LOG_DIR"
+  # shellcheck source=../lib/common.sh
+  source "${PROJECT_ROOT}/lib/common.sh"
+  check_secrets
+
   csv_work_dir="${PROJECT_ROOT}/work/${JOB_NAME}"
-  mkdir -p "$csv_work_dir"
+
+  # Rerunning the same job name (same CSV filename) now resets that job's
+  # work/ and logs/ directories automatically instead of requiring manual
+  # cleanup first — but ONLY if nothing from a previous run of this job is
+  # still actively building (job_has_active_lock, common.sh).
+  still_active=$(job_has_active_lock "$JOB_LOG_DIR")
+  if [[ -n "$still_active" ]]; then
+    die "Job $JOB_NAME still has an active build in progress for: $still_active. Wait for it to finish, or cancel it first with: ./bin/stop_build.sh <hostname> $JOB_NAME — not resetting work/${JOB_NAME} or logs/${JOB_NAME} while that's running."
+  fi
+  rm -rf "$csv_work_dir" "$JOB_LOG_DIR"
+  mkdir -p "$csv_work_dir" "$JOB_LOG_DIR"
+  log INFO "Reset work/${JOB_NAME} and logs/${JOB_NAME} for a clean rerun"
+
   python3 "${PROJECT_ROOT}/lib/csv_split.py" "$CSV_PATH" "$csv_work_dir" \
-    || { echo "csv_split.py failed to parse $CSV_PATH"; exit 1; }
+    || die "csv_split.py failed to parse $CSV_PATH"
 
   hostlist="${csv_work_dir}/hostlist.txt"
-  [[ -s "$hostlist" ]] || { echo "No servers found in $CSV_FILENAME"; exit 1; }
+  [[ -s "$hostlist" ]] || die "No servers found in $CSV_FILENAME"
   host_count=$(wc -l < "$hostlist")
   if (( host_count > 1 )); then
-    echo "This CSV has $host_count servers — build_server.sh only builds one at a time."
-    echo "Use build.sh for multi-server batches: ./bin/build.sh $CSV_FILENAME"
-    exit 1
+    die "This CSV has $host_count servers — build_server.sh only builds one at a time. Use build.sh for multi-server batches: ./bin/build.sh $CSV_FILENAME"
   fi
   HOSTNAME_ARG=$(head -1 "$hostlist")
 
@@ -76,15 +96,19 @@ if (( ${#POSITIONAL[@]} == 1 )); then
   # build.sh: print where to watch, then return control immediately. You
   # shouldn't have to babysit one server's live output when you're about to
   # kick off others.
-  dispatch_job_log_dir="${PROJECT_ROOT}/logs/${JOB_NAME}"
-  mkdir -p "$dispatch_job_log_dir"
   dispatch_extra_args=()
   (( SKIP_IDRAC_RESET == 1 )) && dispatch_extra_args=(-t)
-  nohup "${PROJECT_ROOT}/bin/build_server.sh" "${dispatch_extra_args[@]}" "$HOSTNAME_ARG" "$JOB_NAME" </dev/null >/dev/null 2>&1 &
-  echo "$! $HOSTNAME_ARG" >> "${dispatch_job_log_dir}/pids.txt"
+  # setsid — makes the dispatched process its own session/process-group
+  # leader, so stop_build.sh can kill the whole tree (build_server.sh plus
+  # any in-flight ssh/sleep children) with one `kill -TERM -- -<pid>`
+  # instead of leaving orphaned ssh sessions behind.
+  setsid nohup "${PROJECT_ROOT}/bin/build_server.sh" "${dispatch_extra_args[@]}" "$HOSTNAME_ARG" "$JOB_NAME" </dev/null >/dev/null 2>&1 &
+  echo "$! $HOSTNAME_ARG" >> "${JOB_LOG_DIR}/pids.txt"
   short_name="${HOSTNAME_ARG%%.*}"
+  log INFO "Dispatched $HOSTNAME_ARG (job $JOB_NAME)."
   echo "Dispatched $HOSTNAME_ARG (job $JOB_NAME)."
-  echo "Watch it with: tail -f ${dispatch_job_log_dir}/${short_name}.log"
+  echo "Watch it with: tail -f ${JOB_LOG_DIR}/${short_name}.log"
+  echo "Stop it with:  ./bin/stop_build.sh ${short_name} ${JOB_NAME}"
   exit 0
 
 elif (( ${#POSITIONAL[@]} == 2 )); then
@@ -135,6 +159,15 @@ echo "$$" >&9
 
 # shellcheck source=../lib/common.sh
 source "${PROJECT_ROOT}/lib/common.sh"
+
+# Graceful cancellation — stop_build.sh sends SIGTERM to this whole process
+# group (see setsid in the CSV-mode dispatch above / build.sh's dispatch).
+# Without this trap, the process just dies wherever it happened to be
+# (mid-racadm-call, mid-sleep) with no record of WHY in the log — this
+# makes "someone cancelled it" a clear, deliberate log entry and a distinct
+# results.csv outcome instead of looking like an unexplained crash.
+trap 'log ERROR "Build cancelled (signal received) — stopping"; record_result "CANCELLED" "Build cancelled by user request"; exit 143' TERM INT
+
 source "${PROJECT_ROOT}/lib/dell_hw.sh"
 source "${PROJECT_ROOT}/lib/cisco_hw.sh"
 source "${PROJECT_ROOT}/lib/kickstart_gen.sh"

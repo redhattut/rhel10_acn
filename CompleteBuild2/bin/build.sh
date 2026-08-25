@@ -63,6 +63,20 @@ check_secrets
 mkdir -p "$WORK_DIR" "${PROJECT_ROOT}/csv/archive"
 rm -f "$JOB_RESULTS_FILE"
 
+# Rerunning the same job name (same CSV filename) now resets that job's
+# work/ and logs/ directories automatically instead of requiring manual
+# cleanup first — but ONLY if nothing from a previous run of this job is
+# still actively building (job_has_active_lock, common.sh). Wiping
+# work/logs out from under a host that's still mid-build would delete its
+# log/work files while it's actively writing to them.
+still_active=$(job_has_active_lock "$JOB_LOG_DIR")
+if [[ -n "$still_active" ]]; then
+  die "Job $JOB_NAME still has an active build in progress for: $still_active. Wait for it to finish, or cancel it first with: ./bin/stop_build.sh <hostname> $JOB_NAME — not resetting work/${JOB_NAME} or logs/${JOB_NAME} while that's running."
+fi
+rm -rf "$WORK_DIR" "$JOB_LOG_DIR"
+mkdir -p "$WORK_DIR" "$JOB_LOG_DIR"
+log INFO "Reset work/${JOB_NAME} and logs/${JOB_NAME} for a clean rerun"
+
 log STEP "=== Starting job $JOB_NAME from $CSV_FILENAME ==="
 
 # Archive a timestamped copy of the CSV so re-running csv_split.py later
@@ -88,7 +102,12 @@ while read -r host; do
   # near the top) — nothing further to capture at this level.
   extra_args=()
   [[ "$SKIP_IDRAC_RESET" == "1" ]] && extra_args=(-t)
-  nohup "${PROJECT_ROOT}/bin/build_server.sh" "${extra_args[@]}" "$host" "$JOB_NAME" </dev/null >/dev/null 2>&1 &
+  # setsid — makes this its own process group/session leader, so
+  # stop_build.sh can kill the whole tree (build_server.sh plus any
+  # in-flight ssh/sleep children) with one `kill -TERM -- -<pid>` instead
+  # of leaving orphaned ssh sessions behind when only the top process gets
+  # killed.
+  setsid nohup "${PROJECT_ROOT}/bin/build_server.sh" "${extra_args[@]}" "$host" "$JOB_NAME" </dev/null >/dev/null 2>&1 &
   echo "$! $host" >> "${JOB_LOG_DIR}/pids.txt"
 done < "$hostlist"
 
