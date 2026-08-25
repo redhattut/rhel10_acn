@@ -337,6 +337,58 @@ commit_bios_settings(){
     || die "BIOS settings job never completed"
 }
 
+# commit_storage_config <idrac_ip> <controller_fqdd> <description>
+# Applies a pending storage configuration change (deletevd/cryptographicerase/
+# createvd all leave changes in "pending" state until committed) — returns
+# non-zero on failure, same convention as wait_for_racadm_job.
+#
+# Tries the normal job-queue commit first (create_racadm_job, -r pwrcycle —
+# already proven working on a real PERC/RAID.SL.3-1 controller). If THAT
+# doesn't produce a Commit JID, falls back to a direct server reboot
+# instead of treating it as a hard failure.
+#
+# Deliberately reactive, not capability-checked ahead of time — confirmed
+# directly on a real BOSS controller on iDRAC10: the iDRAC web UI's own
+# Storage -> Pending Operations screen showed "Apply Now" greyed out
+# completely (only "At Next Reboot" / "Discard All Pending" available),
+# and `racadm jobqueue create <FQDD>` — with EITHER `-r pwrcycle` OR
+# `--realtime` — failed identically with "BOOT007: Unable to modify the
+# boot source". An earlier version of this function pre-checked
+# RealtimeConfigurationCapability to decide which path to take, but that
+# ties the logic to one specific capability flag and one specific
+# controller/iDRAC generation. Reacting to "no Commit JID came back",
+# whatever the reason, generalizes to any future controller/iDRAC
+# combination with the same limitation without needing to know about it
+# in advance — a direct reboot is what "At Next Reboot" does in the GUI
+# regardless of WHY the job-queue mechanism didn't accept this FQDD.
+#
+# The reboot fallback has no job to poll, so it's a fixed wait instead of
+# wait_for_racadm_job's percent-complete polling, followed by a
+# lightweight reachability check (not full state verification of the
+# storage change itself — callers that need to confirm the actual result
+# should re-query vdisks/pdisks afterward).
+commit_storage_config(){
+  local idrac_ip="$1" controller_fqdd="$2" description="$3"
+  local max_polls="${4:-30}" sleep_s="${5:-60}" initial_delay="${6:-300}"
+  local jid; jid=$(create_racadm_job "$idrac_ip" "$controller_fqdd")
+  if [[ -n "$jid" ]]; then
+    wait_for_racadm_job "$idrac_ip" "$jid" "$description" "$max_polls" "$sleep_s" "$initial_delay" \
+      || { log ERROR "$description job $jid never completed"; return 1; }
+    return 0
+  fi
+
+  log INFO "$description — job-queue commit didn't produce a job (no Commit JID) for controller $controller_fqdd; falling back to a direct server reboot instead (same as choosing 'At Next Reboot' in the iDRAC GUI's Pending Operations screen)"
+  run_racadm "$idrac_ip" serveraction powercycle >/dev/null
+  log INFO "$description — waiting ${initial_delay}s for reboot + pending config apply before checking the server is back"
+  sleep "$initial_delay"
+  local power_status; power_status=$(run_racadm "$idrac_ip" getsysinfo | grep "Power Status" | awk '{print $NF}')
+  if [[ "$power_status" != "ON" ]]; then
+    log ERROR "$description — server does not report power ON after the reboot+wait (got: '${power_status:-<empty>}'). The pending config may not have applied — check manually."
+    return 1
+  fi
+  log INFO "$description — server is back up after reboot"
+}
+
 # remove_existing_vdisks <idrac_ip>
 remove_existing_vdisks(){
   local idrac_ip="$1"
@@ -365,11 +417,8 @@ remove_existing_vdisks(){
 
   [[ -z "$raid_id" ]] && die "Found existing vdisk(s) but could not determine controller ID to commit the delete — check manually before proceeding"
 
-  local jid; jid=$(create_racadm_job "$idrac_ip" "$raid_id")
-  if [[ -z "$jid" ]]; then
-    die "Job creation failed committing vdisk deletion on $idrac_ip (controller $raid_id) — the delete request was sent but never committed. Do not proceed to create a new OS vdisk until this is resolved; check manually with: racadm storage get vdisks -o -p name"
-  fi
-  wait_for_racadm_job "$idrac_ip" "$jid" "Removing existing virtual disk" || die "Vdisk deletion job $jid never completed on $idrac_ip"
+  commit_storage_config "$idrac_ip" "$raid_id" "Removing existing virtual disk" \
+    || die "Vdisk deletion commit failed on $idrac_ip (controller $raid_id) — the delete request was sent but never confirmed committed. Do not proceed to create a new OS vdisk until this is resolved; check manually with: racadm storage get vdisks -o -p name"
 
   cryptographic_erase_disks "$idrac_ip"
 }
@@ -420,12 +469,8 @@ cryptographic_erase_disks(){
   fi
 
   if [[ -n "$raid_id" ]]; then
-    local jid; jid=$(create_racadm_job "$idrac_ip" "$raid_id")
-    if [[ -n "$jid" ]]; then
-      wait_for_racadm_job "$idrac_ip" "$jid" "Cryptographic erase commit" || log WARN "cryptographicerase commit job $jid did not confirm completion — verify manually before trusting the disks are actually erased"
-    else
-      log WARN "cryptographicerase issued but no follow-up commit job could be created — this may be normal (self-committing) or may mean it didn't actually run. Verify manually: racadm storage get pdisks -o -p mediatype,size,securitystate"
-    fi
+    commit_storage_config "$idrac_ip" "$raid_id" "Cryptographic erase commit" \
+      || log WARN "cryptographicerase commit did not confirm completion — verify manually before trusting the disks are actually erased: racadm storage get pdisks -o -p mediatype,size,securitystate"
   fi
 }
 
@@ -477,9 +522,8 @@ create_os_vdisk(){
   log INFO "Creating RAID1 OS_Disk on $disk1 + $disk2 (controller $raid_id)"
   local out
   out=$(run_racadm "$idrac_ip" storage createvd:"$raid_id" -rl r1 -pdkey:"$disk1","$disk2" -name OS_Disk)
-  local jid; jid=$(create_racadm_job "$idrac_ip" "$raid_id")
-  [[ -z "$jid" ]] && die "Job creation failed creating OS vdisk"
-  wait_for_racadm_job "$idrac_ip" "$jid" "Creating OS vdisk" 30 60 600 || die "OS vdisk creation job never completed"
+  commit_storage_config "$idrac_ip" "$raid_id" "Creating OS vdisk" 30 60 600 \
+    || die "OS vdisk creation commit failed on $idrac_ip (controller $raid_id)"
 }
 
 # get_mac <idrac_ip>
