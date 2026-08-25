@@ -55,6 +55,26 @@ KS_FETCH_HTTP_BASE="http://${LMRG34GA_IP}/kickstart/SERVERS/tmpiso"
 # only 'RHEL-8-6-0-BaseOS-x86_64' exists.
 RHEL8_INSTALL_MEDIA_VERSION="8.6"
 
+# RHEL9_INSTALL_MEDIA_VERSION — same idea as RHEL8_INSTALL_MEDIA_VERSION
+# above, for the RHEL 9.x tree staged in TEMPLATE9/TEMPLATE9EFI (confirmed
+# 9.6, mirrored at /PNC/distros/RHEL9.6-x86_64/, matching the `url --url`
+# line in the RHEL9 kickstart templates).
+RHEL9_INSTALL_MEDIA_VERSION="9.6"
+
+# install_media_version_for <os_version>
+# Picks the right *_INSTALL_MEDIA_VERSION constant by major version — the
+# install media is always fixed per major version, never the CSV's exact
+# target minor (see RHEL8_INSTALL_MEDIA_VERSION's comment above for why).
+install_media_version_for(){
+  local osver="$1"
+  local major; major=$(rhel_major "$osver")
+  case "$major" in
+    8) echo "$RHEL8_INSTALL_MEDIA_VERSION" ;;
+    9) echo "$RHEL9_INSTALL_MEDIA_VERSION" ;;
+    *) die "No install media version defined for RHEL major version '${major}' (OS_VERSION=$osver)" ;;
+  esac
+}
+
 # rhel_major() is defined in common.sh (shared with kickstart_gen.sh)
 
 # template_dir_for <os_version> <boot_mode>
@@ -143,6 +163,8 @@ build_boot_iso(){
   local remote_tmpiso="${ISO_BASE}/tmpiso/${HOSTNAME_SHORT}"
   local append_line; append_line=$(build_kernel_append_line)
   local major; major=$(rhel_major "$OS_VERSION")
+  local media_version; media_version=$(install_media_version_for "$OS_VERSION")
+  local rhel_label="RHEL-${media_version//./-}-0-BaseOS-x86_64"
 
   log INFO "Kernel append line: ${append_line}"
 
@@ -191,11 +213,12 @@ Stage the RHEL${major} install media's vmlinuz/initrd.img/isolinux(.bin,.cfg)/bo
     #     matching anyway since it's exactly what's on the media already.
     # Volume label follows the real RHEL install media convention
     # (confirmed: lmrg182a's media used 'RHEL-8-6-0-BaseOS-x86_64') — built
-    # from RHEL8_INSTALL_MEDIA_VERSION (the actual staged media, always
-    # 8.6), NOT $OS_VERSION (the CSV's final GOMP-patched target, e.g.
-    # 8.10) — see RHEL8_INSTALL_MEDIA_VERSION's definition above for why
-    # those are two different things.
-    local rhel_label="RHEL-${RHEL8_INSTALL_MEDIA_VERSION//./-}-0-BaseOS-x86_64"
+    # from install_media_version_for() (the actual staged media for this
+    # server's major version, e.g. always 8.6 for RHEL8), NOT $OS_VERSION
+    # (the CSV's final GOMP-patched target, e.g. 8.10) — see
+    # RHEL8_INSTALL_MEDIA_VERSION's definition above for why those are two
+    # different things. Computed once at function scope above (shared with
+    # the Legacy/BIOS branch and the mkisofs volume-label args below).
     ssh $SSH_OPTS "$ISO_HOST" "cat > '${remote_tmpiso}/EFI/BOOT/grub.cfg'" <<EOF
 set default="0"
 
@@ -219,7 +242,7 @@ set timeout=5
 search --no-floppy --set=root -l '${rhel_label}'
 
 label ${HOSTNAME_SHORT}
-menuentry 'Install Red Hat Enterprise Linux ${RHEL8_INSTALL_MEDIA_VERSION}' --class fedora --class gnu-linux --class gnu --class os {
+menuentry 'Install Red Hat Enterprise Linux ${media_version}' --class fedora --class gnu-linux --class gnu --class os {
 	linuxefi /images/pxeboot/vmlinuz ${append_line}
 	initrdefi /images/pxeboot/initrd.img
 }
@@ -241,7 +264,7 @@ EOF
   log INFO "Running mkisofs on ${ISO_HOST}"
   local iso_out="${remote_tmpiso}/build_${HOSTNAME_SHORT}.iso"
   if [[ "$BOOT_MODE" == "UEFI" ]]; then
-    ssh $SSH_OPTS "$ISO_HOST" "cd '${remote_tmpiso}' && mkisofs -U -A '${rhel_label:-RHEL-${major} x86_64}' -V '${rhel_label:-RHEL-${major} x86_64}' -volset '${rhel_label:-RHEL-${major} x86_64}' -J -joliet-long -r -v -T -o '${iso_out}' -b isolinux.bin -c boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot -e efiboot.img -no-emul-boot . >/dev/null 2>&1" \
+    ssh $SSH_OPTS "$ISO_HOST" "cd '${remote_tmpiso}' && mkisofs -U -A '${rhel_label}' -V '${rhel_label}' -volset '${rhel_label}' -J -joliet-long -r -v -T -o '${iso_out}' -b isolinux.bin -c boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot -e efiboot.img -no-emul-boot . >/dev/null 2>&1" \
       || die "mkisofs (UEFI) failed on ${ISO_HOST}"
   else
     ssh $SSH_OPTS "$ISO_HOST" "cd '${remote_tmpiso}' && mkisofs -J -R -v -T -V KickStart -o '${iso_out}' -b isolinux.bin -c boot.cat -no-emul-boot -boot-load-size 4 -boot-in . >/dev/null 2>&1" \

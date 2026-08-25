@@ -81,18 +81,13 @@ build_logvol_block(){
     block+="$(emit_logvol_line "$mount" "$size" "rootvg")  # extra filesystem\n"
   done < <(parse_pairs "$extra")
 
-  # NOTE for whoever adds RHEL9 support: this must compare against RHEL9's
-  # actual INSTALL media version (an RHEL9 equivalent of
-  # RHEL8_INSTALL_MEDIA_VERSION in iso_gen.sh), NOT $osver ($OS_VERSION,
-  # the CSV's final GOMP-patched target) directly — same distinction that
-  # caused a real bug in iso_gen.sh's grub.cfg generation (a CSV row
-  # targeting 8.10 generated a grub.cfg searching for install media that
-  # was never staged, when the actual staged/bootable media is always
-  # 8.6; GOMP is what gets the server to 8.10 post-install, not this
-  # step). "9.8" below is a placeholder for whatever version ships as the
-  # actual staged RHEL9 install tree — define and use a real constant for
-  # it instead of comparing directly against the CSV value.
-  if [[ "$osver" == "9.8" ]]; then
+  # RHEL9_ROOTVG_EXTRA applies based on major version, not the exact
+  # install-media minor — unlike the grub label/menuentry-title bug fixed
+  # in iso_gen.sh (which was specifically about matching the fixed
+  # install-media version), this is "are we building a RHEL9 server at
+  # all," which is a $osver-major question, correctly answered regardless
+  # of whether the CSV's exact target is 9.4, 9.5, etc.
+  if [[ "$(rhel_major "$osver")" == "9" ]]; then
     for entry in "${RHEL9_ROOTVG_EXTRA[@]}"; do
       IFS=: read -r mount lv size <<< "$entry"
       block+="logvol ${mount} --fstype xfs --name=${lv} --vgname=rootvg --size=${size}  # RHEL9 default\n"
@@ -137,17 +132,17 @@ generate_kickstart(){
   local out_path="$1"
 
   local major; major=$(rhel_major "$OS_VERSION")
-  if [[ "$major" != "8" ]]; then
-    die "Only RHEL 8 is supported right now (OS_VERSION=$OS_VERSION, major=$major) — no RHEL 9 templates exist yet. See templates/ — add kickstart-dell-rhel9-uefi.ks.tmpl etc. when that's ready, and extend this check."
+  if [[ "$major" != "8" && "$major" != "9" ]]; then
+    die "Only RHEL 8 and RHEL 9 are supported (OS_VERSION=$OS_VERSION, major=$major)."
   fi
 
   local tmpl_path
   if [[ "$HARDWARE" == "Cisco" ]]; then
-    tmpl_path="${TEMPLATE_DIR}/kickstart-cisco-rhel8.ks.tmpl"
+    tmpl_path="${TEMPLATE_DIR}/kickstart-cisco-rhel${major}.ks.tmpl"
   elif [[ "$BOOT_MODE" == "UEFI" ]]; then
-    tmpl_path="${TEMPLATE_DIR}/kickstart-dell-rhel8-uefi.ks.tmpl"
+    tmpl_path="${TEMPLATE_DIR}/kickstart-dell-rhel${major}-uefi.ks.tmpl"
   else
-    tmpl_path="${TEMPLATE_DIR}/kickstart-dell-rhel8-legacy.ks.tmpl"
+    tmpl_path="${TEMPLATE_DIR}/kickstart-dell-rhel${major}-legacy.ks.tmpl"
   fi
   [[ -s "$tmpl_path" ]] || die "Kickstart template missing or empty: $tmpl_path — confirm templates/ was deployed alongside the rest of this project on lmrg34ja"
 
