@@ -213,14 +213,39 @@ log_racadm_result(){
 # -----------------------------------------------------------------------------
 run_racadm(){
   local idrac_ip="$1"; shift
-  local errfile out rc
-  errfile=$(mktemp)
-  out=$(sshpass -f "$XSMRGAUTOMAT_PW_FILE" ssh $SSH_OPTS "${IDRAC_USER}@${IDRAC_AD_DOMAIN}@${idrac_ip}" "racadm $*" 2>"$errfile")
-  rc=$?
-  if (( rc != 0 )); then
-    log ERROR "racadm '$*' on $idrac_ip failed (ssh exit $rc): $(cat "$errfile")"
-  fi
-  rm -f "$errfile"
+  local errfile out rc err_content
+  # Retry on transient SSH-level failure (rc != 0 — the ssh/sshpass
+  # invocation itself failing, before racadm even runs) — NOT on racadm
+  # returning a real error response, which is a successful ssh session
+  # that just reports a racadm-level problem and shouldn't be retried.
+  #
+  # Added after a confirmed failure on an iDRAC10 unit: require_idrac_reachable()
+  # ran `racadm getsysinfo` successfully, then ensure_power_on() ran the
+  # SAME command again about 1 second later and got ssh exit 255 — with
+  # the identical command succeeding when the person re-ran it manually
+  # moments after. Many embedded BMC SSH daemons (this iDRAC10 unit
+  # included, apparently) only tolerate one session at a time and refuse a
+  # new connection if the previous one hasn't fully torn down server-side
+  # yet — two back-to-back racadm calls, one from pre-flight and one from
+  # the very next function, is exactly the pattern that triggers it. A
+  # short retry with a real gap is cheap insurance against this everywhere
+  # run_racadm is called, not just this one call site.
+  local max_attempts=3 retry_delay=5 attempt=1
+  while (( attempt <= max_attempts )); do
+    errfile=$(mktemp)
+    out=$(sshpass -f "$XSMRGAUTOMAT_PW_FILE" ssh $SSH_OPTS "${IDRAC_USER}@${IDRAC_AD_DOMAIN}@${idrac_ip}" "racadm $*" 2>"$errfile")
+    rc=$?
+    err_content=$(cat "$errfile")
+    rm -f "$errfile"
+    (( rc == 0 )) && break
+    if (( attempt < max_attempts )); then
+      log WARN "racadm '$*' on $idrac_ip failed (ssh exit $rc, attempt ${attempt}/${max_attempts}) — retrying in ${retry_delay}s: ${err_content}"
+      sleep "$retry_delay"
+    else
+      log ERROR "racadm '$*' on $idrac_ip failed (ssh exit $rc) after ${max_attempts} attempts: ${err_content}"
+    fi
+    ((attempt++))
+  done
   # log_racadm_result() decides what actually gets logged (silent/condensed/
   # full) — see it above for the rules. This goes through log()/log_raw()
   # (stderr), so it's safe even for callers doing `out=$(run_racadm ...)`

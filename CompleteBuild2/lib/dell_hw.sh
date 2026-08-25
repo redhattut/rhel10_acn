@@ -147,7 +147,7 @@ ensure_power_on(){
   local power_status
   power_status=$(run_racadm "$idrac_ip" getsysinfo | grep "Power Status" | awk '{print $NF}')
   if [[ -z "$power_status" ]]; then
-    die "Could not parse Power Status from racadm getsysinfo output on $idrac_ip. require_idrac_reachable already confirmed racadm works, so this means the output format wasn't what was expected — check manually before assuming anything about power state (see README iDRAC10 open item)."
+    die "Could not get Power Status from racadm getsysinfo on $idrac_ip after retries. If run_racadm above logged an ssh-level failure, this is that same problem persisting past the retry — check the iDRAC's SSH session directly. If run_racadm succeeded (real racadm output came back) but this still came up empty, THEN it's an output-format mismatch — check manually (see README iDRAC10 open item)."
   fi
   log INFO "Current power status: $power_status"
   if [[ "${power_status^^}" != "ON" ]]; then
