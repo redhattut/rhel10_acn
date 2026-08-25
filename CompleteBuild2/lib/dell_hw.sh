@@ -84,6 +84,29 @@ gather_server_info(){
   local mnemonic; mnemonic=$(echo "$HOSTNAME" | head -c4 | tail -c3 | tr '[:lower:]' '[:upper:]')
   local subnet; subnet=$(echo "$IP" | sed 's/\.[0-9]*$/.0/')
   local idrac_name; idrac_name=$(grep "DNSRacName" "$raw_file" | awk '{print $3}' | head -1)
+
+  # iDRAC firmware version + best-effort generation guess, logged up front
+  # (not just tucked into the raw dump) precisely because behavior already
+  # confirmed to differ between generations on this pipeline (BootMode
+  # casing) — knowing which generation a build is running against is worth
+  # seeing in the log without having to go dig through the raw file.
+  # HEURISTIC, NOT AUTHORITATIVE: based only on this project's own two data
+  # points so far (an iDRAC10 unit reporting firmware "1.30.30.50"; older
+  # units in this fleet reporting the more familiar iDRAC9-era "4.x/5.x/6.x"
+  # scheme) — a firmware major version of 1 is guessed as iDRAC10, anything
+  # else is assumed iDRAC9-or-earlier. This is NOT from official Dell
+  # documentation confirming the version-number-to-generation mapping in
+  # general; treat the guess as a hint to sanity-check, not a fact to branch
+  # meaningfully different logic on without verifying it yourself first.
+  local idrac_fw; idrac_fw=$(sed -n '/=== getsysinfo/,/=== hwinventory/p' "$raw_file" | grep "Firmware Version" | awk '{print $NF}' | head -1)
+  local idrac_gen_guess="unknown"
+  if [[ "$idrac_fw" =~ ^1\. ]]; then
+    idrac_gen_guess="iDRAC10 (heuristic — firmware major version 1)"
+  elif [[ -n "$idrac_fw" ]]; then
+    idrac_gen_guess="iDRAC9 or earlier (heuristic — firmware major version not 1)"
+  fi
+  log INFO "iDRAC firmware: ${idrac_fw:-unknown} — generation guess: ${idrac_gen_guess}"
+
   # NOT `grep -oE '(Uefi|Bios)'` — same landmine as verify_boot_mode()
   # below: the "[Key=BIOS.Setup.1-1#BiosBootSettings]" header line in this
   # block contains "Bios" as a substring of "BiosBootSettings", and an
@@ -91,7 +114,11 @@ gather_server_info(){
   # "BootMode=Uefi" value line — confirmed this was actually happening
   # (this field showed "Bios" on a real box whose manually-checked boot
   # mode was actually Uefi). Anchor to "BootMode=" specifically.
-  local bios_mode; bios_mode=$(sed -n '/=== BIOS boot mode/,/=== iDRAC name/p' "$raw_file" | grep -oE 'BootMode=(Uefi|Bios)' | cut -d= -f2)
+  # Case-insensitive for the same reason read_boot_mode() (below) is —
+  # confirmed an iDRAC10 unit can report "UEFI" (all caps) in some states
+  # and "Uefi" (title case) in others. This is purely informational display
+  # here, but no reason to let it show "unknown" over a casing difference.
+  local bios_mode; bios_mode=$(sed -n '/=== BIOS boot mode/,/=== iDRAC name/p' "$raw_file" | grep -oiE 'BootMode=(Uefi|Bios)' | cut -d= -f2)
 
   # NICs — same hwinventory block shape get_mac() already parses, just
   # collecting every NIC's MAC instead of stopping at the first Up link.
@@ -179,17 +206,25 @@ stage_bios_settings(){
 # Stages the boot mode change — does NOT commit. Call commit_bios_settings()
 # afterward to apply this along with whatever else was staged.
 #
-# CRITICAL: BIOS.BiosBootSettings.BootMode is a case-sensitive racadm enum.
-# The pipeline's own $BOOT_MODE convention (used everywhere else — template
-# selection in iso_gen.sh/kickstart_gen.sh) is "UEFI" (all caps) / anything
-# else for Legacy. That is NOT a valid value for this specific racadm
-# attribute — confirmed against real hardware output (`racadm get
-# BIOS.BiosBootSettings.BootMode` returns exactly "Uefi" or "Bios", title
-# case). Sending "UEFI" gets rejected with RAC947 "Invalid object value
-# specified" — silently, since the caller discards this command's output.
-# Translate here, at the one place this pipeline talks to the actual racadm
-# attribute, rather than changing the "UEFI" convention used everywhere
-# else in the pipeline.
+# Checks the CURRENT value first and skips the set entirely if it already
+# matches — confirmed on an iDRAC10 unit that was already in Uefi mode:
+# setting BootMode to the value it was ALREADY at got rejected outright
+# with "RAC1025: The specified object is read-only and cannot be
+# modified", not the "invalid value" error a real mismatch would give.
+# Skipping a redundant set avoids that rejection happening at all, on any
+# iDRAC generation, not just working around it after the fact.
+#
+# CRITICAL: BIOS.BiosBootSettings.BootMode is a case-sensitive racadm enum
+# for the SET direction — the pipeline's own $BOOT_MODE convention (used
+# everywhere else — template selection in iso_gen.sh/kickstart_gen.sh) is
+# "UEFI" (all caps) / anything else for Legacy, which is NOT a valid value
+# to SEND for this specific attribute (confirmed: sending "UEFI" gets
+# RAC947 "Invalid object value specified"; the correct value to send is
+# "Uefi"/"Bios", title case). dell_racadm_boot_mode() translates for
+# exactly that reason. The GET direction is a separate concern — see
+# read_boot_mode() below for why that side needs case-insensitive parsing
+# instead (confirmed iDRAC10 can report back "UEFI", all caps, even though
+# "Uefi" is what's valid to SEND).
 dell_racadm_boot_mode(){
   local mode="$1"
   if [[ "${mode^^}" == "UEFI" ]]; then
@@ -199,9 +234,35 @@ dell_racadm_boot_mode(){
   fi
 }
 
+# read_boot_mode <idrac_ip>
+# Reads BIOS.BiosBootSettings.BootMode and normalizes the result to
+# lowercase ("uefi"/"bios"/"") for case-insensitive comparison elsewhere.
+# NOT case-sensitive on purpose — confirmed real hardware can return either
+# "Uefi" (older iDRAC, and this same iDRAC10 unit's OWN pre-change read via
+# gather_server_info) or "UEFI" (this iDRAC10 unit's read immediately after
+# a rejected set attempt). Whatever's driving that inconsistency, the
+# comparison itself shouldn't care about case.
+#
+# NOT `grep -oE '(Uefi|Bios)'` (unanchored) — the get output's OWN key
+# header line is "[Key=BIOS.Setup.1-1#BiosBootSettings]", which contains
+# "Bios" as a substring of "BiosBootSettings". An unanchored match finds
+# that first and never reaches the real "BootMode=..." line below it.
+# Anchoring to "BootMode=" is what actually distinguishes the value from
+# the label text surrounding it.
+read_boot_mode(){
+  local idrac_ip="$1"
+  run_racadm "$idrac_ip" get BIOS.BiosBootSettings.BootMode \
+    | grep -oiE 'BootMode=(Uefi|Bios)' | cut -d= -f2 | tr '[:upper:]' '[:lower:]'
+}
+
 set_boot_mode(){
   local idrac_ip="$1" mode="$2"
   local racadm_mode; racadm_mode=$(dell_racadm_boot_mode "$mode")
+  local current; current=$(read_boot_mode "$idrac_ip")
+  if [[ "$current" == "${racadm_mode,,}" ]]; then
+    log INFO "Boot mode already ${racadm_mode} — skipping set (avoids the read-only rejection some iDRACs give for a no-op set)"
+    return 0
+  fi
   log INFO "Staging BIOS setting: boot mode $mode (racadm value: $racadm_mode)"
   run_racadm "$idrac_ip" set BIOS.BiosBootSettings.BootMode "$racadm_mode" >/dev/null
 }
@@ -220,18 +281,9 @@ set_boot_mode(){
 verify_boot_mode(){
   local idrac_ip="$1" requested_mode="$2"
   local expected; expected=$(dell_racadm_boot_mode "$requested_mode")
-  local actual
-  # NOT `grep -oE '(Uefi|Bios)'` — the get output's OWN key header line is
-  # "[Key=BIOS.Setup.1-1#BiosBootSettings]", which contains "Bios" as a
-  # substring of "BiosBootSettings". An unanchored match finds that first
-  # and never reaches the real "BootMode=Uefi" line below it — confirmed
-  # exactly this way against real output on lmrg181a (manual racadm get
-  # correctly showed BootMode=Uefi; this function reported Bios). Anchoring
-  # to "BootMode=" specifically is what actually distinguishes the value
-  # from the label text surrounding it.
-  actual=$(run_racadm "$idrac_ip" get BIOS.BiosBootSettings.BootMode | grep -oE 'BootMode=(Uefi|Bios)' | cut -d= -f2)
-  if [[ "$actual" != "$expected" ]]; then
-    die "Boot mode verification failed on $idrac_ip: requested $requested_mode (racadm value $expected), but the server is actually in $actual. Building an ISO for the wrong boot mode produces a boot menu/install that looks nothing like expected and typically fails outright — not proceeding. Check manually with: racadm get BIOS.BiosBootSettings.BootMode"
+  local actual; actual=$(read_boot_mode "$idrac_ip")
+  if [[ "$actual" != "${expected,,}" ]]; then
+    die "Boot mode verification failed on $idrac_ip: requested $requested_mode (racadm value $expected), but the server is actually in ${actual:-<empty/unparseable>}. Building an ISO for the wrong boot mode produces a boot menu/install that looks nothing like expected and typically fails outright — not proceeding. Check manually with: racadm get BIOS.BiosBootSettings.BootMode"
   fi
   log INFO "Boot mode verified: $actual"
 }
