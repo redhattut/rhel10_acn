@@ -147,10 +147,10 @@ build_kernel_append_line(){
   #     anything at all.
   if is_lacp_enabled "$LACP"; then
     log INFO "LACP='${LACP}' -> bonded boot params (bond0, ksdevice=bond0)"
-    echo "ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:bond0:none bond=bond0:[${MAC}]:mode=802.3ad,lacp_rate=fast,miimon=100,xmit_hash_policy=layer2+3 inst.ks=${ks_url} ksdevice=bond0 kssendmac"
+    echo "ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:bond0:none bond=bond0:[${MAC}]:mode=802.3ad,lacp_rate=fast,miimon=100,xmit_hash_policy=layer2+3 inst.ks=${ks_url} ksdevice=bond0 inst.ks.sendmac"
   else
     log INFO "LACP='${LACP}' -> non-bonded boot params (${NIC}, ksdevice=${NIC})"
-    echo "ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:${NIC}:none ifname=${NIC}:${MAC} inst.ks=${ks_url} ksdevice=${NIC} kssendmac"
+    echo "ramdisk_size=7497 ip=${IP}::${GATEWAY}:255.255.255.0:${HOSTNAME}:${NIC}:none ifname=${NIC}:${MAC} inst.ks=${ks_url} ksdevice=${NIC} inst.ks.sendmac"
   fi
 }
 
