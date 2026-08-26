@@ -332,6 +332,7 @@ else
     log_skip "Kickstart file generation" "kickstart"
     [[ -f "$KS_OUT" ]] || die "--skip=kickstart but no existing kickstart file at $KS_OUT — nothing for build_boot_iso to package. Either don't skip kickstart, or also --skip=iso-build."
   else
+    log INFO "OS disk values for kickstart's %pre device detection: OS_DISK_GB=${OS_DISK_GB} OS_DISK_BUS_PROTOCOL=${OS_DISK_BUS_PROTOCOL:-<empty/unknown>}"
     generate_kickstart "$KS_OUT"
   fi
 
