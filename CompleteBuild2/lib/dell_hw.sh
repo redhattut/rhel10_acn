@@ -555,20 +555,50 @@ get_mac(){
     run_racadm "$idrac_ip" set iDRAC.OS-BMC.AdminState Disabled >/dev/null
   fi
 
+  # Fetched once, reused for both NIC enumeration and the per-NIC MAC
+  # lookup below — avoids a second racadm hwinventory call, and (more
+  # importantly) fixes a real bug confirmed on an iDRAC10 unit: the old
+  # per-NIC MAC lookup cross-referenced `racadm getsysinfo`'s own output
+  # for a line containing the NIC's FQDD, assuming the MAC sat in a fixed
+  # column (awk '{print $4}'). That came back empty on this hardware —
+  # get_mac() found an Up NIC correctly, but the getsysinfo cross-
+  # reference silently produced nothing, and get_mac() still returned
+  # success (0) with an empty result. Nothing inside get_mac() itself
+  # logged what specifically went wrong; the only visible symptom was
+  # build_server.sh's generic "Could not determine MAC address" further
+  # downstream. Extracting the MAC by regex shape directly from the SAME
+  # NIC's own hwinventory block is exactly what gather_server_info already
+  # does successfully for the SERVER INFORMATION NIC-N MAC listing —
+  # reusing that same proven approach here instead of the fragile
+  # cross-reference.
+  local hwinv; hwinv=$(run_racadm "$idrac_ip" hwinventory)
+
   local nic_list
-  nic_list=$(run_racadm "$idrac_ip" hwinventory | awk '
+  nic_list=$(echo "$hwinv" | awk '
     /^-+$/ { if (p && f) print p; p=""; f=0 }
     /Device Type = NIC/ { f=1 }
     { p = p $0 ORS }
     END { if (p && f) print p }
   ' | grep -w '^FQDD' | awk '{print $3}' | sort -t: -k2)
 
-  local nic link
+  local nic link mac
   for nic in $nic_list; do
     link=$(run_racadm "$idrac_ip" nicstatistics "$nic" | grep -v Partition | grep "Link Status" | awk '{print $3}')
     if [[ "$link" == "Up" ]]; then
-      run_racadm "$idrac_ip" getsysinfo | grep "$nic" | awk '{print $4}'
-      return 0
+      # This NIC's own hwinventory block specifically (matched by exact
+      # FQDD), not the whole dump — MAC extracted by regex shape, not
+      # column position, matching gather_server_info's proven approach.
+      mac=$(echo "$hwinv" | awk -v target="$nic" '
+        /^-+$/ { if (p && p ~ target) print p; p="" }
+        { p = p $0 ORS }
+        END { if (p && p ~ target) print p }
+      ' | grep -oE '[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}' | head -1)
+      if [[ -n "$mac" ]]; then
+        echo "$mac"
+        return 0
+      fi
+      log ERROR "NIC $nic reports Link Status Up but no MAC address pattern was found in its own hwinventory block — check manually: racadm hwinventory"
+      return 1
     fi
     log INFO "Link on $nic is down, trying next"
   done
