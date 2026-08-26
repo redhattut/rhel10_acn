@@ -15,26 +15,50 @@
 ## (PCIe enumeration order — the same controller showed up as nvme1n1 on
 ## one boot, with two unrelated larger NVMe data drives taking
 ## nvme0n1/nvme2n1; the number could just as easily be different on
-## another server or another boot). Only older SAS/SATA-attached BOSS-S
-## controllers reliably show up as /dev/sda.
+## another server or another boot).
 ##
-## The one thing that IS reliably identifiable regardless of bus type or
-## device number: the BOSS controller's own /dev/disk/by-id/ entry always
-## contains "BOSS" (confirmed: nvme-Dell_BOSS-N1_... for NVMe-attached;
-## the equivalent scsi-*BOSS* convention for SAS/SATA-attached). This %pre
-## script resolves the real device name at install time — something we
-## cannot know when this kickstart file is generated, before the
-## installer has even booted — and writes it to an %include'd file used
-## everywhere the disk device used to be hardcoded. Falls back to sda if
-## no BOSS by-id entry is found, matching this pipeline's original
-## (SAS/SATA) assumption for hardware where it still holds.
+## PRIMARY method: match by actual disk SIZE. __OS_DISK_GB__ is the same
+## target size create_os_vdisk() used when picking physical disks to build
+## this exact RAID volume (from the CSV) — comparing that against real
+## disk sizes lsblk reports right now, in this exact installer
+## environment, identifies the correct disk regardless of bus type or
+## enumeration order. Compared in raw bytes (lsblk -b), not lsblk's
+## default human-rounded "447G"-style output — a plain `grep 447` misses
+## on rounding (447.1G vs 447G) or can match multiple unrelated disks;
+## same +-15% tolerance create_os_vdisk() already uses for the same
+## reason.
+##
+## FALLBACK only, if size-matching finds nothing close enough:
+## __OS_DISK_BUS_PROTOCOL__ (captured fresh from hwinventory by
+## create_os_vdisk() — SAS -> sda, PCIE -> nvme1n1). nvme1n1 specifically
+## is a guess of last resort, not a guarantee — the device NUMBER isn't
+## predictable, as noted above; this fallback only exists for the rare
+## case where size-matching didn't work at all.
 %pre
 #!/bin/bash
-osdisk="sda"
-boss_link=$(ls /dev/disk/by-id/ 2>/dev/null | grep -i boss | head -1)
-if [[ -n "$boss_link" ]]; then
-  osdisk=$(basename "$(readlink -f "/dev/disk/by-id/${boss_link}")")
+target_gb=__OS_DISK_GB__
+bus_protocol="__OS_DISK_BUS_PROTOCOL__"
+
+if [[ "${bus_protocol^^}" == "PCIE" ]]; then
+  osdisk="nvme1n1"
+else
+  osdisk="sda"
 fi
+
+if [[ "$target_gb" =~ ^[0-9]+$ ]]; then
+  target_bytes=$(( target_gb * 1000 * 1000 * 1000 ))
+  tolerance_bytes=$(( target_bytes * 15 / 100 ))
+  while read -r name size_bytes; do
+    [[ -z "$name" || -z "$size_bytes" ]] && continue
+    diff=$(( size_bytes - target_bytes ))
+    (( diff < 0 )) && diff=$(( -diff ))
+    if (( diff <= tolerance_bytes )); then
+      osdisk="$name"
+      break
+    fi
+  done < <(lsblk -dn -b -o NAME,SIZE 2>/dev/null)
+fi
+
 cat > /tmp/os-disk-include.ks << KSEOF
 bootloader --location=mbr --append="crashkernel=auto rhgb quiet" --driveorder=/dev/${osdisk}
 zerombr
