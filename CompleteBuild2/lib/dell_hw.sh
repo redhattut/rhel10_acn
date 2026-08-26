@@ -16,8 +16,8 @@
 # doing anything else against it.
 racreset_idrac(){
   local idrac_ip="$1"
-  if [[ "${SKIP_IDRAC_RESET:-0}" == "1" ]]; then
-    log INFO "-t: skipping iDRAC reboot entirely"
+  if is_skipped "racreset"; then
+    log_skip "iDRAC controller reboot (racreset)" "racreset"
     return 0
   fi
   log INFO "Rebooting iDRAC"
@@ -399,32 +399,37 @@ commit_storage_config(){
 remove_existing_vdisks(){
   local idrac_ip="$1"
   log_section "Storage: clearing existing vdisk"
-  local vdisk_out; vdisk_out=$(run_racadm "$idrac_ip" storage get vdisks -o -p name)
-  if echo "$vdisk_out" | grep -qi ERROR; then
-    log INFO "No existing virtual disks to remove"
-    return 0
+  if is_skipped "clear-vdisk"; then
+    log_skip "Removing existing virtual disk" "clear-vdisk"
+  else
+    local vdisk_out; vdisk_out=$(run_racadm "$idrac_ip" storage get vdisks -o -p name)
+    if echo "$vdisk_out" | grep -qi ERROR; then
+      log INFO "No existing virtual disks to remove"
+    else
+      # Each vdisk is a block: an ID line (e.g. Disk.Virtual.0:RAID.SL.3-1),
+      # then a "Name = ..." line. deletevd needs the FULL ID line — the
+      # controller suffix alone (RAID.SL.3-1) is not a valid delete target and
+      # silently fails. jobqueue create, separately, DOES want just the
+      # controller suffix. These are two different values; don't conflate them.
+      local vdisk_ids; vdisk_ids=$(echo "$vdisk_out" | grep -v "Name" | grep -v "^$")
+      if [[ -z "$vdisk_ids" ]]; then
+        log INFO "No existing virtual disks to remove"
+      else
+        local raid_id=""
+        while read -r vdisk_id; do
+          [[ -z "$vdisk_id" ]] && continue
+          log INFO "Removing existing virtual disk $vdisk_id"
+          local del_out; del_out=$(run_racadm "$idrac_ip" storage deletevd:"$vdisk_id")
+          raid_id=$(echo "$vdisk_id" | awk -F: '{print $NF}')
+        done <<< "$vdisk_ids"
+
+        [[ -z "$raid_id" ]] && die "Found existing vdisk(s) but could not determine controller ID to commit the delete — check manually before proceeding"
+
+        commit_storage_config "$idrac_ip" "$raid_id" "Removing existing virtual disk" \
+          || die "Vdisk deletion commit failed on $idrac_ip (controller $raid_id) — the delete request was sent but never confirmed committed. Do not proceed to create a new OS vdisk until this is resolved; check manually with: racadm storage get vdisks -o -p name"
+      fi
+    fi
   fi
-
-  # Each vdisk is a block: an ID line (e.g. Disk.Virtual.0:RAID.SL.3-1),
-  # then a "Name = ..." line. deletevd needs the FULL ID line — the
-  # controller suffix alone (RAID.SL.3-1) is not a valid delete target and
-  # silently fails. jobqueue create, separately, DOES want just the
-  # controller suffix. These are two different values; don't conflate them.
-  local vdisk_ids; vdisk_ids=$(echo "$vdisk_out" | grep -v "Name" | grep -v "^$")
-  [[ -z "$vdisk_ids" ]] && { log INFO "No existing virtual disks to remove"; return 0; }
-
-  local raid_id=""
-  while read -r vdisk_id; do
-    [[ -z "$vdisk_id" ]] && continue
-    log INFO "Removing existing virtual disk $vdisk_id"
-    local del_out; del_out=$(run_racadm "$idrac_ip" storage deletevd:"$vdisk_id")
-    raid_id=$(echo "$vdisk_id" | awk -F: '{print $2}')
-  done <<< "$vdisk_ids"
-
-  [[ -z "$raid_id" ]] && die "Found existing vdisk(s) but could not determine controller ID to commit the delete — check manually before proceeding"
-
-  commit_storage_config "$idrac_ip" "$raid_id" "Removing existing virtual disk" \
-    || die "Vdisk deletion commit failed on $idrac_ip (controller $raid_id) — the delete request was sent but never confirmed committed. Do not proceed to create a new OS vdisk until this is resolved; check manually with: racadm storage get vdisks -o -p name"
 
   cryptographic_erase_disks "$idrac_ip"
 }
@@ -447,6 +452,10 @@ remove_existing_vdisks(){
 cryptographic_erase_disks(){
   local idrac_ip="$1"
   log_section "Storage: cryptographic erase"
+  if is_skipped "crypto-erase"; then
+    log_skip "Cryptographic erase of physical disks" "crypto-erase"
+    return 0
+  fi
   log INFO "Cryptographically erasing physical disks on $idrac_ip for a clean slate"
   local pdisks; pdisks=$(run_racadm "$idrac_ip" storage get pdisks -o -p mediatype,size)
   local parsed; parsed=$(echo "$pdisks" | parse_pdisks)
@@ -490,6 +499,10 @@ create_os_vdisk(){
   remove_existing_vdisks "$idrac_ip"
 
   log_section "Storage: creating OS vdisk"
+  if is_skipped "create-vdisk"; then
+    log_skip "Creating the new OS virtual disk" "create-vdisk"
+    return 0
+  fi
   log INFO "Enumerating physical disks for OS vdisk (target ${size_gb}GB)"
   local pdisks; pdisks=$(run_racadm "$idrac_ip" storage get pdisks -o -p mediatype,size)
   local parsed; parsed=$(echo "$pdisks" | parse_pdisks)
@@ -536,7 +549,11 @@ create_os_vdisk(){
 # Finds the first NIC reporting link "Up" and prints its MAC to stdout.
 get_mac(){
   local idrac_ip="$1"
-  run_racadm "$idrac_ip" set iDRAC.OS-BMC.AdminState Disabled >/dev/null
+  if is_skipped "idrac-passthrough"; then
+    log_skip "Disabling iDRAC OS-BMC passthrough (iDRAC.OS-BMC.AdminState)" "idrac-passthrough"
+  else
+    run_racadm "$idrac_ip" set iDRAC.OS-BMC.AdminState Disabled >/dev/null
+  fi
 
   local nic_list
   nic_list=$(run_racadm "$idrac_ip" hwinventory | awk '

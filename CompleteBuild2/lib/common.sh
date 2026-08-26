@@ -51,7 +51,11 @@ log(){
   local host="${HOSTNAME_SHORT:-job}"
   local line="[$ts] [$level] [$host] $msg"
   echo "$line" >&2
-  if [[ -n "$JOB_LOG_DIR" ]]; then
+  # ${JOB_LOG_DIR:-} not $JOB_LOG_DIR — common.sh now gets sourced very
+  # early in build_server.sh (before JOB_LOG_DIR is ever set, so -h/--help
+  # and --skip validation can use it), so log()/die() need to tolerate
+  # JOB_LOG_DIR being genuinely unset, not just empty, under `set -u`.
+  if [[ -n "${JOB_LOG_DIR:-}" ]]; then
     mkdir -p "$JOB_LOG_DIR"
     echo "$line" >> "${JOB_LOG_DIR}/${host}.log"
   fi
@@ -63,7 +67,7 @@ log(){
 log_raw(){
   local msg="$*"
   echo "$msg" >&2
-  if [[ -n "$JOB_LOG_DIR" ]]; then
+  if [[ -n "${JOB_LOG_DIR:-}" ]]; then
     mkdir -p "$JOB_LOG_DIR"
     echo "$msg" >> "${JOB_LOG_DIR}/${HOSTNAME_SHORT:-job}.log"
   fi
@@ -87,6 +91,69 @@ die(){
   log ERROR "$*"
   record_result "FAILED" "$*"
   exit 1
+}
+
+# =============================================================================
+# Skip system — --skip=<name>[,<name>...] lets a rerun bypass entire steps
+# or specific fine-grained tasks instead of redoing work that's already
+# correct on the actual hardware from a previous run. Populated by
+# build_server.sh's arg parsing; consulted from both build_server.sh itself
+# (step-level: bios, kickstart, iso-build, mount, racreset) and dell_hw.sh
+# (step-level: clear-vdisk, crypto-erase, create-vdisk; task-level:
+# idrac-passthrough, get-mac) — this file is sourced by both, so one shared
+# mechanism covers either granularity.
+#
+# SKIP_REGISTRY is the single source of truth for valid names — used for
+# both validating --skip flags (reject a typo with a clear error instead of
+# silently doing nothing) and generating --help text, so the two can never
+# drift apart.
+# =============================================================================
+SKIP_LIST=""
+
+declare -A SKIP_REGISTRY=(
+  [racreset]="Dell only — skip the iDRAC controller reboot (racadm racreset) entirely. Same as the legacy -t/--skip-idrac-wait flag."
+  [bios]="Dell only — skip the whole BIOS settings step (ErrPrompt, CPU frequency policy, boot mode set/commit/verify)."
+  [clear-vdisk]="Dell only — skip removing any existing virtual disk."
+  [crypto-erase]="Dell only — skip the cryptographic erase of physical disks."
+  [create-vdisk]="Dell only — skip creating the new OS virtual disk."
+  [idrac-passthrough]="Dell only — skip disabling iDRAC OS-BMC passthrough (racadm set iDRAC.OS-BMC.AdminState Disabled) without skipping the rest of MAC detection."
+  [get-mac]="Skip querying the MAC address from iDRAC/UCSM entirely. REQUIRES --mac=<address> to supply it manually instead."
+  [kickstart]="Skip kickstart file generation. Only useful together with --skip=iso-build, or if a .ks file already exists at work/<job>/<host>/<host_short>.ks from a previous run."
+  [iso-build]="Skip building the boot ISO."
+  [mount]="Dell only — skip mounting install media and power-cycling to start the OS install."
+)
+
+is_skipped(){
+  local name="$1"
+  [[ " $SKIP_LIST " == *" $name "* ]]
+}
+
+# log_skip <description> <skip_name>
+# Consistent "this was intentionally left out" log line — steps and tasks
+# both use this, so a rerun's log makes it immediately obvious what was
+# deliberately skipped vs. what actually ran.
+log_skip(){
+  local description="$1" name="$2"
+  log INFO "SKIPPED: ${description} (--skip=${name})"
+}
+
+# validate_skip_names <comma_separated_names>
+# Dies with a clear message (listing valid names) on any unrecognized skip
+# name, rather than silently doing nothing for a typo'd flag.
+validate_skip_names(){
+  local names="$1" name
+  for name in ${names//,/ }; do
+    [[ -n "${SKIP_REGISTRY[$name]:-}" ]] || die "Unknown --skip name: '$name'. Valid names: ${!SKIP_REGISTRY[*]}. Run with --help for descriptions."
+  done
+}
+
+# print_skip_help — used by build_server.sh's -h/--help output.
+print_skip_help(){
+  echo "Available --skip names (comma-separated, repeatable):"
+  local name
+  for name in "${!SKIP_REGISTRY[@]}"; do
+    printf "  %-20s %s\n" "$name" "${SKIP_REGISTRY[$name]}"
+  done | sort
 }
 
 # job_has_active_lock <job_log_dir>
@@ -154,7 +221,7 @@ record_result(){
   local status="$1"; shift
   local detail="$*"
   local ts; ts=$(date '+%Y-%m-%d %H:%M:%S')
-  if [[ -n "$JOB_RESULTS_FILE" ]]; then
+  if [[ -n "${JOB_RESULTS_FILE:-}" ]]; then
     if [[ ! -s "$JOB_RESULTS_FILE" ]]; then
       echo "timestamp,hostname,status,detail" > "$JOB_RESULTS_FILE"
     fi
@@ -486,7 +553,17 @@ create_racadm_job(){
   local out jid
   out=$(run_racadm "$idrac_ip" jobqueue create "$raid_or_bios_id" -r pwrcycle)
   jid=$(echo "$out" | grep "Commit JID" | awk -F= '{print $2}' | tr -d ' ')
-  log INFO "racadm jobqueue create ${raid_or_bios_id} -r pwrcycle -> ${jid:-FAILED, no Commit JID in output}"
+  if [[ -z "$jid" ]]; then
+    # "jobqueue create ..." is silenced in log_racadm_result() — normally
+    # just RAC1024 boilerplate we already condense into this one line. But
+    # when jid-extraction fails, that's exactly the case where the actual
+    # racadm response is the one thing worth seeing — surface it here
+    # rather than leaving "FAILED, no Commit JID" as the only clue.
+    log ERROR "racadm jobqueue create ${raid_or_bios_id} -r pwrcycle -> FAILED, no Commit JID in output. Raw response:"
+    log_raw "$out"
+  else
+    log INFO "racadm jobqueue create ${raid_or_bios_id} -r pwrcycle -> ${jid}"
+  fi
   echo "$jid"
 }
 
