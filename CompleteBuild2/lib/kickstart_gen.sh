@@ -176,6 +176,8 @@ generate_kickstart(){
     -v mac="$MAC" \
     -v location="$LOCATION" \
     -v ci_device="$CI_DEVICE" \
+    -v os_disk_gb="$OS_DISK_GB" \
+    -v os_disk_bus_protocol="${OS_DISK_BUS_PROTOCOL:-}" \
     -v logvol="$logvol_block" '
     {
       line = $0
@@ -188,10 +190,15 @@ generate_kickstart(){
       gsub(/__MTU__/, "9000", line)
       gsub(/__LOCATION__/, location, line)
       gsub(/__CI_DEVICE__/, ci_device, line)
+      gsub(/__OS_DISK_GB__/, os_disk_gb, line)
+      gsub(/__OS_DISK_BUS_PROTOCOL__/, os_disk_bus_protocol, line)
       gsub(/__LOGVOL_BLOCK__/, logvol, line)
       print line
     }' "$tmpl_path" > "$out_path" 2>"$awk_err"
-  local awk_rc=$?
+  # NOT two separate `local awk_rc=$?` lines — the second one was
+  # clobbering the real awk exit code with 0 (its own `local` assignment's
+  # own success status), silently defeating the die() check right below
+  # this — awk could fail outright and this would never have caught it.
   local awk_rc=$?
 
   if (( awk_rc != 0 )); then
