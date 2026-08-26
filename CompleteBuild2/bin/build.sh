@@ -21,13 +21,16 @@
 # =============================================================================
 set -u
 
-usage(){ echo "usage: build.sh [-t] <csv_filename_in_csv/incoming>"; }
+usage(){ echo "usage: build.sh [-t] [--skip=<name>[,<name>...]] <csv_filename_in_csv/incoming>"; }
 
 SKIP_IDRAC_RESET=0
+SKIP_LIST_ARG=""
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -t|--skip-idrac-wait) SKIP_IDRAC_RESET=1; shift ;;
+    --skip=*) SKIP_LIST_ARG="${SKIP_LIST_ARG:+$SKIP_LIST_ARG,}${1#*=}"; shift ;;
+    --skip) SKIP_LIST_ARG="${SKIP_LIST_ARG:+$SKIP_LIST_ARG,}$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "Unknown option: $1" >&2; usage; exit 1 ;;
     *) POSITIONAL+=("$1"); shift ;;
@@ -101,7 +104,15 @@ while read -r host; do
   # build_server.sh sets up its own log file internally (see its exec+tee
   # near the top) — nothing further to capture at this level.
   extra_args=()
-  [[ "$SKIP_IDRAC_RESET" == "1" ]] && extra_args=(-t)
+  [[ "$SKIP_IDRAC_RESET" == "1" ]] && extra_args+=(-t)
+  # --skip= is NOT independently validated here — each dispatched
+  # build_server.sh validates it against the same SKIP_REGISTRY and dies
+  # per-host with a clear message on a typo, so there's no need to
+  # duplicate that check at this level. --mac= isn't offered here at all —
+  # it's inherently single-host (one manual MAC can't apply across an
+  # entire batch), so that override only makes sense via build_server.sh
+  # directly for one server at a time.
+  [[ -n "$SKIP_LIST_ARG" ]] && extra_args+=(--skip="$SKIP_LIST_ARG")
   # setsid — makes this its own process group/session leader, so
   # stop_build.sh can kill the whole tree (build_server.sh plus any
   # in-flight ssh/sleep children) with one `kill -TERM -- -<pid>` instead

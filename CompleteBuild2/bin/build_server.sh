@@ -30,22 +30,72 @@ set -u
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# common.sh sourced immediately, before argument parsing — needed so -h/
+# --help and --skip validation can use the shared SKIP_REGISTRY (single
+# source of truth for valid skip names, see common.sh) without duplicating
+# it here and risking the two drifting apart. log()/die() both degrade
+# gracefully with no JOB_LOG_DIR/HOSTNAME_SHORT set yet (falls back to
+# stderr + a "job" placeholder name) — safe to source this early.
+# shellcheck source=../lib/common.sh
+source "${PROJECT_ROOT}/lib/common.sh"
+
 usage(){
-  echo "usage: build_server.sh [-t] <hostname> <job_name>"
-  echo "       build_server.sh [-t] <csv_filename>   (CSV must contain exactly one server)"
-  echo "  -t   skip the iDRAC reboot (racreset) entirely; everything else waits normally"
+  cat << EOF
+usage: build_server.sh [options] <hostname> <job_name>
+       build_server.sh [options] <csv_filename>   (CSV must contain exactly one server)
+
+Two ways to call this:
+  <hostname> <job_name>   used internally by build.sh's per-host parallel
+                           dispatch — one process per server.
+  <csv_filename>           single-server convenience: point it straight at a
+                           CSV in csv/incoming/ (same .csv the web tool
+                           produces). Hostname and job name both come from
+                           the CSV. The CSV must contain exactly one server;
+                           for more than one, use build.sh.
+
+Options:
+  -t, --skip-idrac-wait   Legacy alias for --skip=racreset.
+  --skip=<name>[,<name>...]
+                          Skip an entire step or a specific fine-grained
+                          task instead of redoing work that's already
+                          correct on the actual hardware from a previous
+                          run. Repeatable, or comma-separated in one flag.
+                          Logs "SKIPPED: ..." for anything skipped this way.
+  --mac=<address>         Supply the MAC address manually instead of
+                          querying it from iDRAC/UCSM. REQUIRED if
+                          --skip=get-mac is used.
+  -h, --help              Show this help and the full list of --skip names.
+
+EOF
+  print_skip_help
 }
 
 SKIP_IDRAC_RESET=0
+MAC_OVERRIDE=""
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -t|--skip-idrac-wait) SKIP_IDRAC_RESET=1; shift ;;
+    --skip=*) validate_skip_names "${1#*=}"; SKIP_LIST="${SKIP_LIST} ${1#*=}"; shift ;;
+    --skip) validate_skip_names "$2"; SKIP_LIST="${SKIP_LIST} $2"; shift 2 ;;
+    --mac=*) MAC_OVERRIDE="${1#*=}"; shift ;;
+    --mac) MAC_OVERRIDE="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "Unknown option: $1" >&2; usage; exit 1 ;;
     *) POSITIONAL+=("$1"); shift ;;
   esac
 done
+SKIP_LIST="${SKIP_LIST// /,}"
+SKIP_LIST="${SKIP_LIST//,,/,}"
+SKIP_LIST="${SKIP_LIST# }"
+(( SKIP_IDRAC_RESET == 1 )) && SKIP_LIST="${SKIP_LIST:+$SKIP_LIST,}racreset"
+# Normalize to space-delimited with leading/trailing space for is_skipped()'s
+# substring-safe membership test (" $SKIP_LIST " == *" $name "*).
+SKIP_LIST=" ${SKIP_LIST//,/ } "
+
+if is_skipped "get-mac" && [[ -z "$MAC_OVERRIDE" ]]; then
+  die "--skip=get-mac requires --mac=<address> to supply the MAC manually — it's needed for kickstart/kernel append line generation and can't just be left blank."
+fi
 
 HOSTNAME_ARG=""
 JOB_NAME=""
@@ -57,14 +107,12 @@ if (( ${#POSITIONAL[@]} == 1 )); then
   CSV_PATH="${PROJECT_ROOT}/csv/incoming/${CSV_FILENAME}"
   [[ -f "$CSV_PATH" ]] || { echo "CSV not found: $CSV_PATH (expected under csv/incoming/)"; exit 1; }
 
-  # common.sh sourced here (rather than only in direct mode, further down)
-  # so this whole CSV-mode block can use log()/die()/job_has_active_lock —
-  # matches build.sh, which already does this. HOSTNAME_SHORT stays unset
-  # ("job" fallback in log()) until direct mode sets it to the real host.
+  # JOB_LOG_DIR/check_secrets — common.sh itself is already sourced (see
+  # top of file); this whole CSV-mode block can already use log()/die()/
+  # job_has_active_lock. HOSTNAME_SHORT stays unset ("job" fallback in
+  # log()) until direct mode sets it to the real host.
   JOB_LOG_DIR="${PROJECT_ROOT}/logs/${JOB_NAME}"
   mkdir -p "$JOB_LOG_DIR"
-  # shellcheck source=../lib/common.sh
-  source "${PROJECT_ROOT}/lib/common.sh"
   check_secrets
 
   csv_work_dir="${PROJECT_ROOT}/work/${JOB_NAME}"
@@ -97,7 +145,11 @@ if (( ${#POSITIONAL[@]} == 1 )); then
   # shouldn't have to babysit one server's live output when you're about to
   # kick off others.
   dispatch_extra_args=()
-  (( SKIP_IDRAC_RESET == 1 )) && dispatch_extra_args=(-t)
+  # SKIP_LIST already has "racreset" folded in if -t/--skip-idrac-wait was
+  # given (see the arg-parsing block above) — no need to also pass -t
+  # separately, --skip= alone carries everything through.
+  [[ -n "${SKIP_LIST// }" ]] && dispatch_extra_args+=(--skip="$(echo "$SKIP_LIST" | tr -s ' ' ',' | sed 's/^,//;s/,$//')")
+  [[ -n "$MAC_OVERRIDE" ]] && dispatch_extra_args+=(--mac="$MAC_OVERRIDE")
   # setsid — makes the dispatched process its own session/process-group
   # leader, so stop_build.sh can kill the whole tree (build_server.sh plus
   # any in-flight ssh/sleep children) with one `kill -TERM -- -<pid>`
@@ -144,21 +196,12 @@ LOCK_FILE="${JOB_LOG_DIR}/${HOSTNAME_SHORT}.lock"
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   existing_pid=$(cat "$LOCK_FILE" 2>/dev/null)
-  msg="A build_server.sh run for $HOSTNAME_ARG (job $JOB_NAME) is already in progress (lock held${existing_pid:+, pid in lock file: $existing_pid}). Not starting a second one. If that run is actually dead, remove $LOCK_FILE and retry."
-  echo "$msg" >&2
-  # Also written directly to the per-host log file, not just stderr — the
-  # CSV-mode dispatch path above launches this exact script a second time
-  # via `nohup ... >/dev/null 2>&1 &`, so stderr alone would be silently
-  # swallowed and this rejection would never be seen anywhere. This is the
-  # one line in this script written to the log file before common.sh
-  # (and its log()/log_raw()) are even sourced, for exactly that reason.
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] [${HOSTNAME_SHORT}] ${msg}" >> "${JOB_LOG_DIR}/${HOSTNAME_SHORT}.log"
-  exit 1
+  # die() (not a manual echo) — common.sh is already sourced at the top of
+  # this file now, before argument parsing even starts, so log()/die() are
+  # available here same as anywhere else in the script.
+  die "A build_server.sh run for $HOSTNAME_ARG (job $JOB_NAME) is already in progress (lock held${existing_pid:+, pid in lock file: $existing_pid}). Not starting a second one. If that run is actually dead, remove $LOCK_FILE and retry."
 fi
 echo "$$" >&9
-
-# shellcheck source=../lib/common.sh
-source "${PROJECT_ROOT}/lib/common.sh"
 
 # Graceful cancellation — stop_build.sh sends SIGTERM to this whole process
 # group (see setsid in the CSV-mode dispatch above / build.sh's dispatch).
@@ -225,13 +268,31 @@ if [[ "$HARDWARE" == "Cisco" ]]; then
   require_ucsm_reachable "$MGMT_IP"
   UCSM_TEMPLATE_NAME=$(get_template_name "$MGMT_IP" "$PROFILE" "$ORG")
   log_section "Network / kickstart"
-  MAC=$(get_mac_ucsm "$MGMT_IP" "$PROFILE" "$ORG")
-  [[ -z "$MAC" ]] && die "Could not determine MAC address from UCSM"
+
+  if is_skipped "get-mac"; then
+    log_skip "Determine MAC address from UCSM" "get-mac"
+    MAC="$MAC_OVERRIDE"
+    log INFO "Using manually supplied MAC: $MAC"
+  else
+    MAC=$(get_mac_ucsm "$MGMT_IP" "$PROFILE" "$ORG")
+    [[ -z "$MAC" ]] && die "Could not determine MAC address from UCSM"
+  fi
+
   ucsm_boot_mode=$(get_boot_mode_ucsm "$MGMT_IP" "$PROFILE" "$ORG")
   [[ -n "$ucsm_boot_mode" ]] && BOOT_MODE="$ucsm_boot_mode"
 
-  generate_kickstart "$KS_OUT"
-  build_boot_iso "$KS_OUT"
+  if is_skipped "kickstart"; then
+    log_skip "Kickstart file generation" "kickstart"
+    [[ -f "$KS_OUT" ]] || die "--skip=kickstart but no existing kickstart file at $KS_OUT — nothing for build_boot_iso to package. Either don't skip kickstart, or also --skip=iso-build."
+  else
+    generate_kickstart "$KS_OUT"
+  fi
+
+  if is_skipped "iso-build"; then
+    log_skip "Building the boot ISO" "iso-build"
+  else
+    build_boot_iso "$KS_OUT"
+  fi
 
   unbind_profile "$MGMT_IP" "$PROFILE" "$ORG"
   create_and_mount_vmedia "$MGMT_IP" "$PROFILE" "$ORG"
@@ -245,20 +306,47 @@ else
   racreset_idrac "$MGMT_IP"
   ensure_power_on "$MGMT_IP"
   gather_server_info "$MGMT_IP"
-  stage_bios_settings "$MGMT_IP"
-  set_boot_mode "$MGMT_IP" "$BOOT_MODE"
-  commit_bios_settings "$MGMT_IP"
-  verify_boot_mode "$MGMT_IP" "$BOOT_MODE"
+
+  if is_skipped "bios"; then
+    log_skip "BIOS settings (ErrPrompt, CPU frequency policy, boot mode)" "bios"
+  else
+    stage_bios_settings "$MGMT_IP"
+    set_boot_mode "$MGMT_IP" "$BOOT_MODE"
+    commit_bios_settings "$MGMT_IP"
+    verify_boot_mode "$MGMT_IP" "$BOOT_MODE"
+  fi
+
   create_os_vdisk "$MGMT_IP" "$OS_DISK_GB"
   log_section "Network / kickstart"
-  MAC=$(get_mac "$MGMT_IP")
-  [[ -z "$MAC" ]] && die "Could not determine MAC address from iDRAC"
 
-  generate_kickstart "$KS_OUT"
-  build_boot_iso "$KS_OUT"
+  if is_skipped "get-mac"; then
+    log_skip "Determine MAC address from iDRAC" "get-mac"
+    MAC="$MAC_OVERRIDE"
+    log INFO "Using manually supplied MAC: $MAC"
+  else
+    MAC=$(get_mac "$MGMT_IP")
+    [[ -z "$MAC" ]] && die "Could not determine MAC address from iDRAC"
+  fi
 
-  mount_install_media "$MGMT_IP" "$HOSTNAME_SHORT"
-  restart_server_dell "$MGMT_IP"
+  if is_skipped "kickstart"; then
+    log_skip "Kickstart file generation" "kickstart"
+    [[ -f "$KS_OUT" ]] || die "--skip=kickstart but no existing kickstart file at $KS_OUT — nothing for build_boot_iso to package. Either don't skip kickstart, or also --skip=iso-build."
+  else
+    generate_kickstart "$KS_OUT"
+  fi
+
+  if is_skipped "iso-build"; then
+    log_skip "Building the boot ISO" "iso-build"
+  else
+    build_boot_iso "$KS_OUT"
+  fi
+
+  if is_skipped "mount"; then
+    log_skip "Mounting install media and power-cycling to start the OS install" "mount"
+  else
+    mount_install_media "$MGMT_IP" "$HOSTNAME_SHORT"
+    restart_server_dell "$MGMT_IP"
+  fi
 fi
 
 log INFO "Kickstart and hardware bring-up complete for $HOSTNAME."
