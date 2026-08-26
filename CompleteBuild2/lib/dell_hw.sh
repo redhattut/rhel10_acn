@@ -502,13 +502,17 @@ create_os_vdisk(){
   # build_server.sh reads this after calling create_os_vdisk() regardless
   # of whether create-vdisk was actually skipped, and `set -u` there would
   # crash on a genuinely-never-set variable rather than just an empty one.
-  # An empty value here is a legitimate "unknown" state the kickstart
-  # %pre script's fallback already handles safely (defaults to sda).
   OS_DISK_BUS_PROTOCOL=""
 
   log_section "Storage: creating OS vdisk"
   if is_skipped "create-vdisk"; then
     log_skip "Creating the new OS virtual disk" "create-vdisk"
+    # Still worth capturing BusProtocol even when creation itself is
+    # skipped — if --skip=create-vdisk is used because the vdisk was
+    # already built in a previous run, it still physically exists, and
+    # giving up on identifying it just because we didn't (re)create it
+    # THIS run would throw away information we don't actually need to.
+    capture_os_disk_bus_protocol "$idrac_ip"
     return 0
   fi
   log INFO "Enumerating physical disks for OS vdisk (target ${size_gb}GB)"
@@ -552,15 +556,22 @@ create_os_vdisk(){
   commit_storage_config "$idrac_ip" "$raid_id" "Creating OS vdisk" 30 60 600 \
     || die "OS vdisk creation commit failed on $idrac_ip (controller $raid_id)"
 
-  # Capture the OS_Disk virtual disk's own BusProtocol (SAS vs PCIE) — used
-  # by the kickstart %pre script as an INFORMED FALLBACK only, not the
-  # primary detection method (that's size-matching against $size_gb — see
-  # kickstart_gen.sh/the templates) — for the rare case size-matching can't
-  # find a confident match. Queried fresh via hwinventory rather than
-  # assumed, since this varies by controller generation (SAS/SATA BOSS-S
-  # vs NVMe BOSS-N) and isn't something we can know ahead of time. NOT
-  # `local` — build_server.sh reads this directly after calling
-  # create_os_vdisk(), to pass through to generate_kickstart().
+  capture_os_disk_bus_protocol "$idrac_ip"
+}
+
+# capture_os_disk_bus_protocol <idrac_ip>
+# Queries hwinventory for the OS_Disk virtual disk's BusProtocol (SAS vs
+# PCIE) — used by the kickstart %pre script as an INFORMED FALLBACK only,
+# not the primary detection method (that's size-matching against the CSV's
+# OS disk size — see kickstart_gen.sh/the templates), for the rare case
+# size-matching can't find a confident match. Queried fresh rather than
+# assumed, since this varies by controller generation (SAS/SATA BOSS-S vs
+# NVMe BOSS-N) and isn't something we can know ahead of time. Matched on
+# "Name = OS_Disk" specifically, so this finds the disk whether it was
+# just created THIS run or already existed from a previous one (see the
+# is_skipped("create-vdisk") branch above, which still calls this).
+capture_os_disk_bus_protocol(){
+  local idrac_ip="$1"
   OS_DISK_BUS_PROTOCOL=$(run_racadm "$idrac_ip" hwinventory | awk '
     /^-+$/ { if (p && p ~ /Name = OS_Disk/) print p; p="" }
     { p = p $0 ORS }
