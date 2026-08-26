@@ -7,6 +7,44 @@
 ## template file, not by branching inside one shared file.
 ## Server: __HOSTNAME__
 
+## --- OS disk device detection (%pre) ---
+## Cannot hardcode /dev/sda — confirmed directly on a real BOSS-N1 (NVMe)
+## controller: its RAID1 virtual disk shows up as /dev/nvmeXn1, not
+## /dev/sda, and the device NUMBER isn't predictable ahead of time either
+## (PCIe enumeration order — the same controller showed up as nvme1n1 on
+## one boot, with two unrelated larger NVMe data drives taking
+## nvme0n1/nvme2n1; the number could just as easily be different on
+## another server or another boot). Only older SAS/SATA-attached BOSS-S
+## controllers reliably show up as /dev/sda.
+##
+## The one thing that IS reliably identifiable regardless of bus type or
+## device number: the BOSS controller's own /dev/disk/by-id/ entry always
+## contains "BOSS" (confirmed: nvme-Dell_BOSS-N1_... for NVMe-attached;
+## the equivalent scsi-*BOSS* convention for SAS/SATA-attached). This %pre
+## script resolves the real device name at install time — something we
+## cannot know when this kickstart file is generated, before the
+## installer has even booted — and writes it to an %include'd file used
+## everywhere the disk device used to be hardcoded. Falls back to sda if
+## no BOSS by-id entry is found, matching this pipeline's original
+## (SAS/SATA) assumption for hardware where it still holds.
+%pre
+#!/bin/bash
+osdisk="sda"
+boss_link=$(ls /dev/disk/by-id/ 2>/dev/null | grep -i boss | head -1)
+if [[ -n "$boss_link" ]]; then
+  osdisk=$(basename "$(readlink -f "/dev/disk/by-id/${boss_link}")")
+fi
+cat > /tmp/os-disk-include.ks << KSEOF
+bootloader --location=mbr --append="crashkernel=auto rhgb quiet" --driveorder=/dev/${osdisk}
+zerombr
+ignoredisk --only-use=/dev/${osdisk}
+clearpart --all --drives=/dev/${osdisk}
+part /boot --fstype xfs --size=2048
+part pv.13 --size=153600 --grow --ondisk=/dev/${osdisk}
+part pv.14 --size=81920 --ondisk=/dev/${osdisk}
+KSEOF
+%end
+
 ## --- Package source ---
 ## Confirmed staged on lmrg34ga: RHEL 9.6. This MUST stay in sync with
 ## RHEL9_INSTALL_MEDIA_VERSION in iso_gen.sh — that constant drives the
@@ -27,13 +65,7 @@ firewall --service=ssh
 timezone --utc EST
 services --disabled gpm,sendmail,cups,pcmcia,isdn,rawdevices,hpoj,bluetooth,openibd,avahi-daemon,avahi-dnsconfd,hidd,hplip,pcscd,firewalld
 
-bootloader --location=mbr --append="crashkernel=auto rhgb quiet" --driveorder=/dev/sda
-zerombr
-ignoredisk --only-use=/dev/sda
-clearpart --all --drives=/dev/sda
-part /boot --fstype xfs --size=2048
-part pv.13 --size=153600 --grow --ondisk=/dev/sda
-part pv.14 --size=81920 --ondisk=/dev/sda
+%include /tmp/os-disk-include.ks
 volgroup rootvg --pesize=4096 pv.13
 volgroup toolsvg --pesize=4096 pv.14
 
