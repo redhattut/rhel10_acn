@@ -21,7 +21,83 @@
 # =============================================================================
 set -u
 
-usage(){ echo "usage: build.sh [-t] [--skip=<name>[,<name>...]] <csv_filename_in_csv/incoming>"; }
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# common.sh sourced immediately, before argument parsing — needed so -h/
+# --help can use the shared SKIP_REGISTRY (single source of truth for
+# valid skip names, see common.sh) without duplicating it here. Same
+# reasoning/pattern as build_server.sh.
+# shellcheck source=../lib/common.sh
+source "${PROJECT_ROOT}/lib/common.sh"
+
+usage(){
+  cat << 'EOF'
+NAME
+    build.sh — dispatch a bare-metal build for every server in a CSV
+
+SYNOPSIS
+    build.sh [-t] [--skip=<name>[,<name>...]] <csv_filename>
+
+DESCRIPTION
+    Entrypoint for building a whole batch of servers at once. Launches one
+    backgrounded build_server.sh per server found in the CSV, all in
+    parallel — each server gets its own log file and proceeds
+    independently. The job name is taken automatically from the CSV
+    filename (minus its extension), matching what the web tool named the
+    file when you downloaded it.
+
+    Run this from lmrg34ja after uploading the exported CSV to
+    csv/incoming/. Re-running with the same CSV filename automatically
+    resets that job's work/ and logs/ directories first (unless a build
+    from that job is still actively running, in which case it refuses and
+    tells you to wait or cancel it — see stop_build.sh).
+
+    For a single server, build_server.sh can be pointed directly at the
+    same CSV instead — see build_server.sh --help.
+
+OPTIONS
+    -t, --skip-idrac-wait
+            Legacy alias for --skip=racreset. Skips the iDRAC controller
+            reboot entirely (not just the wait for it) for every server in
+            this batch.
+
+    --skip=<name>[,<name>...]
+            Skip an entire step or a specific fine-grained task, for
+            EVERY server in this batch, instead of redoing work that's
+            already correct on the actual hardware from a previous run.
+            Comma-separated, repeatable. Passed straight through to each
+            dispatched build_server.sh, which validates the names and
+            logs "SKIPPED: ..." for anything left out this way. See the
+            full list of valid names below.
+
+    -h, --help
+            Show this help and the full list of --skip names.
+
+    NOTE: there is no --mac= option here (unlike build_server.sh) — a
+    manually supplied MAC address is inherently single-host, so
+    --skip=get-mac only makes sense when building one server directly
+    with build_server.sh, not across a whole batch.
+
+EXAMPLES
+    Build every server in a CSV, normally:
+        ./bin/build.sh amber-20260825-522.csv
+
+    Same, but skip the iDRAC reboot for every server (they were already
+    reset recently, e.g. earlier in the same troubleshooting session):
+        ./bin/build.sh -t amber-20260825-522.csv
+
+    Re-run a batch, but skip BIOS settings and the iDRAC reboot for every
+    server — useful when a prior run already got BIOS/RAID right and you
+    only need to redo kickstart/ISO/install for everyone:
+        ./bin/build.sh --skip=bios,racreset amber-20260825-522.csv
+
+    Re-run, skipping storage entirely (existing vdisks are already
+    correct) but still redoing BIOS, kickstart, and the install:
+        ./bin/build.sh --skip=clear-vdisk,crypto-erase,create-vdisk amber-20260825-522.csv
+
+EOF
+  print_skip_help
+}
 
 SKIP_IDRAC_RESET=0
 SKIP_LIST_ARG=""
@@ -29,8 +105,8 @@ POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -t|--skip-idrac-wait) SKIP_IDRAC_RESET=1; shift ;;
-    --skip=*) SKIP_LIST_ARG="${SKIP_LIST_ARG:+$SKIP_LIST_ARG,}${1#*=}"; shift ;;
-    --skip) SKIP_LIST_ARG="${SKIP_LIST_ARG:+$SKIP_LIST_ARG,}$2"; shift 2 ;;
+    --skip=*) validate_skip_names "${1#*=}"; SKIP_LIST_ARG="${SKIP_LIST_ARG:+$SKIP_LIST_ARG,}${1#*=}"; shift ;;
+    --skip) validate_skip_names "$2"; SKIP_LIST_ARG="${SKIP_LIST_ARG:+$SKIP_LIST_ARG,}$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "Unknown option: $1" >&2; usage; exit 1 ;;
     *) POSITIONAL+=("$1"); shift ;;
@@ -41,7 +117,6 @@ CSV_FILENAME="${POSITIONAL[0]:-}"
 
 JOB_NAME="${CSV_FILENAME%.*}"   # strip extension -> becomes the job name
 
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CSV_PATH="${PROJECT_ROOT}/csv/incoming/${CSV_FILENAME}"
 WORK_DIR="${PROJECT_ROOT}/work/${JOB_NAME}"
 JOB_LOG_DIR="${PROJECT_ROOT}/logs/${JOB_NAME}"
@@ -58,7 +133,6 @@ HOSTNAME_SHORT="dispatch"
 # matters when you're launching several jobs back to back.
 mkdir -p "$JOB_LOG_DIR"
 
-source "${PROJECT_ROOT}/lib/common.sh"
 check_secrets
 
 [[ -f "$CSV_PATH" ]] || die "CSV not found: $CSV_PATH (expected under csv/incoming/)"
