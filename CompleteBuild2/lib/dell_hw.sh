@@ -278,12 +278,18 @@ dell_racadm_boot_mode(){
 read_boot_mode(){
   local idrac_ip="$1"
   local result=""
-  local attempt=1 max_attempts=3 delay=10
-  while (( attempt <= max_attempts )); do
+  # Reuses RACADM_MAX_ATTEMPTS/RACADM_RETRY_DELAY (common.sh) rather than
+  # its own separate hardcoded values — this used to be its own 3-attempt
+  # budget, independent of run_racadm's retry count, and silently stayed
+  # at 3 when run_racadm's own retry budget was later bumped to 15. Two
+  # different "how patient should we be" numbers living in two places is
+  # exactly how that kind of drift happens; one shared knob avoids it.
+  local attempt=1
+  while (( attempt <= RACADM_MAX_ATTEMPTS )); do
     result=$(run_racadm "$idrac_ip" get BIOS.BiosBootSettings.BootMode \
       | grep -oiE 'BootMode=(Uefi|Bios)' | cut -d= -f2 | tr '[:upper:]' '[:lower:]')
     [[ -n "$result" ]] && break
-    (( attempt < max_attempts )) && sleep "$delay"
+    (( attempt < RACADM_MAX_ATTEMPTS )) && sleep "$RACADM_RETRY_DELAY"
     ((attempt++))
   done
   echo "$result"
