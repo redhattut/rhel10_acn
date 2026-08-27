@@ -395,9 +395,9 @@ commit_storage_config(){
   log INFO "$description — server is back up after reboot"
 }
 
-# remove_existing_vdisks <idrac_ip>
+# remove_existing_vdisks <idrac_ip> <size_gb>
 remove_existing_vdisks(){
-  local idrac_ip="$1"
+  local idrac_ip="$1" size_gb="$2"
   log_section "Storage: clearing existing vdisk"
   if is_skipped "clear-vdisk"; then
     log_skip "Removing existing virtual disk" "clear-vdisk"
@@ -431,15 +431,31 @@ remove_existing_vdisks(){
     fi
   fi
 
-  cryptographic_erase_disks "$idrac_ip"
+  cryptographic_erase_disks "$idrac_ip" "$size_gb"
 }
 
 # -----------------------------------------------------------------------------
-# cryptographic_erase_disks <idrac_ip>
+# cryptographic_erase_disks <idrac_ip> <size_gb>
 # Called after an existing vdisk has been removed, for a genuinely clean
 # slate before physical-disk enumeration and RAID recreation — confirmed
 # subcommand name via `racadm help storage | grep -i erase` on real
 # hardware: `cryptographicerase`.
+#
+# Filters candidates by SIZE (matching create_os_vdisk()'s own candidate
+# selection below), NOT by excluding disks whose MediaType literally says
+# "NVME" — confirmed as a real bug on a real box with two large (1.7T)
+# standalone NVMe data drives sitting alongside the OS's own RAID-managed
+# SSDs: those drives report MediaType "Solid State Drive", not "NVME" (the
+# same MediaType-unreliability already confirmed elsewhere in this
+# pipeline — see BusProtocol/OS-disk-detection comments), so the old
+# exclusion let them through. They're also not behind any RAID controller
+# at all (status "Not Available", no controller suffix in their own FQDD —
+# e.g. "Disk.Bay.1:Enclosure.Internal.0-1", 2 segments, nothing to commit a
+# job against), so racadm rejected the resulting jobqueue create outright
+# with "SWC0244: Invalid Fully Qualified Device Descriptor" — a real,
+# confirmed failure, not just an unnecessary erase. Only disks actually
+# sized for the OS vdisk should ever be candidates here; the two big data
+# drives never should have been touched at all, by either function.
 #
 # NOT FULLY VERIFIED: whether cryptographicerase self-commits (returns its
 # own job ID directly) or needs the same controller-level `jobqueue create`
@@ -450,7 +466,7 @@ remove_existing_vdisks(){
 # up once confirmed.
 # -----------------------------------------------------------------------------
 cryptographic_erase_disks(){
-  local idrac_ip="$1"
+  local idrac_ip="$1" size_gb="$2"
   log_section "Storage: cryptographic erase"
   if is_skipped "crypto-erase"; then
     log_skip "Cryptographic erase of physical disks" "crypto-erase"
@@ -460,12 +476,17 @@ cryptographic_erase_disks(){
   local pdisks; pdisks=$(run_racadm "$idrac_ip" storage get pdisks -o -p mediatype,size)
   local parsed; parsed=$(echo "$pdisks" | parse_pdisks)
 
-  local disk_id media disk_size raid_id="" erased_any="no"
+  local disk_id media disk_size size_up size_down raid_id="" erased_any="no"
   while IFS=$'\t' read -r disk_id media disk_size; do
     [[ -z "$disk_id" ]] && continue
-    # NVMe excluded — can't be RAID'd through this controller path at all
-    # (same exclusion as everywhere else NVMe is handled in this pipeline).
-    [[ "${media^^}" == "NVME" ]] && continue
+    [[ "$media" == "SSD" ]] || continue
+    [[ -z "$disk_size" ]] && continue
+    # Same +-15% size window as create_os_vdisk()'s own candidate
+    # selection — only disks that are actually candidates for the OS
+    # vdisk should be erased here, not "every SSD on the box."
+    size_up=$(( disk_size + disk_size*15/100 ))
+    size_down=$(( disk_size - disk_size*15/100 ))
+    (( size_up >= size_gb && size_down <= size_gb )) || continue
     log INFO "cryptographicerase: $disk_id"
     local erase_out; erase_out=$(run_racadm "$idrac_ip" storage cryptographicerase:"$disk_id")
     erased_any="yes"
