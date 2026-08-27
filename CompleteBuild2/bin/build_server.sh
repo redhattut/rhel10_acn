@@ -136,7 +136,7 @@ if (( ${#POSITIONAL[@]} == 1 )); then
   [[ -s "$hostlist" ]] || die "No servers found in $CSV_FILENAME"
   host_count=$(wc -l < "$hostlist")
   if (( host_count > 1 )); then
-    die "This CSV has $host_count servers — build_server.sh only builds one at a time. Use build.sh for multi-server batches: ./bin/build.sh $CSV_FILENAME"
+    die "This CSV has $host_count servers — build_server.sh only builds one at a time. Use build.sh for multi-server batches: ./build.sh $CSV_FILENAME"
   fi
   HOSTNAME_ARG=$(head -1 "$hostlist")
 
