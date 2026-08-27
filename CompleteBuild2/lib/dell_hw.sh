@@ -668,8 +668,20 @@ mount_install_media(){
   log_section "Mounting install media & booting"
   local vmedia; vmedia=$(run_racadm "$idrac_ip" remoteimage -s | grep Enabled)
   if [[ -n "$vmedia" ]]; then
-    log INFO "Unmounting existing virtual media first"
+    # A plain unmount-then-immediate-remount doesn't always take reliably —
+    # confirmed a real case where a failed build needed to unmount and
+    # remount, and it silently didn't work without a reboot in between.
+    # Power-cycling after the unmount gives the iDRAC's virtual media
+    # subsystem a real reset before accepting the new mount, instead of
+    # racing straight into remounting on top of whatever state the
+    # previous mount left behind. Only done when media was ACTUALLY
+    # mounted already — a fresh/already-clear mount skips straight to
+    # mounting below, no reboot needed for that case.
+    log INFO "Existing virtual media mount detected — unmounting and power-cycling before remounting"
     run_racadm "$idrac_ip" remoteimage -d >/dev/null
+    run_racadm "$idrac_ip" serveraction powercycle >/dev/null
+    log INFO "Waiting 120s for the power-cycle to settle before remounting"
+    sleep 120
   fi
   log INFO "Mounting install ISO for $host"
   run_racadm "$idrac_ip" remoteimage -c -l "http://lmrg34ga.prod.pncint.net/PNC/installs/kickstart/SERVERS/tmpiso/${host}/build_${host}.iso" >/dev/null
