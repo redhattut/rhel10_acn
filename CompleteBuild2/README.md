@@ -8,12 +8,15 @@ Template** web tool instead of a 3-worksheet Excel file.
 
 ```
 /staging/BareMetalBuilds/CompleteBuild2/     <- on lmrg34ja
-├── bin/build.sh              entrypoint
+├── build.sh                    entrypoint — lives here, not bin/, so a
+│                                 CSV dropped in this same directory
+│                                 tab-completes when typing the job name
 ├── bin/build_server.sh        per-server orchestrator (backgrounded)
+├── bin/stop_build.sh          cancel an in-progress build
 ├── lib/                       shared functions
 │   └── iso_gen.sh              assembles the bootable ISO — see below
 ├── templates/                 kickstart templates
-├── csv/incoming/              <- upload your exported CSV here
+├── csv/incoming/              working copy build.sh copies your CSV into
 ├── csv/archive/                timestamped copy kept automatically
 ├── work/<job_name>/            parsed per-server state for one job
 └── logs/<job_name>/            per-server logs + job summary + results.csv
@@ -33,16 +36,25 @@ is local to `lmrg34ja`.
 ## Running a build
 
 ```
-scp BDP-cedar-20260729-482.csv lmrg34ja:/staging/BareMetalBuilds/CompleteBuild2/csv/incoming/
+scp BDP-cedar-20260729-482.csv lmrg34ja:/staging/BareMetalBuilds/CompleteBuild2/
 ssh lmrg34ja
 cd /staging/BareMetalBuilds/CompleteBuild2
-./bin/build.sh BDP-cedar-20260729-482.csv
+./build.sh BDP-cedar-20260729-482
 ```
+
+The CSV can be dropped directly into the CompleteBuild2 root itself (as
+shown above) rather than csv/incoming/ — `build.sh` copies it into
+csv/incoming/ automatically. Dropping it here first, rather than directly
+into csv/incoming/, is what makes tab-completion work when typing the job
+name. The .csv extension is optional too — `./build.sh
+BDP-cedar-20260729-482` and `./build.sh BDP-cedar-20260729-482.csv` are
+equivalent.
 
 The job name is taken automatically from the CSV filename (minus its
 extension) — no second argument needed. This matches the filename the web
 tool already produces when you click Download, so in practice it's just:
-upload the file the tool gave you, run `build.sh` with that same filename.
+drop the file the tool gave you here, run `build.sh` with that same
+filename.
 
 `build.sh` archives the CSV, parses it with `csv_split.py`, and launches one
 backgrounded `build_server.sh` per server — same parallel-dispatch model the
