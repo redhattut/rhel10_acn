@@ -22,7 +22,19 @@ racreset_idrac(){
   fi
   log INFO "Rebooting iDRAC"
   run_racadm "$idrac_ip" racreset >/dev/null
-  sleep 600
+  # Was a single blind `sleep 600` with zero log output for the full 10
+  # minutes — confirmed this made a completely normal, expected wait look
+  # exactly like a hang (a real report: checked at 7 minutes, well within
+  # the designed 10, and concluded the build was stuck). Same fix already
+  # applied to ssh_wait() for the same reason: a heartbeat every couple of
+  # minutes, not a full silent sleep, so "still going" stays visible.
+  local waited=0 chunk=120
+  while (( waited < 600 )); do
+    local this_sleep=$(( 600 - waited < chunk ? 600 - waited : chunk ))
+    sleep "$this_sleep"
+    waited=$(( waited + this_sleep ))
+    (( waited < 600 )) && log INFO "Still waiting for iDRAC reset to settle (${waited}s of 600s)"
+  done
   ping_wait "$idrac_ip" 30 30
   sleep 60
 }
@@ -517,7 +529,7 @@ cryptographic_erase_disks(){
 # vdisk (they can't be RAID'd through storage createvd).
 create_os_vdisk(){
   local idrac_ip="$1" size_gb="$2"
-  remove_existing_vdisks "$idrac_ip"
+  remove_existing_vdisks "$idrac_ip" "$size_gb"
 
   # Declared unconditionally, before the skip-check below — NOT `local`,
   # build_server.sh reads this after calling create_os_vdisk() regardless
