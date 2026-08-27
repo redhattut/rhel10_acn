@@ -111,16 +111,16 @@ die(){
 SKIP_LIST=""
 
 declare -A SKIP_REGISTRY=(
-  [racreset]="Dell only — skip the iDRAC controller reboot (racadm racreset) entirely. Same as the legacy -t/--skip-idrac-wait flag."
-  [bios]="Dell only — skip the whole BIOS settings step (ErrPrompt, CPU frequency policy, boot mode set/commit/verify)."
-  [clear-vdisk]="Dell only — skip removing any existing virtual disk."
-  [crypto-erase]="Dell only — skip the cryptographic erase of physical disks."
-  [create-vdisk]="Dell only — skip creating the new OS virtual disk."
-  [idrac-passthrough]="Dell only — skip disabling iDRAC OS-BMC passthrough (racadm set iDRAC.OS-BMC.AdminState Disabled) without skipping the rest of MAC detection."
-  [get-mac]="Skip querying the MAC address from iDRAC/UCSM entirely. REQUIRES --mac=<address> to supply it manually instead."
-  [kickstart]="Skip kickstart file generation. Only useful together with --skip=iso-build, or if a .ks file already exists at work/<job>/<host>/<host_short>.ks from a previous run."
+  [racreset]="Dell — skip the iDRAC controller reboot entirely."
+  [bios]="Dell — skip BIOS settings (ErrPrompt, CPU policy, boot mode)."
+  [clear-vdisk]="Dell — skip removing any existing virtual disk."
+  [crypto-erase]="Dell — skip cryptographic erase of physical disks."
+  [create-vdisk]="Dell — skip creating the new OS virtual disk."
+  [idrac-passthrough]="Dell — skip disabling iDRAC OS-BMC passthrough."
+  [get-mac]="Skip MAC detection. Requires --mac=<address>."
+  [kickstart]="Skip kickstart generation. Requires an existing .ks file."
   [iso-build]="Skip building the boot ISO."
-  [mount]="Dell only — skip mounting install media and power-cycling to start the OS install."
+  [mount]="Dell — skip mounting install media and power-cycling."
 )
 
 is_skipped(){
@@ -164,10 +164,21 @@ print_skip_help(){
 # before wiping/resetting a job's work/log directories on a rerun — doing
 # that while another host in the same job is still mid-build would delete
 # its log/work files out from under it while it's actively writing to them.
+# job_has_active_lock <job_log_dir> [short_hostname_to_check_only]
+# With no 2nd arg: checks every *.lock in the dir (used for a full-job
+# rerun). With a hostname given: checks only that host's own lock — used
+# for a partial rerun targeting specific hosts, where other hosts in the
+# same job being active/inactive is irrelevant.
 job_has_active_lock(){
-  local job_log_dir="$1"
+  local job_log_dir="$1" only_host="${2:-}"
   local active=""
   local lockfile
+  if [[ -n "$only_host" ]]; then
+    lockfile="${job_log_dir}/${only_host}.lock"
+    [[ -e "$lockfile" ]] && ! flock -n "$lockfile" -c true 2>/dev/null && active="$only_host"
+    echo "$active"
+    return
+  fi
   for lockfile in "${job_log_dir}"/*.lock; do
     [[ -e "$lockfile" ]] || continue
     if ! flock -n "$lockfile" -c true 2>/dev/null; then
