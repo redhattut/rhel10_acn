@@ -502,7 +502,13 @@ cryptographic_erase_disks(){
   local disk_id media disk_size size_up size_down raid_id="" erased_any="no"
   while IFS=$'\t' read -r disk_id media disk_size; do
     [[ -z "$disk_id" ]] && continue
-    [[ "$media" == "SSD" ]] || continue
+    # SSD or HDD — the OS vdisk isn't always SSD (confirmed a real custom
+    # rebuild using HDD for the OS disk specifically); size-matching below
+    # is what actually determines whether a disk is the right candidate,
+    # not the media type. NVMe is excluded implicitly here, not by name —
+    # it's addressed by the size window not matching an NVMe drive's size,
+    # same reasoning already applied elsewhere in this pipeline.
+    [[ "$media" == "SSD" || "$media" == "HDD" ]] || continue
     [[ -z "$disk_size" ]] && continue
     # Same +-15% size window as create_os_vdisk()'s own candidate
     # selection — only disks that are actually candidates for the OS
@@ -534,7 +540,8 @@ cryptographic_erase_disks(){
 }
 
 # create_os_vdisk <idrac_ip> <os_disk_size_gb>
-# Picks two SSDs whose size is within +-15% of the requested OS disk size and
+# Picks two SSD or HDD disks whose size is within +-15% of the requested OS
+# disk size and
 # builds a RAID1 volume named OS_Disk. Same tolerance-matching logic as the
 # original create_vdiskos; NVMe disks are still never candidates for the OS
 # vdisk (they can't be RAID'd through storage createvd).
@@ -566,7 +573,13 @@ create_os_vdisk(){
   local candidates=()
   local disk_id media disk_size size_up size_down
   while IFS=$'\t' read -r disk_id media disk_size; do
-    [[ "$media" == "SSD" ]] || continue
+    # SSD or HDD — confirmed a real custom rebuild where the OS vdisk was
+    # deliberately built as HDD, not SSD. Hardcoding SSD-only here was
+    # never a real requirement, just an assumption based on every prior
+    # test server happening to use SSD. Size-matching below (the +-15%
+    # window) is what actually identifies the right candidates, same as
+    # it always was; media type is just a coarse first filter.
+    [[ "$media" == "SSD" || "$media" == "HDD" ]] || continue
     [[ -z "$disk_size" ]] && continue
     size_up=$(( disk_size + disk_size*15/100 ))
     size_down=$(( disk_size - disk_size*15/100 ))
@@ -576,7 +589,7 @@ create_os_vdisk(){
   done <<< "$parsed"
 
   if (( ${#candidates[@]} < 2 )); then
-    die "Could not find 2 SSDs matching OS disk size ${size_gb}GB — check physical disk config"
+    die "Could not find 2 SSD/HDD disks matching OS disk size ${size_gb}GB — check physical disk config"
   fi
 
   local disk1="${candidates[0]}" disk2="${candidates[1]}"
