@@ -49,6 +49,7 @@ EXAMPLES
     ./build.sh amber-20260825-522 --failed            rebuild only failures
     ./build.sh amber-20260825-522 --skip=bios,racreset   skip for everyone
     ./bin/stop_build.sh ldsi341a amber-20260825-522   stop one host's build
+    tail -f logs/ldsi341a/ldsi341a.log                watch one host live
 
 EOF
   print_skip_help
@@ -89,8 +90,13 @@ JOB_NAME="${CSV_FILENAME%.*}"
 
 CSV_PATH="${PROJECT_ROOT}/csv/incoming/${CSV_FILENAME}"
 WORK_DIR="${PROJECT_ROOT}/work/${JOB_NAME}"
-JOB_LOG_DIR="${PROJECT_ROOT}/logs/${JOB_NAME}"
-JOB_RESULTS_FILE="${JOB_LOG_DIR}/results.csv"
+# JOB_LOG_DIR here is build.sh's OWN dispatch-level bookkeeping (archiving
+# the CSV, parsing it, listing what got launched) — NOT any individual
+# host's build log. Pointed at work/<job_name>, which stays job-scoped;
+# per-host logs now live under logs/<hostname>/ instead (see the
+# restructure below), independent of job name.
+JOB_LOG_DIR="${WORK_DIR}"
+JOB_RESULTS_FILE="${WORK_DIR}/results.csv"
 HOSTNAME_SHORT="dispatch"
 
 mkdir -p "$JOB_LOG_DIR"
@@ -113,16 +119,21 @@ PARTIAL_MODE=0
 (( FAILED_ONLY == 1 || ${#EXPLICIT_HOSTS[@]} > 0 )) && PARTIAL_MODE=1
 
 if (( PARTIAL_MODE == 0 )); then
-  # Full-job rerun — same as before: refuse if ANY host in this job is
-  # still actively building, otherwise wipe and rebuild everyone.
-  still_active=$(job_has_active_lock "$JOB_LOG_DIR")
-  if [[ -n "$still_active" ]]; then
-    die "Job $JOB_NAME still has an active build in progress for: $still_active. Wait, or cancel with: ./bin/stop_build.sh <hostname> $JOB_NAME"
+  # Full-job rerun — refuse if ANY host in this CSV is still actively
+  # building (checked per-host now, via hostlist.txt, since each host's
+  # lock lives under its own logs/<hostname>/ — see job_has_active_lock).
+  # hostlist.txt doesn't exist yet on a first-ever run of this job name;
+  # csv_split.py (below) is what creates it, so this check only applies
+  # meaningfully once it exists.
+  if [[ -s "${WORK_DIR}/hostlist.txt" ]]; then
+    still_active=$(job_has_active_lock "${WORK_DIR}/hostlist.txt")
+    if [[ -n "$still_active" ]]; then
+      die "Job $JOB_NAME still has an active build in progress for: $still_active. Wait, or cancel with: ./bin/stop_build.sh <hostname> $JOB_NAME"
+    fi
   fi
-  rm -rf "$WORK_DIR" "$JOB_LOG_DIR"
-  mkdir -p "$WORK_DIR" "$JOB_LOG_DIR"
-  rm -f "$JOB_RESULTS_FILE"
-  log INFO "Reset work/${JOB_NAME} and logs/${JOB_NAME} for a clean rerun"
+  rm -rf "$WORK_DIR"
+  mkdir -p "$WORK_DIR"
+  log INFO "Reset work/${JOB_NAME} for a clean rerun"
 fi
 
 log STEP "=== Starting job $JOB_NAME from $CSV_FILENAME ==="
@@ -186,7 +197,7 @@ if (( PARTIAL_MODE == 1 )); then
   log INFO "Partial rerun — targeting ${#targets[@]} of $(wc -l < "$hostlist") host(s): ${targets[*]}"
   for host in "${targets[@]}"; do
     short="${host%%.*}"
-    active=$(job_has_active_lock "$JOB_LOG_DIR" "$short")
+    active=$(job_has_active_lock "$short")
     [[ -n "$active" ]] && die "$host is still actively building — wait, or cancel with: ./bin/stop_build.sh $short $JOB_NAME"
   done
   for host in "${targets[@]}"; do
@@ -194,10 +205,11 @@ if (( PARTIAL_MODE == 1 )); then
     # NOT deleting work/${JOB_NAME}/${host} here — csv_split.py (above)
     # already regenerated its server.env fresh, before this loop runs;
     # deleting it now would just destroy that and leave nothing for
-    # build_server.sh to read. Only the LOG artifacts from a previous run
-    # of this specific host need clearing for a clean rerun.
-    rm -f "${JOB_LOG_DIR}/${short}.log" "${JOB_LOG_DIR}/${short}.lock" "${JOB_LOG_DIR}/${short}.hwinventory.raw"
-    log INFO "Reset logs for $host only (work/server.env already freshly regenerated above)"
+    # build_server.sh to read. Per-host log/lock/hwinventory files (now
+    # under logs/<host>/, not job-scoped) are what need clearing for a
+    # clean rerun of this specific host.
+    rm -f "${PROJECT_ROOT}/logs/${short}/${short}.log" "${PROJECT_ROOT}/logs/${short}/${short}.lock" "${PROJECT_ROOT}/logs/${short}/${short}.hwinventory.raw"
+    log INFO "Reset logs/${short}/ (work/server.env already freshly regenerated above)"
   done
   # csv_split.py (above) already regenerated this host's server.env fresh.
 fi
@@ -206,20 +218,20 @@ count="${#targets[@]}"
 log INFO "Launching $count server build(s) in parallel"
 
 for host in "${targets[@]}"; do
-  log INFO "Dispatching $host — its full log will be logs/${JOB_NAME}/${host%%.*}.log"
+  log INFO "Dispatching $host — its full log will be logs/${host%%.*}/${host%%.*}.log"
   extra_args=()
   [[ "$SKIP_IDRAC_RESET" == "1" ]] && extra_args+=(-t)
   [[ -n "$SKIP_LIST_ARG" ]] && extra_args+=(--skip="$SKIP_LIST_ARG")
   setsid nohup "${PROJECT_ROOT}/bin/build_server.sh" "${extra_args[@]}" "$host" "$JOB_NAME" </dev/null >/dev/null 2>&1 &
-  echo "$! $host" >> "${JOB_LOG_DIR}/pids.txt"
+  echo "$! $host" >> "${WORK_DIR}/pids.txt"
 done
 
 log STEP "All builds dispatched."
 for host in "${targets[@]}"; do
   short="${host%%.*}"
   echo "  $host"
-  echo "    watch:  tail -f ${JOB_LOG_DIR}/${short}.log"
+  echo "    watch:  tail -f ${PROJECT_ROOT}/logs/${short}/${short}.log"
   echo "    stop:   ./bin/stop_build.sh ${short} ${JOB_NAME}"
 done
-log INFO "Watch everything at once: tail -f ${JOB_LOG_DIR}/*.log"
+log INFO "Watch everything at once: tail -f ${PROJECT_ROOT}/logs/*/*.log"
 log INFO "Final per-server pass/fail summary will accumulate in: ${JOB_RESULTS_FILE}"
