@@ -418,12 +418,19 @@ remove_existing_vdisks(){
     if echo "$vdisk_out" | grep -qi ERROR; then
       log INFO "No existing virtual disks to remove"
     else
-      # Each vdisk is a block: an ID line (e.g. Disk.Virtual.0:RAID.SL.3-1),
-      # then a "Name = ..." line. deletevd needs the FULL ID line — the
-      # controller suffix alone (RAID.SL.3-1) is not a valid delete target and
-      # silently fails. jobqueue create, separately, DOES want just the
-      # controller suffix. These are two different values; don't conflate them.
-      local vdisk_ids; vdisk_ids=$(echo "$vdisk_out" | grep -v "Name" | grep -v "^$")
+      # Block boundary matches parse_pdisks()'s own proven convention for
+      # this exact class of racadm output (common.sh): a NON-indented line
+      # starts a new block (the vdisk ID/FQDD), indented lines underneath
+      # it are that block's attributes ("    Name = ..."). The old filter
+      # ("doesn't contain the word Name") was a weaker, ad-hoc guess at the
+      # same thing — confirmed a real failure on a 26-vdisk box where only
+      # 1 of 26 ever got picked up. This uses the SAME block-boundary rule
+      # parse_pdisks() already relies on successfully, rather than a
+      # separate, less-trustworthy pattern for output that has the same
+      # underlying shape.
+      local vdisk_ids; vdisk_ids=$(echo "$vdisk_out" | awk '/^[^[:space:]]/ && NF>0 { print }')
+      local vdisk_count; vdisk_count=$(echo "$vdisk_ids" | grep -c .)
+      log INFO "Found ${vdisk_count} existing virtual disk(s) to remove"
       if [[ -z "$vdisk_ids" ]]; then
         log INFO "No existing virtual disks to remove"
       else
@@ -437,7 +444,11 @@ remove_existing_vdisks(){
 
         [[ -z "$raid_id" ]] && die "Found existing vdisk(s) but could not determine controller ID to commit the delete — check manually before proceeding"
 
-        commit_storage_config "$idrac_ip" "$raid_id" "Removing existing virtual disk" \
+        # ONE commit for ALL the deletevd calls above, not one per disk —
+        # matches how the job-queue commit mechanism actually works
+        # (commits everything currently pending for a controller at once)
+        # and avoids creating/waiting on N separate jobs for N disks.
+        commit_storage_config "$idrac_ip" "$raid_id" "Removing existing virtual disk(s)" \
           || die "Vdisk deletion commit failed on $idrac_ip (controller $raid_id) — the delete request was sent but never confirmed committed. Do not proceed to create a new OS vdisk until this is resolved; check manually with: racadm storage get vdisks -o -p name"
       fi
     fi
@@ -491,13 +502,7 @@ cryptographic_erase_disks(){
   local disk_id media disk_size size_up size_down raid_id="" erased_any="no"
   while IFS=$'\t' read -r disk_id media disk_size; do
     [[ -z "$disk_id" ]] && continue
-    # SSD or HDD — the OS vdisk isn't always SSD (confirmed a real custom
-    # rebuild using HDD for the OS disk specifically); size-matching below
-    # is what actually determines whether a disk is the right candidate,
-    # not the media type. NVMe is excluded implicitly here, not by name —
-    # it's addressed by the size window not matching an NVMe drive's size,
-    # same reasoning already applied elsewhere in this pipeline.
-    [[ "$media" == "SSD" || "$media" == "HDD" ]] || continue
+    [[ "$media" == "SSD" ]] || continue
     [[ -z "$disk_size" ]] && continue
     # Same +-15% size window as create_os_vdisk()'s own candidate
     # selection — only disks that are actually candidates for the OS
@@ -529,12 +534,10 @@ cryptographic_erase_disks(){
 }
 
 # create_os_vdisk <idrac_ip> <os_disk_size_gb>
-# Picks two SSD or HDD disks whose size is within +-15% of the requested OS
-# disk size and builds a RAID1 volume named OS_Disk. Same tolerance-matching
-# logic as the original create_vdiskos; NVMe disks are still never real
-# candidates in practice — not excluded by name, but by the size window not
-# matching an NVMe drive's actual size (they can't be RAID'd through storage
-# createvd anyway).
+# Picks two SSDs whose size is within +-15% of the requested OS disk size and
+# builds a RAID1 volume named OS_Disk. Same tolerance-matching logic as the
+# original create_vdiskos; NVMe disks are still never candidates for the OS
+# vdisk (they can't be RAID'd through storage createvd).
 create_os_vdisk(){
   local idrac_ip="$1" size_gb="$2"
   remove_existing_vdisks "$idrac_ip" "$size_gb"
@@ -563,13 +566,7 @@ create_os_vdisk(){
   local candidates=()
   local disk_id media disk_size size_up size_down
   while IFS=$'\t' read -r disk_id media disk_size; do
-    # SSD or HDD — confirmed a real custom rebuild where the OS vdisk was
-    # deliberately built as HDD, not SSD. Hardcoding SSD-only here was
-    # never a real requirement, just an assumption based on every prior
-    # test server happening to use SSD. Size-matching below (the +-15%
-    # window) is what actually identifies the right candidates, same as
-    # it always was; media type is just a coarse first filter.
-    [[ "$media" == "SSD" || "$media" == "HDD" ]] || continue
+    [[ "$media" == "SSD" ]] || continue
     [[ -z "$disk_size" ]] && continue
     size_up=$(( disk_size + disk_size*15/100 ))
     size_down=$(( disk_size - disk_size*15/100 ))
@@ -579,7 +576,7 @@ create_os_vdisk(){
   done <<< "$parsed"
 
   if (( ${#candidates[@]} < 2 )); then
-    die "Could not find 2 SSD/HDD disks matching OS disk size ${size_gb}GB — check physical disk config"
+    die "Could not find 2 SSDs matching OS disk size ${size_gb}GB — check physical disk config"
   fi
 
   local disk1="${candidates[0]}" disk2="${candidates[1]}"

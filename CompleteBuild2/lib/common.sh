@@ -40,8 +40,10 @@ check_secrets(){
 #   log <LEVEL> <message...>
 # Writes to:
 #   - stdout (so `nohup ... &` output / journalctl still shows it)
-#   - logs/<job>/<hostname>/<hostname>.log   (per-server detail log)
-#   - logs/<job>/job-summary.log             (one line per event, all servers)
+#   - logs/<hostname>/<hostname>.log   (per-host detail log — NOT job-scoped;
+#     a rerun under any job name always overwrites/appends to the SAME file
+#     for that host, since work/<job_name>/ already tracks which job a
+#     given build belonged to)
 # LEVEL is one of INFO / WARN / ERROR / STEP
 # -----------------------------------------------------------------------------
 log(){
@@ -156,35 +158,41 @@ print_skip_help(){
   done | sort
 }
 
-# job_has_active_lock <job_log_dir>
-# Checks every *.lock file in a job's log directory and reports whether any
-# is CURRENTLY held by a live build_server.sh process — i.e. flock -n
-# fails against it, meaning some other process still owns it. Prints the
-# hostname(s) still active on stdout (empty if none), for callers to check
-# before wiping/resetting a job's work/log directories on a rerun — doing
-# that while another host in the same job is still mid-build would delete
-# its log/work files out from under it while it's actively writing to them.
-# job_has_active_lock <job_log_dir> [short_hostname_to_check_only]
-# With no 2nd arg: checks every *.lock in the dir (used for a full-job
-# rerun). With a hostname given: checks only that host's own lock — used
-# for a partial rerun targeting specific hosts, where other hosts in the
-# same job being active/inactive is irrelevant.
+# job_has_active_lock <hostlist_file | single_short_hostname>
+# Checks lock files under logs/<hostname>/<hostname>.lock — one directory
+# PER HOST now, not one shared directory per job (see the logs/ restructure:
+# each host's log/lock/hwinventory files live in their own logs/<host>/
+# directory, independent of which job built them, so a rerun's per-host
+# logs are always the latest for that host regardless of job name).
+#
+# Two calling shapes:
+#   - Given a file that exists (a hostlist.txt): checks EVERY host listed in
+#     it — used for a full-job rerun, where any host still building blocks
+#     the whole reset.
+#   - Given anything else: treated as a single short hostname to check
+#     directly — used for a partial/single-host rerun.
+# Prints the hostname(s) still active on stdout (empty if none).
 job_has_active_lock(){
-  local job_log_dir="$1" only_host="${2:-}"
+  local arg="$1"
   local active=""
-  local lockfile
-  if [[ -n "$only_host" ]]; then
-    lockfile="${job_log_dir}/${only_host}.lock"
-    [[ -e "$lockfile" ]] && ! flock -n "$lockfile" -c true 2>/dev/null && active="$only_host"
-    echo "$active"
-    return
+  _check_one_host_lock(){
+    local short="$1"
+    local lockfile="${PROJECT_ROOT}/logs/${short}/${short}.lock"
+    [[ -e "$lockfile" ]] || return 0
+    flock -n "$lockfile" -c true 2>/dev/null && return 0
+    echo "$short"
+  }
+  if [[ -f "$arg" ]]; then
+    local host short hit
+    while read -r host; do
+      [[ -z "$host" ]] && continue
+      short="${host%%.*}"
+      hit=$(_check_one_host_lock "$short")
+      [[ -n "$hit" ]] && active+="${active:+, }$hit"
+    done < "$arg"
+  else
+    active=$(_check_one_host_lock "$arg")
   fi
-  for lockfile in "${job_log_dir}"/*.lock; do
-    [[ -e "$lockfile" ]] || continue
-    if ! flock -n "$lockfile" -c true 2>/dev/null; then
-      active+="${active:+, }$(basename "$lockfile" .lock)"
-    fi
-  done
   echo "$active"
 }
 
