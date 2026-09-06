@@ -107,27 +107,25 @@ if (( ${#POSITIONAL[@]} == 1 )); then
   CSV_PATH="${PROJECT_ROOT}/csv/incoming/${CSV_FILENAME}"
   [[ -f "$CSV_PATH" ]] || { echo "CSV not found: $CSV_PATH (expected under csv/incoming/)"; exit 1; }
 
-  # JOB_LOG_DIR/check_secrets — common.sh itself is already sourced (see
-  # top of file); this whole CSV-mode block can already use log()/die()/
-  # job_has_active_lock. HOSTNAME_SHORT stays unset ("job" fallback in
-  # log()) until direct mode sets it to the real host.
-  JOB_LOG_DIR="${PROJECT_ROOT}/logs/${JOB_NAME}"
+  # JOB_LOG_DIR here is this CSV-mode block's OWN pre-dispatch bookkeeping
+  # (parsing the CSV, resetting work/) — happens before we even know the
+  # hostname yet, so it can't go under the new per-host logs/<hostname>/
+  # layout. Pointed at work/<job_name> instead, which stays job-scoped —
+  # log()/die() just need SOME writable dir; this reuses the mechanism
+  # rather than inventing a second one for one code path.
+  JOB_LOG_DIR="${PROJECT_ROOT}/work/${JOB_NAME}"
   mkdir -p "$JOB_LOG_DIR"
   check_secrets
 
   csv_work_dir="${PROJECT_ROOT}/work/${JOB_NAME}"
 
   # Rerunning the same job name (same CSV filename) now resets that job's
-  # work/ and logs/ directories automatically instead of requiring manual
-  # cleanup first — but ONLY if nothing from a previous run of this job is
-  # still actively building (job_has_active_lock, common.sh).
-  still_active=$(job_has_active_lock "$JOB_LOG_DIR")
-  if [[ -n "$still_active" ]]; then
-    die "Job $JOB_NAME still has an active build in progress for: $still_active. Wait for it to finish, or cancel it first with: ./bin/stop_build.sh <hostname> $JOB_NAME — not resetting work/${JOB_NAME} or logs/${JOB_NAME} while that's running."
-  fi
-  rm -rf "$csv_work_dir" "$JOB_LOG_DIR"
-  mkdir -p "$csv_work_dir" "$JOB_LOG_DIR"
-  log INFO "Reset work/${JOB_NAME} and logs/${JOB_NAME} for a clean rerun"
+  # work/ directory automatically instead of requiring manual cleanup
+  # first — but ONLY if the host isn't still actively building (checked
+  # AFTER we know the hostname, further down — see host_count check).
+  rm -rf "$csv_work_dir"
+  mkdir -p "$csv_work_dir"
+  log INFO "Reset work/${JOB_NAME} for a clean rerun"
 
   python3 "${PROJECT_ROOT}/lib/csv_split.py" "$CSV_PATH" "$csv_work_dir" \
     || die "csv_split.py failed to parse $CSV_PATH"
@@ -139,6 +137,15 @@ if (( ${#POSITIONAL[@]} == 1 )); then
     die "This CSV has $host_count servers — build_server.sh only builds one at a time. Use build.sh for multi-server batches: ./build.sh $CSV_FILENAME"
   fi
   HOSTNAME_ARG=$(head -1 "$hostlist")
+  short_name="${HOSTNAME_ARG%%.*}"
+
+  # Now that we know the hostname, check ITS OWN lock (logs/<host>/) before
+  # dispatching — refuses if that specific host is still actively building
+  # under any job, not just this one.
+  still_active=$(job_has_active_lock "$short_name")
+  if [[ -n "$still_active" ]]; then
+    die "$HOSTNAME_ARG is still actively building (job $JOB_NAME). Wait for it to finish, or cancel it first with: ./bin/stop_build.sh $short_name $JOB_NAME"
+  fi
 
   # CSV mode dispatches to itself in direct mode, backgrounded — same UX as
   # build.sh: print where to watch, then return control immediately. You
@@ -155,11 +162,10 @@ if (( ${#POSITIONAL[@]} == 1 )); then
   # any in-flight ssh/sleep children) with one `kill -TERM -- -<pid>`
   # instead of leaving orphaned ssh sessions behind.
   setsid nohup "${PROJECT_ROOT}/bin/build_server.sh" "${dispatch_extra_args[@]}" "$HOSTNAME_ARG" "$JOB_NAME" </dev/null >/dev/null 2>&1 &
-  echo "$! $HOSTNAME_ARG" >> "${JOB_LOG_DIR}/pids.txt"
-  short_name="${HOSTNAME_ARG%%.*}"
+  echo "$! $HOSTNAME_ARG" >> "${csv_work_dir}/pids.txt"
   log INFO "Dispatched $HOSTNAME_ARG (job $JOB_NAME)."
   echo "Dispatched $HOSTNAME_ARG (job $JOB_NAME)."
-  echo "Watch it with: tail -f ${JOB_LOG_DIR}/${short_name}.log"
+  echo "Watch it with: tail -f ${PROJECT_ROOT}/logs/${short_name}/${short_name}.log"
   echo "Stop it with:  ./bin/stop_build.sh ${short_name} ${JOB_NAME}"
   exit 0
 
@@ -174,12 +180,17 @@ else
 fi
 
 WORK_DIR="${PROJECT_ROOT}/work/${JOB_NAME}/${HOSTNAME_ARG}"
-JOB_LOG_DIR="${PROJECT_ROOT}/logs/${JOB_NAME}"
-JOB_RESULTS_FILE="${JOB_LOG_DIR}/results.csv"
 HOSTNAME_SHORT="${HOSTNAME_ARG%%.*}"
+# Per-host, NOT per-job — a rerun of this same host under any job name
+# always lands in the same place, overwriting the previous attempt's log/
+# lock/hwinventory files. work/<job_name>/ is still where job-specific
+# derived state (server.env, results.csv, pids.txt) lives; this is just
+# where THIS HOST's own build artifacts live, independent of job name.
+JOB_LOG_DIR="${PROJECT_ROOT}/logs/${HOSTNAME_SHORT}"
+JOB_RESULTS_FILE="${PROJECT_ROOT}/work/${JOB_NAME}/results.csv"
 
 # log() (in common.sh, sourced next) writes directly to
-# logs/<job>/<hostname>.log — that's THE file to watch for one server.
+# logs/<hostname>/<hostname>.log — that's THE file to watch for one server.
 mkdir -p "$JOB_LOG_DIR"
 
 # Per-host lock — refuses a second concurrent build_server.sh run against

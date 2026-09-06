@@ -4,7 +4,7 @@
 #
 # Cancels an in-progress build_server.sh run. Reads the PID recorded when
 # the build was dispatched (build.sh / build_server.sh CSV mode both write
-# "<pid> <hostname>" lines into logs/<job>/pids.txt), confirms that PID is
+# "<pid> <hostname>" lines into work/<job>/pids.txt), confirms that PID is
 # actually still a build_server.sh process for this host (not some
 # unrelated process that happens to have reused the PID after the real one
 # already exited — PIDs get recycled), then sends SIGTERM to the whole
@@ -15,8 +15,11 @@
 # build_server.sh traps SIGTERM itself and logs a clear "cancelled by user"
 # entry before exiting — this doesn't just silently kill something.
 #
-# If job_name is omitted, searches every job under logs/ for a pids.txt
-# entry matching this hostname and uses the most recent one.
+# If job_name is omitted, searches every job under work/ for a pids.txt
+# entry matching this hostname and uses the most recent one. Note this is
+# still job-scoped (pids.txt is per-job bookkeeping), even though the
+# actual per-host log/lock files it points at now live under logs/<host>/
+# rather than logs/<job>/ — see common.sh/build.sh for that split.
 # =============================================================================
 set -u
 
@@ -24,7 +27,7 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 usage(){
   echo "usage: stop_build.sh <hostname> [job_name]"
-  echo "  hostname   short or full hostname, as it appears in logs/<job>/<hostname>.log"
+  echo "  hostname   short or full hostname, as it appears in logs/<hostname>/<hostname>.log"
   echo "  job_name   optional — if omitted, searches all jobs for this hostname"
 }
 
@@ -44,12 +47,12 @@ find_pid_entry(){
 }
 
 if [[ -n "$JOB_NAME" ]]; then
-  job_dirs=("${PROJECT_ROOT}/logs/${JOB_NAME}")
+  job_dirs=("${PROJECT_ROOT}/work/${JOB_NAME}")
 else
-  # Search every job dir, newest first, for a pids.txt entry matching this
-  # host — most recent match wins if the same hostname was ever built
-  # under more than one job name.
-  mapfile -t job_dirs < <(find "${PROJECT_ROOT}/logs" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -rn | awk '{print $2}')
+  # Search every job dir under work/, newest first, for a pids.txt entry
+  # matching this host — most recent match wins if the same hostname was
+  # ever built under more than one job name.
+  mapfile -t job_dirs < <(find "${PROJECT_ROOT}/work" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -rn | awk '{print $2}')
 fi
 
 match=""
@@ -93,7 +96,7 @@ echo "Stopping build for $HOSTNAME_ARG (job $found_job_name, pid $pid)..."
 # build_server.sh CSV mode having dispatched this via setsid.
 if kill -TERM -- "-${pid}" 2>/dev/null; then
   echo "Sent SIGTERM. It may take a few seconds for the current step to notice and exit cleanly."
-  echo "Watch it stop: tail -f ${matched_job_dir}/${HOSTNAME_SHORT}.log"
+  echo "Watch it stop: tail -f ${PROJECT_ROOT}/logs/${HOSTNAME_SHORT}/${HOSTNAME_SHORT}.log"
 else
   echo "kill -TERM failed against process group -${pid} — trying the single PID instead." >&2
   kill -TERM "$pid" 2>/dev/null || { echo "Could not signal PID $pid at all — it may need root/sudo, or may already be gone." >&2; exit 1; }
