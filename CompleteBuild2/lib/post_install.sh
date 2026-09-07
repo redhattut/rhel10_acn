@@ -45,7 +45,16 @@ find_matching_pdisks_dell(){
       (( ${#found[@]} >= count )) && break
     fi
   done <<< "$parsed"
-  printf '%s\n' "${found[@]}"
+  # NOT a bare `printf '%s\n' "${found[@]}"` — confirmed directly: printf
+  # reuses its format at least once even with zero arguments, so an
+  # EMPTY found array still emits one blank line. The caller's `mapfile`
+  # then sees 1 line (not 0), producing a bogus 1-element disks array
+  # whose only element is an empty string — which bypasses the caller's
+  # "< want_count" check and surfaces as a confusing "Could not determine
+  # RAID controller ID from disk FQDD: " (blank) instead of the real,
+  # useful "Could not find N matching disks" message. Guard against
+  # printing anything at all when there's genuinely nothing to print.
+  (( ${#found[@]} > 0 )) && printf '%s\n' "${found[@]}"
 }
 
 # -----------------------------------------------------------------------------

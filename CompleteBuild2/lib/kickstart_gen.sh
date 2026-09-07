@@ -64,6 +64,44 @@ parse_pairs(){
   done
 }
 
+# derive_location_and_cidevice <datacenter> <environment>
+# Sets DERIVED_LOCATION and DERIVED_CI_DEVICE globally (NOT via
+# echo+command-substitution — die() below calls exit, and exit inside a
+# $(...) subshell only kills the subshell, not the whole script; a bad
+# DATACENTER value would silently continue with garbage instead of
+# actually stopping the build).
+#
+# DATACENTER is either a bare location (GF0, GF2 — no CI device needed)
+# or "LOCATION/DCEn" (GF1, East, Central — CI device is DCEn-PROD or
+# DCEn-NP depending on ENVIRONMENT). Confirmed valid combinations:
+#   GF1/DCE1, GF1/DCE2, GF1/DCE3
+#   East/DCE1, East/DCE2, East/DCE3
+#   Central/DCC1, Central/DCC2, Central/DCC3
+# GF0 and GF2 take no CI device suffix at all.
+derive_location_and_cidevice(){
+  local datacenter="$1" environment="$2"
+  DERIVED_LOCATION="$datacenter"
+  DERIVED_CI_DEVICE=""
+
+  local valid_locations=(GF0 GF1 GF2 East Central)
+
+  if [[ "$datacenter" == */* ]]; then
+    DERIVED_LOCATION="${datacenter%%/*}"
+    local dce_prefix="${datacenter#*/}"
+    case "$dce_prefix" in
+      DCE1|DCE2|DCE3|DCC1|DCC2|DCC3) : ;;
+      *) die "DATACENTER='$datacenter' has an unrecognized CI device prefix '$dce_prefix' — expected DCE1/DCE2/DCE3 (GF1/East) or DCC1/DCC2/DCC3 (Central)" ;;
+    esac
+    local env_suffix="NP"
+    [[ "${environment,,}" == "prod" ]] && env_suffix="PROD"
+    DERIVED_CI_DEVICE="${dce_prefix}-${env_suffix}"
+  fi
+
+  local ok=0 v
+  for v in "${valid_locations[@]}"; do [[ "$DERIVED_LOCATION" == "$v" ]] && ok=1; done
+  (( ok == 1 )) || die "DATACENTER='$datacenter' produced an unrecognized LOCATION '$DERIVED_LOCATION' — expected one of: ${valid_locations[*]}"
+}
+
 # build_logvol_block <core_filesystems> <extra_filesystems> <osver>
 # core/extra are the serialized "mount:size,mount:size" CSV fields.
 build_logvol_block(){
@@ -150,6 +188,13 @@ generate_kickstart(){
   local net_device_part; net_device_part=$(network_device_part "$LACP" "$NIC")
   local logvol_block; logvol_block=$(build_logvol_block "$CORE_FILESYSTEMS" "$EXTRA_FILESYSTEMS" "$OS_VERSION")
 
+  # LOCATION/CI_DEVICE were previously passed straight through from the
+  # CSV's own (unpopulated) location/ci_device columns — confirmed always
+  # empty in practice. They're actually DERIVED from DATACENTER +
+  # ENVIRONMENT (see derive_location_and_cidevice above), not entered
+  # directly.
+  derive_location_and_cidevice "$DATACENTER" "$ENVIRONMENT"
+
   # Single-pass substitution — one tool, one point of failure. This used to
   # be sed for simple tokens + a second, separate awk pass for the
   # multi-line blocks (partition layout, LVM volumes, PNC provisioning
@@ -174,8 +219,9 @@ generate_kickstart(){
     -v gateway="$GATEWAY" \
     -v domain="$domain" \
     -v mac="$MAC" \
-    -v location="$LOCATION" \
-    -v ci_device="$CI_DEVICE" \
+    -v location="$DERIVED_LOCATION" \
+    -v ci_device="$DERIVED_CI_DEVICE" \
+    -v environment="$ENVIRONMENT" \
     -v os_disk_gb="$OS_DISK_GB" \
     -v os_disk_bus_protocol="${OS_DISK_BUS_PROTOCOL:-}" \
     -v logvol="$logvol_block" '
@@ -190,6 +236,7 @@ generate_kickstart(){
       gsub(/__MTU__/, "9000", line)
       gsub(/__LOCATION__/, location, line)
       gsub(/__CI_DEVICE__/, ci_device, line)
+      gsub(/__ENVIRONMENT__/, environment, line)
       gsub(/__OS_DISK_GB__/, os_disk_gb, line)
       gsub(/__OS_DISK_BUS_PROTOCOL__/, os_disk_bus_protocol, line)
       gsub(/__LOGVOL_BLOCK__/, logvol, line)
