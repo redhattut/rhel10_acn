@@ -610,6 +610,20 @@ create_os_vdisk(){
   log INFO "Creating RAID1 OS_Disk on $disk1 + $disk2 (controller $raid_id)"
   local out
   out=$(run_racadm "$idrac_ip" storage createvd:"$raid_id" -rl r1 -pdkey:"$disk1","$disk2" -name OS_Disk)
+  # Checking createvd's OWN output for an error, not just whether the
+  # follow-up commit succeeds — confirmed a real, dangerous failure mode:
+  # createvd itself was rejected outright (STOR062: disk still belongs to
+  # another vdisk), the follow-up commit correctly found nothing pending
+  # and also failed, triggered the reboot-fallback (which only confirms
+  # the SERVER came back, not that createvd ever actually ran), and
+  # capture_os_disk_bus_protocol() afterward found a STALE "OS_Disk" left
+  # over from an earlier incomplete build — making the whole thing look
+  # like it succeeded when no new vdisk was ever created at all. Failing
+  # loudly here, before ever reaching the commit step, is what actually
+  # prevents that.
+  if echo "$out" | grep -q "^ERROR"; then
+    die "createvd rejected outright on $idrac_ip (controller $raid_id): $(echo "$out" | grep '^ERROR')"
+  fi
   commit_storage_config "$idrac_ip" "$raid_id" "Creating OS vdisk" 30 60 600 \
     || die "OS vdisk creation commit failed on $idrac_ip (controller $raid_id)"
 

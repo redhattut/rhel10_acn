@@ -78,11 +78,35 @@ configure_extra_disk_dell(){
   # 2-field FQDD like Disk.Direct.1-1:BOSS.Slot.41-1, where $3 is empty).
   local raid_id; raid_id=$(echo "${disks[0]}" | awk -F: '{print $NF}')
   [[ -z "$raid_id" ]] && { log ERROR "Could not determine RAID controller ID from disk FQDD: ${disks[0]}"; return 1; }
-  log INFO "Creating RAID${raid} on ${pdkey} (controller $raid_id)"
-  local createvd_out; createvd_out=$(run_racadm "$idrac_ip" storage createvd:"$raid_id" -rl "r${raid}" -pdkey:"$pdkey" -name "extra_${raid}_${size_gb}")
-  local jid; jid=$(create_racadm_job "$idrac_ip" "$raid_id")
-  [[ -z "$jid" ]] && { log ERROR "Job creation failed for extra disk RAID${raid}"; return 1; }
-  wait_for_racadm_job "$idrac_ip" "$jid" "Creating extra disk RAID${raid} (${type})"
+  local vd_name="extra_${raid}_${size_gb}"
+  log INFO "Creating RAID${raid} on physical disk(s): ${pdkey} (controller $raid_id)"
+  local createvd_out; createvd_out=$(run_racadm "$idrac_ip" storage createvd:"$raid_id" -rl "r${raid}" -pdkey:"$pdkey" -name "$vd_name")
+  if echo "$createvd_out" | grep -q "^ERROR"; then
+    die "createvd rejected outright on $idrac_ip (controller $raid_id): $(echo "$createvd_out" | grep '^ERROR')"
+  fi
+  # commit_storage_config (dell_hw.sh), not the raw create_racadm_job +
+  # wait_for_racadm_job pair — this controller can be exactly the kind
+  # that doesn't support job-queue commits at all (confirmed: the SAME
+  # RAID.Integrated.1-1 controller needed the reboot-fallback for both OS
+  # vdisk creation and cryptographic erase in a real build). Using the
+  # raw pattern here left extra-disk creation with no such fallback,
+  # meaning it would fail outright on any hardware where the OS vdisk
+  # step only succeeded BECAUSE of that fallback.
+  commit_storage_config "$idrac_ip" "$raid_id" "Creating extra disk RAID${raid} (${type})" \
+    || { log ERROR "Commit failed creating extra disk RAID${raid} on $idrac_ip (controller $raid_id)"; return 1; }
+
+  # Logs the actual vdisk FQDD (e.g. Disk.Virtual.7:RAID.Integrated.1-1),
+  # not just the physical disks and controller — requested specifically
+  # for troubleshooting/general info. Looked up by the name we just gave
+  # it, using the same non-indented-ID/indented-attribute block parsing
+  # already proven correct elsewhere in this pipeline (see parse_pdisks,
+  # common.sh) rather than a fragile line-content guess.
+  local vd_fqdd
+  vd_fqdd=$(run_racadm "$idrac_ip" storage get vdisks -o -p name | awk -v target="Name = ${vd_name}" '
+    /^[^[:space:]]/ && NF>0 { id=$0; next }
+    { line=$0; gsub(/^[ \t]+|[ \t]+$/,"",line); if (line == target) print id }
+  ')
+  log INFO "Extra disk RAID${raid} (${type}, ${size_gb}GB) created: vdisk ${vd_fqdd:-<not found — check manually>} on physical disk(s) ${pdkey}"
 }
 
 # -----------------------------------------------------------------------------
@@ -100,7 +124,11 @@ configure_extra_disk_cisco(){
   # since the exact storcli enclosure/slot addressing is hardware-specific
   # and should be verified against a real C-series chassis before this is
   # trusted for a production Cisco build.
-  ssh $SSH_OPTS "$host_ip" "/opt/MegaRAID/storcli/storcli64 /c0 show" || {
+  # </dev/null — without it, ssh inherits the calling shell's stdin, which
+  # silently breaks this if it's ever called from within a while-read loop
+  # (confirmed the same root cause elsewhere in this pipeline — see
+  # run_racadm()/run_ucsm() in common.sh for the full explanation).
+  ssh $SSH_OPTS "$host_ip" "/opt/MegaRAID/storcli/storcli64 /c0 show" </dev/null || {
     log ERROR "storcli query failed on $host_ip"
     return 1
   }
@@ -117,7 +145,12 @@ configure_extra_disk_cisco(){
 configure_lvm_over_ssh(){
   local host_ip="$1" mount_layout="$2" size_gb="$3" lvm="$4" vg_name="$5" pv_device="$6"
 
-  ssh $SSH_OPTS "$host_ip" "wipefs -a /dev/${pv_device} && dd if=/dev/zero of=/dev/${pv_device} bs=1M count=100" \
+  # </dev/null on every ssh call in this function — same fix as
+  # run_racadm()/run_ucsm() in common.sh. This one matters most for the
+  # LVM-creation loop further down, which calls ssh once per logical
+  # volume inside a while-read loop; without this, only the FIRST volume
+  # in the list would ever actually get created.
+  ssh $SSH_OPTS "$host_ip" "wipefs -a /dev/${pv_device} && dd if=/dev/zero of=/dev/${pv_device} bs=1M count=100" </dev/null \
     || { log ERROR "Failed to wipe /dev/${pv_device} on $host_ip"; return 1; }
 
   if [[ "$lvm" != "Yes" ]]; then
@@ -129,7 +162,7 @@ configure_lvm_over_ssh(){
       mkdir -p ${mount}
       echo \"UUID=\$uuid ${mount} xfs defaults 0 0\" >> /etc/fstab
       mount ${mount}
-    " || { log ERROR "No-LVM filesystem setup failed for ${mount} on $host_ip"; return 1; }
+    " </dev/null || { log ERROR "No-LVM filesystem setup failed for ${mount} on $host_ip"; return 1; }
     log INFO "Configured ${mount} (no LVM, whole disk) on $host_ip"
     return 0
   fi
@@ -138,7 +171,7 @@ configure_lvm_over_ssh(){
     parted --script /dev/${pv_device} mklabel gpt mkpart primary 0% 100%
     pvcreate -y /dev/${pv_device}1
     vgcreate -y ${vg_name} /dev/${pv_device}1
-  " || { log ERROR "PV/VG creation failed on $host_ip"; return 1; }
+  " </dev/null || { log ERROR "PV/VG creation failed on $host_ip"; return 1; }
 
   echo "$mount_layout" | tr ',' '\n' | while IFS=: read -r mount size; do
     [[ -z "$mount" ]] && continue
@@ -149,7 +182,7 @@ configure_lvm_over_ssh(){
       mkdir -p ${mount}
       echo \"/dev/${vg_name}/${lv} ${mount} xfs defaults 0 0\" >> /etc/fstab
       mount ${mount}
-    " || log ERROR "LV ${lv} (${mount}) failed on $host_ip"
+    " </dev/null || log ERROR "LV ${lv} (${mount}) failed on $host_ip"
   done
   log INFO "Configured LVM volume group ${vg_name} on $host_ip"
 }
@@ -162,7 +195,9 @@ create_extra_folders_over_ssh(){
   [[ -z "$folders" ]] && return 0
   echo "$folders" | tr ':' '\n' | while read -r f; do
     [[ -z "$f" ]] && continue
-    ssh $SSH_OPTS "$host_ip" "mkdir -p '$f'"
+    # </dev/null — same fix as above; this loop can iterate multiple
+    # folders, and without it only the first would ever get created.
+    ssh $SSH_OPTS "$host_ip" "mkdir -p '$f'" </dev/null
   done
 }
 
@@ -178,9 +213,36 @@ configure_extra_disks(){
 
   local vg_index=0
   local raid type numdisks lvm mount_layout size_gb extra_folders
-  while IFS=$'\t' read -r raid type numdisks lvm mount_layout size_gb extra_folders; do
+  # Confirmed root cause of a real failure (size_gb came through empty,
+  # lvm held a mount:size-shaped value): bash's `read` treats TAB as an
+  # "IFS whitespace" character NO MATTER WHAT IFS is actually set to —
+  # consecutive tabs collapse into one delimiter and empty fields between
+  # them are silently dropped, shifting every field after the empty one
+  # left by one. num_disks_raid10 is empty on every RAID0/RAID1 row (i.e.
+  # almost every real row — RAID10 is the rare case), so this fired on
+  # nearly every disk this pipeline has ever tried to configure. A
+  # non-whitespace delimiter (comma, pipe, colon) does NOT have this
+  # problem and preserves empty fields correctly — confirmed directly.
+  # disks.tsv itself doesn't need to change format; converting its tabs
+  # to \x1f (Unit Separator, a control character that will never appear
+  # in real field data) right here, only for this read, is the minimal
+  # fix.
+  local US; US=$(printf '\037')
+  while IFS="$US" read -r raid type numdisks lvm mount_layout size_gb extra_folders; do
     [[ -z "$raid" && -z "$mount_layout" ]] && continue
     vg_index=$((vg_index+1))
+
+    # Kept as a safety net even with the read fix above — if disks.tsv
+    # itself is ever malformed for some other reason, this fails loudly
+    # with the raw row shown instead of silently proceeding on empty/
+    # garbage values three layers before the real error would surface.
+    if [[ -z "$size_gb" || -z "$raid" || -z "$type" ]]; then
+      log ERROR "disks.tsv row $vg_index looks malformed — raid='${raid}' type='${type}' numdisks='${numdisks}' lvm='${lvm}' mount_layout='${mount_layout}' size_gb='${size_gb}' extra_folders='${extra_folders}'"
+      log ERROR "Raw row: $(awk -v n="$vg_index" 'NR==n' "$disks_tsv" | cat -A)"
+      log ERROR "Skipping this row rather than proceeding with empty/garbage values"
+      continue
+    fi
+
     log STEP "Configuring extra disk row $vg_index: RAID${raid} ${type} ${size_gb}GB LVM=${lvm}"
 
     if [[ "$hardware" == "Cisco" ]]; then
@@ -199,7 +261,7 @@ configure_extra_disks(){
 
     configure_lvm_over_ssh "$host_ip" "$mount_layout" "$size_gb" "$lvm" "appvg${vg_index}" "$pv_device"
     create_extra_folders_over_ssh "$host_ip" "$extra_folders"
-  done < "$disks_tsv"
+  done < <(tr '\t' "$US" < "$disks_tsv")
 }
 
 # -----------------------------------------------------------------------------
